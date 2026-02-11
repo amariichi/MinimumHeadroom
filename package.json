@@ -1,0 +1,15 @@
+{
+  "name": "minimum-headroom",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "./scripts/setup.sh",
+    "face-app:start": "node face-app/dist/index.js",
+    "mcp-server:start": "node mcp-server/dist/index.js",
+    "face-app:run": "./scripts/run-face-app.sh",
+    "mcp-server:run": "./scripts/run-mcp-server.sh",
+    "tts-worker:smoke": "uv run --project tts-worker python -m tts_worker --smoke",
+    "test": "node --test"
+  }
+}

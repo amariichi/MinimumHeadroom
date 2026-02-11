@@ -1,0 +1,11 @@
+# Codex CLI MCP configuration example
+# Place at: ~/.codex/config.toml  (or .codex/config.toml within a trusted project)
+# Important: top-level key is mcp_servers
+
+[mcp_servers.minimum_headroom]
+command = "node"
+args = ["/ABS/PATH/minimum-headroom/mcp-server/dist/index.js"]
+env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws" }
+
+# If your MCP client rejects tool names with dots, switch to underscore names:
+# env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "MCP_TOOL_NAME_STYLE" = "underscore" }

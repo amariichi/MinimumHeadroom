@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "minimum-headroom": {
+      "command": "node",
+      "args": [
+        "/ABS/PATH/minimum-headroom/mcp-server/dist/index.js"
+      ],
+      "env": {
+        "FACE_WS_URL": "ws://127.0.0.1:8765/ws",
+        "MCP_TOOL_NAME_STYLE": "underscore"
+      }
+    }
+  }
+}

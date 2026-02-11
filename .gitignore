@@ -1,0 +1,25 @@
+# Node / logs
+node_modules/
+npm-debug.log*
+*.log
+
+# Python caches / virtualenv
+__pycache__/
+.pytest_cache/
+.venv/
+tts-worker/.venv/
+
+# Local tool configs and caches
+.codex_/
+.env
+.env.*
+.agent/
+AGENTS.md
+GEMINI.md
+INSTRUCTIONS.md
+AGENTS.local.md
+GEMINI.local.md
+
+# Large local model assets (downloaded manually)
+assets/kokoro/kokoro-v1.0.onnx
+assets/kokoro/voices-v1.0.bin

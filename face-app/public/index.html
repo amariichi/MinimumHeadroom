@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Minimum Headroom Face</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="stage" id="stage">
+      <canvas id="face-canvas" aria-label="Minimum Headroom face canvas"></canvas>
+
+      <section class="panel panel-left" aria-live="polite">
+        <h1 class="panel-title">minimum headroom</h1>
+        <p class="panel-subtitle">phase 3: tts + freshness + lip sync</p>
+        <p class="shortcut-hint">shortcut: Esc toggles UI panels</p>
+        <dl class="metrics">
+          <div>
+            <dt>ws</dt>
+            <dd id="ws-status">connecting</dd>
+          </div>
+          <div>
+            <dt>render mode</dt>
+            <dd id="render-mode">monitor</dd>
+          </div>
+          <div>
+            <dt>lg polyfill</dt>
+            <dd id="lg-status">loading</dd>
+          </div>
+          <div>
+            <dt>tts</dt>
+            <dd id="tts-status">starting</dd>
+          </div>
+          <div>
+            <dt>tts phase</dt>
+            <dd id="tts-phase">-</dd>
+          </div>
+          <div>
+            <dt>session</dt>
+            <dd id="session-id">-</dd>
+          </div>
+          <div>
+            <dt>viewport</dt>
+            <dd id="viewport-size">-</dd>
+          </div>
+          <div>
+            <dt>anchors</dt>
+            <dd id="anchor-status">-</dd>
+          </div>
+        </dl>
+
+        <div class="xr-settings">
+          <label>
+            <input id="lg-enabled" type="checkbox" />
+            looking glass webxr polyfill
+          </label>
+          <button id="lg-apply" type="button">apply + reload</button>
+        </div>
+
+        <div id="xr-button-slot" class="xr-button-slot"></div>
+
+        <pre id="state-values" class="mono-box"></pre>
+      </section>
+
+      <section class="panel panel-right">
+        <h2 class="panel-title-small">debug values</h2>
+        <pre id="debug-values" class="mono-box"></pre>
+        <h2 class="panel-title-small">recent events</h2>
+        <ol id="event-log" class="event-log"></ol>
+      </section>
+
+      <aside id="utterance" class="utterance hidden" aria-live="assertive"></aside>
+      <div id="ui-hidden-hint" class="ui-hidden-hint hidden" aria-live="polite">UI hidden. Press Esc to show panels.</div>
+    </main>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.161.0/build/three.module.js"
+        }
+      }
+    </script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
