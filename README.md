@@ -1,5 +1,10 @@
 # minimum-headroom
 
+<img width="800" height="475" alt="Image" src="https://github.com/user-attachments/assets/b3b0a1dd-ef19-49d0-bdaf-5068ee1a376c" />
+<img width="800" height="600" alt="Image" src="https://github.com/user-attachments/assets/fa7f65d5-f314-4118-90c7-3853fddd6668" />
+
+---
+
 A local face companion app for coding agents.
 
 `minimum-headroom` visualizes agent state in a separate browser window (3D face + motion) and optionally speaks short status messages through Kokoro TTS. It exposes an MCP server so clients like Codex/Claude/Antigravity can call tools and drive the face.
