@@ -99,6 +99,16 @@ Use `doc/examples/antigravity/mcp_config.json` as a template with your own absol
 
 For agent-side signaling conventions, see `doc/examples/AGENT_RULES.md`.
 
+## Optional Agent Skills
+
+This repository includes reusable skill packages under `doc/examples/skills/`:
+
+- `release-ci-flow`
+- `minimum-headroom-ops`
+- `looking-glass-webxr-setup`
+
+Each folder contains a `SKILL.md` and can be copied into your local skills directory (for example `$CODEX_HOME/skills/`) if your agent supports local skill loading.
+
 ## Release Checklist
 
 - Run tests:
