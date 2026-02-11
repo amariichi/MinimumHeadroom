@@ -41,9 +41,9 @@ function normalizePolicy(value) {
   return value === 'interrupt' ? 'interrupt' : 'replace';
 }
 
-function normalizeTtlMs(value) {
+function normalizeTtlMs(value, fallbackMs = 60_000) {
   if (!Number.isInteger(value)) {
-    return 4_000;
+    return Math.max(1, fallbackMs);
   }
   return Math.max(1, value);
 }
@@ -197,6 +197,11 @@ export function createTtsController(options = {}) {
   const log = toLogger(options.log ?? console);
   const now = typeof options.now === 'function' ? options.now : () => Date.now();
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => false;
+  const defaultTtlMs = Number.isInteger(options.defaultTtlMs) ? Math.max(1, options.defaultTtlMs) : 60_000;
+  const autoInterruptAfterMs =
+    Number.isInteger(options.autoInterruptAfterMs) && options.autoInterruptAfterMs >= 0
+      ? options.autoInterruptAfterMs
+      : null;
   const gate = options.gate ?? createSayGate(options.gateConfig ?? {});
 
   const worker = options.worker ?? createStdioWorkerClient({
@@ -210,6 +215,8 @@ export function createTtsController(options = {}) {
   let workerReady = false;
   let generation = 0;
   let active = null;
+  let activeQueuedAt = null;
+  let activePlayStartedAt = null;
   let pending = null;
 
   function emitState(sessionId, utteranceId, phase, extra = {}) {
@@ -253,7 +260,7 @@ export function createTtsController(options = {}) {
     const sessionId = normalizeSessionId(payload?.session_id);
     const policy = normalizePolicy(payload?.policy);
     const priority = clampPriority(payload?.priority ?? 0);
-    const ttlMs = normalizeTtlMs(payload?.ttl_ms);
+    const ttlMs = normalizeTtlMs(payload?.ttl_ms, defaultTtlMs);
     const createdAt = parseTimestamp(payload?.ts, acceptedAt);
 
     const fallbackMessageId = `${sessionId}:${currentGeneration}`;
@@ -336,6 +343,8 @@ export function createTtsController(options = {}) {
     }
 
     active = entry;
+    activeQueuedAt = now();
+    activePlayStartedAt = null;
     emitState(entry.sessionId, entry.utteranceId, 'queued', {
       reason,
       generation: entry.generation,
@@ -362,6 +371,25 @@ export function createTtsController(options = {}) {
     const next = pending;
     pending = null;
     dispatchSpeak(next, 'dequeued');
+  }
+
+  function shouldPromoteToAutoInterrupt(entry, acceptedAt) {
+    if (!active || autoInterruptAfterMs === null) {
+      return false;
+    }
+    if (entry.policy !== 'replace') {
+      return false;
+    }
+    if (entry.priority >= 3) {
+      return false;
+    }
+
+    const anchor = Number.isFinite(activePlayStartedAt) ? activePlayStartedAt : activeQueuedAt;
+    if (!Number.isFinite(anchor)) {
+      return false;
+    }
+
+    return acceptedAt - anchor >= autoInterruptAfterMs;
   }
 
   function interruptActive(reason, byGeneration = null) {
@@ -450,10 +478,16 @@ export function createTtsController(options = {}) {
       revision
     });
 
+    if (phase === 'play_start' && active && (messageGeneration === null || messageGeneration === active.generation)) {
+      activePlayStartedAt = Number.isFinite(message.ts) ? Math.floor(message.ts) : now();
+    }
+
     if (phase === 'play_stop' || phase === 'dropped' || phase === 'error') {
       if (active && (messageGeneration === null || messageGeneration === active.generation)) {
         emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision);
         active = null;
+        activeQueuedAt = null;
+        activePlayStartedAt = null;
       }
       maybeStartPending();
     }
@@ -481,6 +515,8 @@ export function createTtsController(options = {}) {
     if (active) {
       emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision);
       active = null;
+      activeQueuedAt = null;
+      activePlayStartedAt = null;
     }
     pending = null;
 
@@ -550,14 +586,15 @@ export function createTtsController(options = {}) {
     generation = entry.generation;
 
     const forceInterrupt = entry.policy === 'interrupt' || entry.priority >= 3;
+    const autoInterrupt = shouldPromoteToAutoInterrupt(entry, acceptedAt);
 
-    if (forceInterrupt) {
+    if (forceInterrupt || autoInterrupt) {
       pending = null;
       if (active) {
-        interruptActive('superseded', entry.generation);
+        interruptActive(autoInterrupt ? 'auto_interrupt' : 'superseded', entry.generation);
       }
 
-      return dispatchSpeak(entry, 'interrupt');
+      return dispatchSpeak(entry, autoInterrupt ? 'auto_interrupt' : 'interrupt');
     }
 
     if (active) {
@@ -600,6 +637,8 @@ export function createTtsController(options = {}) {
     if (active) {
       emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision);
       active = null;
+      activeQueuedAt = null;
+      activePlayStartedAt = null;
     }
 
     worker.stop();

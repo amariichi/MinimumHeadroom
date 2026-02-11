@@ -206,3 +206,122 @@ test('tts controller returns dropped result with message_id/revision when gate b
   assert.equal(dropped.message_id, 'm-1');
   assert.equal(dropped.revision, 777);
 });
+
+test('tts controller uses long default ttl when ttl_ms is omitted', async () => {
+  const worker = new FakeWorker();
+  const controller = createTtsController({
+    worker,
+    now: () => 5_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+
+  const result = await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    text: 'ttl default check',
+    priority: 2,
+    policy: 'replace',
+    ts: 0
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.reason, null);
+});
+
+test('tts controller auto-promotes replace to interrupt after threshold', async () => {
+  let nowMs = 1_000;
+  const worker = new FakeWorker();
+  const controller = createTtsController({
+    worker,
+    now: () => nowMs,
+    autoInterruptAfterMs: 2_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    text: 'first long',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: nowMs
+  });
+
+  nowMs += 3_000;
+
+  const second = await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u2',
+    text: 'second after threshold',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: nowMs
+  });
+
+  assert.equal(second.accepted, true);
+  assert.equal(interrupts(worker).length, 1);
+  assert.equal(interrupts(worker)[0].reason, 'auto_interrupt');
+  assert.equal(speaks(worker).length, 2);
+  assert.equal(speaks(worker)[1].generation, 2);
+});
+
+test('tts controller keeps replace queued before auto-interrupt threshold', async () => {
+  let nowMs = 10_000;
+  const worker = new FakeWorker();
+  const controller = createTtsController({
+    worker,
+    now: () => nowMs,
+    autoInterruptAfterMs: 5_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    text: 'first',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: nowMs
+  });
+
+  nowMs += 2_000;
+  const second = await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u2',
+    text: 'second queued',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: nowMs
+  });
+
+  assert.equal(second.accepted, true);
+  assert.equal(interrupts(worker).length, 0);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(controller.snapshot().pendingGeneration, 2);
+
+  worker.emit('message', { type: 'event', phase: 'play_stop', generation: 1, utterance_id: 'u1', session_id: 's1' });
+
+  assert.equal(speaks(worker).length, 2);
+  assert.equal(speaks(worker)[1].generation, 2);
+});

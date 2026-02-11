@@ -1,0 +1,12 @@
+tts:
+  default_ttl_ms: 60000
+  auto_interrupt_after_ms: 2500
+
+speech_gate:
+  # Relaxed defaults so the assistant can speak more frequently.
+  min_interval_priority1_ms: 1500
+  global_window_ms: 60000
+  global_limit_low_priority: 24
+  session_window_ms: 60000
+  session_limit_low_priority: 12
+  dedupe_ms_low_priority: 800

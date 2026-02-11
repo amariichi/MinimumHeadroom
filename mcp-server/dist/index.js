@@ -7,6 +7,14 @@ const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const TOOL_NAME_STYLE = (process.env.MCP_TOOL_NAME_STYLE ?? 'dot').toLowerCase() === 'underscore' ? 'underscore' : 'dot';
+const DEFAULT_SAY_TTL_MS = (() => {
+  const raw = process.env.FACE_SAY_DEFAULT_TTL_MS;
+  const parsed = Number.parseInt(raw ?? '', 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return 60_000;
+  }
+  return parsed;
+})();
 
 const EVENT_NAMES = new Set([
   'cmd_started',
@@ -298,7 +306,7 @@ function normalizeSayPayload(rawArguments) {
   const sessionId = requireString(args, 'session_id');
   const text = requireString(args, 'text');
   const priority = clamp(optionalInteger(args, 'priority', 0), 0, 3);
-  const ttlMs = optionalInteger(args, 'ttl_ms', 4000);
+  const ttlMs = optionalInteger(args, 'ttl_ms', DEFAULT_SAY_TTL_MS);
   if (ttlMs <= 0) {
     throw new Error('ttl_ms must be greater than zero');
   }

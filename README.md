@@ -66,6 +66,41 @@ Reference download instructions are in `assets/kokoro/README.md`.
 
 These large model files are intentionally ignored by git.
 
+## Speech Gate Config (`config.yaml`)
+
+`face-app` now reads `config.yaml` from repository root at startup (or `FACE_CONFIG_PATH` if set) and applies `speech_gate` values to voice throttling.
+
+Checked-in defaults are intentionally relaxed so the assistant can speak more often:
+
+```yaml
+speech_gate:
+  min_interval_priority1_ms: 1500
+  global_window_ms: 60000
+  global_limit_low_priority: 24
+  session_window_ms: 60000
+  session_limit_low_priority: 12
+  dedupe_ms_low_priority: 800
+```
+
+Fields map to runtime gate options:
+
+- `min_interval_priority1_ms` -> minimum interval for `priority=1`
+- `global_limit_low_priority` within `global_window_ms` for `priority<=2`
+- `session_limit_low_priority` within `session_window_ms` for `priority<=2`
+- `dedupe_ms_low_priority` for repeated `dedupe_key` on `priority<=2`
+
+## Long Speech Behavior
+
+- `face.say` default `ttl_ms` is now `60000` (60s) when omitted.
+- You can override default with env var `FACE_SAY_DEFAULT_TTL_MS` on `mcp-server`.
+- `face-app` also supports `tts.default_ttl_ms` in `config.yaml`.
+- `face-app` supports `tts.auto_interrupt_after_ms`: when `policy=replace` input arrives after this threshold while another speech is active, it is promoted to interrupt.
+
+When a new `face.say` arrives during playback:
+
+- `policy=replace` keeps current playback and queues only the latest pending utterance.
+- `policy=interrupt` (or `priority=3`) stops current playback and starts the new utterance immediately.
+
 ## Speech Language Routing
 
 - ASCII text is spoken as English (`en-us`, speed `1.0`)
