@@ -12,6 +12,8 @@ import numpy as np
 
 MouthCallback = Callable[[float], Awaitable[None] | None]
 ShouldStop = Callable[[], bool]
+FADE_IN_MS = 3
+FADE_OUT_MS = 18
 
 
 class PlaybackEngine:
@@ -70,7 +72,7 @@ class PlaybackEngine:
       await _emit_mouth(on_mouth, 0.0)
       return 'completed'
 
-    audio = np.asarray(samples, dtype=np.float32)
+    audio = _apply_fade(np.asarray(samples, dtype=np.float32), sample_rate)
     duration = max(0.0, float(audio.shape[0]) / float(sample_rate))
     aplay_feed_task: asyncio.Task[None] | None = None
 
@@ -150,6 +152,28 @@ def _to_int16_pcm_bytes(audio: np.ndarray) -> bytes:
   clipped = np.clip(audio, -1.0, 1.0)
   int16_audio = (clipped * 32767.0).astype(np.int16)
   return int16_audio.tobytes()
+
+
+def _apply_fade(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+  if audio.size == 0:
+    return audio
+
+  shaped = np.array(audio, dtype=np.float32, copy=True)
+
+  fade_in_samples = max(0, int((sample_rate * FADE_IN_MS) / 1000))
+  fade_out_samples = max(0, int((sample_rate * FADE_OUT_MS) / 1000))
+
+  if fade_in_samples > 1:
+    fade_in_samples = min(fade_in_samples, shaped.shape[0])
+    envelope = np.linspace(0.0, 1.0, fade_in_samples, dtype=np.float32)
+    shaped[:fade_in_samples] *= envelope
+
+  if fade_out_samples > 1:
+    fade_out_samples = min(fade_out_samples, shaped.shape[0])
+    envelope = np.linspace(1.0, 0.0, fade_out_samples, dtype=np.float32)
+    shaped[-fade_out_samples:] *= envelope
+
+  return shaped
 
 
 def _feed_aplay_pcm(proc: subprocess.Popen, pcm_bytes: bytes) -> None:

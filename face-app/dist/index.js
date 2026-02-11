@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFaceWebSocketServer } from './ws_server.js';
 import { createTtsController } from './tts_controller.js';
+import { loadFaceAppConfig } from './config_loader.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -14,6 +15,7 @@ const currentDir = path.dirname(currentFile);
 const staticDir = path.resolve(currentDir, '../public');
 const repoRoot = path.resolve(currentDir, '../..');
 const ttsEnabled = (process.env.FACE_TTS_ENABLED ?? '1') !== '0';
+const faceConfig = loadFaceAppConfig({ repoRoot, env: process.env, log: console });
 
 let ttsController = null;
 
@@ -104,6 +106,9 @@ if (ttsEnabled) {
     broadcast(payload) {
       return server.broadcast(payload);
     },
+    defaultTtlMs: faceConfig.tts.defaultTtlMs,
+    autoInterruptAfterMs: faceConfig.tts.autoInterruptAfterMs,
+    gateConfig: faceConfig.speechGate,
     workerCwd: repoRoot,
     workerEnv: {
       MH_KOKORO_MODEL: path.resolve(repoRoot, 'assets/kokoro/kokoro-v1.0.onnx'),
