@@ -17,7 +17,7 @@ A local face companion app for coding agents.
   - eyebrow/eye/mouth/head movement
   - state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`)
 - Looking Glass WebXR support path
-- Phase 3 TTS pipeline:
+- TTS pipeline:
   - Kokoro ONNX + Misaki (`af_heart`)
   - freshness-first speech policy (`interrupt`, TTL, generation invalidation)
   - speech result feedback (`say_result`)
@@ -67,8 +67,6 @@ Reference download instructions are in `assets/kokoro/README.md`.
 These large model files are intentionally ignored by git.
 
 ## Speech Language Routing
-
-Current Phase 3 default behavior routes text by character class:
 
 - ASCII text is spoken as English (`en-us`, speed `1.0`)
 - Non-ASCII text is spoken as Japanese (`j`, speed `1.2`)
