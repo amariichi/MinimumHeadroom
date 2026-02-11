@@ -99,6 +99,8 @@ Then tools are published as:
 
 Use `doc/examples/antigravity/mcp_config.json` as a template with your own absolute path.
 
+For agent-side signaling conventions, see `doc/examples/AGENT_RULES.md`.
+
 ## Release Checklist
 
 - Run tests:
