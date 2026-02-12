@@ -30,7 +30,7 @@ Purpose: provide a practical baseline so coding agents continuously report inten
 4. User approval needed
 
 - `face_event(name="permission_required", severity=0.9, meta={action, ...})`
-- `face_say(..., priority=3, policy="interrupt")`
+- `face_say(..., priority=3, policy="interrupt")` immediately before requesting approval
 
 5. Retry after failure
 
@@ -41,7 +41,16 @@ Purpose: provide a practical baseline so coding agents continuously report inten
 
 - `face_event(name="idle", severity=0.1~0.3, meta={...})`
 
-## 3. Speech policy (prefer voice on key states)
+## 3. Basic compatibility profile (future-proof default)
+
+Use this profile when you want behavior that survives agent feature churn.
+
+- Depend only on baseline MCP tool calls: `face_ping`, `face_event`, `face_say`.
+- Do not depend on product-specific hook systems (`notify`, `hooks`, custom event buses).
+- Treat permission speech as an agent-side behavior: emit it before any approval prompt.
+- Keep `permission_required` as the event contract; put concrete action details in `meta.action`.
+
+## 4. Speech policy (prefer voice on key states)
 
 - Prefer voice for: start, failure, permission_required, success, final completion.
 - Keep lines short and actionable.
@@ -50,7 +59,23 @@ Purpose: provide a practical baseline so coding agents continuously report inten
 - `priority=2`: important updates (default for success/failure notices).
 - `priority<=1`: sparse progress nudges only.
 
-## 4. Message identity
+## 5. Permission phrase generation policy (short + varied)
+
+For approval prompts, avoid fixed canned lines. Generate short text from intent.
+
+- Keep it brief: target 3 to 8 words in English, or one short clause in Japanese.
+- Include what is needed (approval/check) and optionally one action hint.
+- Avoid repeating the exact same sentence back to back.
+- For repeated approvals in a short span, shorten further (for example: "One more approval, please.").
+- Keep wording polite and neutral; avoid verbose explanations in voice.
+
+Suggested natural English patterns:
+
+- First approval: "Approval needed."
+- Follow-up approval: "One more approval, please."
+- Action-specific: "Approval needed to continue."
+
+## 6. Message identity
 
 For `face_say`, include when possible:
 
@@ -59,7 +84,7 @@ For `face_say`, include when possible:
 
 This preserves freshness even for similar text.
 
-## 5. Degraded mode
+## 7. Degraded mode
 
 - If MCP calls fail, continue core implementation work.
 - Report degraded telemetry once in chat.
