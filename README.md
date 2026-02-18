@@ -105,11 +105,10 @@ When a new `face.say` arrives during playback:
 
 - ASCII text is spoken as English (`en-us`, speed `1.0`)
 - Non-ASCII text is spoken as Japanese (`j`, speed `1.2`)
-- `face.say` can include optional `language: "en" | "ja"` hint
 
 ### English Normalization Spec
 
-Applied only when `face.say.language === "en"` (Japanese `language: "ja"` is left unchanged).
+Applied to all `face.say` text before speech synthesis.
 
 - `‘` / `’` -> `'`
 - `“` / `”` -> `"`

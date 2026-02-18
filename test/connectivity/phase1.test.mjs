@@ -179,7 +179,6 @@ test('phase1 connectivity forwards face.event and face.say to face-app', async (
     arguments: {
       session_id: 'phase1#test',
       text: 'できた！',
-      language: 'en',
       priority: 2,
       policy: 'replace'
     }
@@ -191,7 +190,6 @@ test('phase1 connectivity forwards face.event and face.say to face-app', async (
   assert.equal(sayPayload.v, 1);
   assert.equal(sayPayload.session_id, 'phase1#test');
   assert.equal(sayPayload.text, 'できた！');
-  assert.equal(sayPayload.language, 'en');
   assert.equal(typeof sayPayload.utterance_id, 'string');
 
   const invalidCallResult = await client.request('tools/call', {

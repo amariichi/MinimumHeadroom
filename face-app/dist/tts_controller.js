@@ -55,13 +55,6 @@ function parseTimestamp(value, fallbackMs) {
   return fallbackMs;
 }
 
-function normalizeSpeechLanguage(value) {
-  if (value === 'ja' || value === 'en') {
-    return value;
-  }
-  return null;
-}
-
 function normalizeEnglishTtsText(text) {
   let normalized = text
     // Normalize common English smart punctuation into ASCII equivalents.
@@ -82,10 +75,7 @@ function normalizeEnglishTtsText(text) {
   return normalized;
 }
 
-function normalizeSpeechText(text, language) {
-  if (language !== 'en') {
-    return text;
-  }
+function normalizeSpeechText(text) {
   return normalizeEnglishTtsText(text);
 }
 
@@ -291,8 +281,7 @@ export function createTtsController(options = {}) {
       return null;
     }
 
-    const language = normalizeSpeechLanguage(payload?.language);
-    const text = normalizeSpeechText(rawText, language);
+    const text = normalizeSpeechText(rawText);
     const sessionId = normalizeSessionId(payload?.session_id);
     const policy = normalizePolicy(payload?.policy);
     const priority = clampPriority(payload?.priority ?? 0);
@@ -308,7 +297,6 @@ export function createTtsController(options = {}) {
       messageId: normalizeMessageId(payload?.message_id, fallbackMessageId),
       revision,
       text,
-      language,
       priority,
       policy,
       ttlMs,
@@ -360,7 +348,6 @@ export function createTtsController(options = {}) {
       session_id: entry.sessionId,
       utterance_id: entry.utteranceId,
       text: entry.text,
-      language: entry.language,
       priority: entry.priority,
       policy: entry.policy,
       ts: entry.createdAt,

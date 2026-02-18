@@ -58,7 +58,6 @@ const BASE_TOOL_DEFINITIONS = [
         policy: { type: 'string', enum: ['replace', 'interrupt'] },
         ttl_ms: { type: 'integer', minimum: 1 },
         dedupe_key: { type: ['string', 'null'] },
-        language: { type: ['string', 'null'], enum: ['ja', 'en', null] },
         utterance_id: { type: ['string', 'null'] },
         message_id: { type: ['string', 'null'] },
         revision: { type: ['integer', 'null'] }
@@ -322,11 +321,6 @@ function normalizeSayPayload(rawArguments) {
     throw new Error('dedupe_key must be string or null');
   }
 
-  const language = args.language ?? null;
-  if (language !== null && language !== 'ja' && language !== 'en') {
-    throw new Error('language must be "ja", "en", or null');
-  }
-
   const utteranceId = args.utterance_id ?? randomUUID();
   if (utteranceId !== null && typeof utteranceId !== 'string') {
     throw new Error('utterance_id must be string or null');
@@ -350,7 +344,6 @@ function normalizeSayPayload(rawArguments) {
     policy,
     ttl_ms: ttlMs,
     dedupe_key: dedupeKey,
-    language,
     message_id: messageId,
     revision
   };
