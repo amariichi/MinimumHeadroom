@@ -60,7 +60,11 @@ function normalizeEnglishTtsText(text) {
     // Normalize common English smart punctuation into ASCII equivalents.
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
-    .replace(/…/g, '...')
+    // Turn ellipsis into a pause-like separator instead of spoken dots.
+    .replace(/\s*…\s*/g, ' ')
+    .replace(/\s*\.{3,}\s*/g, ' ')
+    // Silence Japanese punctuation-only utterances by converting to separators.
+    .replace(/[。、・]+/g, ' ')
     // Normalize no-break spaces that often appear in copied English text.
     .replace(/[\u00A0\u202F]/g, ' ');
 
@@ -72,7 +76,7 @@ function normalizeEnglishTtsText(text) {
 
   // Keep existing dash-to-space normalization for clearer English TTS.
   normalized = normalized.replace(/([A-Za-z0-9])[-‐‑‒–—−]([A-Za-z0-9])/g, '$1 $2');
-  return normalized;
+  return normalized.replace(/\s+/g, ' ').trim();
 }
 
 function normalizeSpeechText(text) {
@@ -282,6 +286,10 @@ export function createTtsController(options = {}) {
     }
 
     const text = normalizeSpeechText(rawText);
+    if (!text) {
+      return null;
+    }
+
     const sessionId = normalizeSessionId(payload?.session_id);
     const policy = normalizePolicy(payload?.policy);
     const priority = clampPriority(payload?.priority ?? 0);

@@ -367,7 +367,7 @@ test('tts controller normalizes smart quotes, ellipsis, and no-break spaces', as
   });
 
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, 'He said, "Hello"... A B C');
+  assert.equal(speaks(worker)[0].text, 'He said, "Hello" A B C');
 });
 
 test('tts controller normalizes latin diacritics', async () => {
@@ -403,5 +403,24 @@ test('tts controller normalizes punctuation and latin diacritics without languag
   });
 
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, "That's fine... cafe");
+  assert.equal(speaks(worker)[0].text, "That's fine cafe");
+});
+
+test('tts controller maps japanese punctuation to spaces inside regular text', async () => {
+  const { worker } = await speakOnce({
+    text: 'こんにちは。ありがとう、助かる・本当に'
+  });
+
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'こんにちは ありがとう 助かる 本当に');
+});
+
+test('tts controller drops punctuation-only utterance after normalization', async () => {
+  const { worker, result } = await speakOnce({
+    text: '。、、・・。。。'
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, 'invalid_payload');
+  assert.equal(speaks(worker).length, 0);
 });

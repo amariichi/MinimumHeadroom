@@ -112,13 +112,15 @@ Applied to all `face.say` text before speech synthesis.
 
 - `‘` / `’` -> `'`
 - `“` / `”` -> `"`
-- `…` -> `...`
+- `…` / `...` -> regular space
+- `。` / `、` / `・` -> regular space
 - NBSP (`U+00A0`) / NNBSP (`U+202F`) -> regular space
 - Latin letters with combining marks are ASCII-normalized
   - `café -> cafe`, `naïve -> naive`, `rôle -> role`
 - Existing inline dash normalization is preserved for English
   - `9-to-5 -> 9 to 5`
 - Full-width symbols/letters and Japanese characters are preserved
+- If normalization results in empty text, speech is skipped
 
 This is implemented in the face-app TTS controller (normalization) plus tts-worker chunking/synthesis path (language routing).
 
