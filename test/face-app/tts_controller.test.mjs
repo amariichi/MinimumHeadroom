@@ -40,6 +40,31 @@ function interrupts(worker) {
   return worker.sent.filter((payload) => payload.op === 'interrupt');
 }
 
+async function speakOnce(payload) {
+  const worker = new FakeWorker();
+  const controller = createTtsController({
+    worker,
+    now: () => 42_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+  const result = await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 10_000,
+    ts: 42_000,
+    ...payload
+  });
+
+  return { worker, result };
+}
+
 test('tts controller interrupt path supersedes current generation', async () => {
   let nowMs = 1_000;
   const worker = new FakeWorker();
@@ -324,4 +349,78 @@ test('tts controller keeps replace queued before auto-interrupt threshold', asyn
 
   assert.equal(speaks(worker).length, 2);
   assert.equal(speaks(worker)[1].generation, 2);
+});
+
+test('tts controller normalizes smart apostrophe and keeps hyphen normalization', async () => {
+  const { worker, result } = await speakOnce({
+    text: 'That’s a 9-to-5 role.'
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, "That's a 9 to 5 role.");
+});
+
+test('tts controller normalizes smart quotes, ellipsis, and no-break spaces', async () => {
+  const { worker } = await speakOnce({
+    text: 'He said, “Hello”… A\u00A0B\u202FC'
+  });
+
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'He said, "Hello" A B C');
+});
+
+test('tts controller normalizes latin diacritics', async () => {
+  const { worker } = await speakOnce({
+    text: 'café naïve rôle'
+  });
+
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'cafe naive role');
+});
+
+test('tts controller keeps japanese intact while normalizing latin letters', async () => {
+  const { worker } = await speakOnce({
+    text: '日本語が café'
+  });
+
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, '日本語が cafe');
+});
+
+test('tts controller keeps full-width symbols untouched', async () => {
+  const { worker } = await speakOnce({
+    text: 'ＡＢＣ！'
+  });
+
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'ＡＢＣ！');
+});
+
+test('tts controller normalizes punctuation and latin diacritics without language hint', async () => {
+  const { worker } = await speakOnce({
+    text: 'That’s fine… café'
+  });
+
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, "That's fine cafe");
+});
+
+test('tts controller maps japanese punctuation to spaces inside regular text', async () => {
+  const { worker } = await speakOnce({
+    text: 'こんにちは。ありがとう、助かる・本当に'
+  });
+
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'こんにちは ありがとう 助かる 本当に');
+});
+
+test('tts controller drops punctuation-only utterance after normalization', async () => {
+  const { worker, result } = await speakOnce({
+    text: '。、、・・。。。'
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, 'invalid_payload');
+  assert.equal(speaks(worker).length, 0);
 });
