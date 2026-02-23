@@ -33,6 +33,7 @@ class ProtocolWriter:
     model_path: str,
     voices_path: str,
     playback_backend: Optional[str] = None,
+    audio_target: Optional[str] = None,
   ) -> None:
     payload = {
       'type': 'ready',
@@ -43,6 +44,8 @@ class ProtocolWriter:
     }
     if playback_backend is not None:
       payload['playback_backend'] = playback_backend
+    if audio_target is not None:
+      payload['audio_target'] = audio_target
     self.send(payload)
 
   def response(self, *, request_id: Optional[str], ok: bool, result: Optional[Dict[str, Any]] = None, error: Optional[str] = None) -> None:
@@ -90,6 +93,33 @@ class ProtocolWriter:
         'open': max(0.0, min(1.0, float(open_value))),
       }
     )
+
+  def audio(
+    self,
+    *,
+    generation: Optional[int],
+    session_id: Optional[str],
+    utterance_id: Optional[str],
+    mime_type: str,
+    audio_base64: str,
+    sample_rate: int,
+    message_id: Optional[str] = None,
+    revision: Optional[int] = None,
+  ) -> None:
+    payload: Dict[str, Any] = {
+      'type': 'audio',
+      'generation': generation,
+      'session_id': session_id,
+      'utterance_id': utterance_id,
+      'mime_type': mime_type,
+      'audio_base64': audio_base64,
+      'sample_rate': sample_rate,
+    }
+    if message_id is not None:
+      payload['message_id'] = message_id
+    if revision is not None:
+      payload['revision'] = revision
+    self.send(payload)
 
   def error(self, *, message: str, op: Optional[str] = None, request_id: Optional[str] = None) -> None:
     payload: Dict[str, Any] = {

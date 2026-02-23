@@ -13,7 +13,7 @@
       <section class="panel panel-left" aria-live="polite">
         <h1 class="panel-title">minimum headroom</h1>
         <p class="panel-subtitle">tts + freshness + lip sync</p>
-        <p class="shortcut-hint">shortcut: Esc toggles UI panels</p>
+        <p class="shortcut-hint">shortcut: Esc / double tap / double click toggles UI panels</p>
         <dl class="metrics">
           <div>
             <dt>ws</dt>
@@ -70,7 +70,8 @@
       </section>
 
       <aside id="utterance" class="utterance hidden" aria-live="assertive"></aside>
-      <div id="ui-hidden-hint" class="ui-hidden-hint hidden" aria-live="polite">UI hidden. Press Esc to show panels.</div>
+      <div id="ui-hidden-hint" class="ui-hidden-hint hidden" aria-live="polite">UI hidden. Double tap, double click, or press Esc.</div>
+      <button id="audio-replay" class="audio-replay hidden" type="button">Tap to enable audio</button>
     </main>
 
     <script type="importmap">

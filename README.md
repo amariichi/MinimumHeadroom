@@ -16,11 +16,14 @@ A local face companion app for coding agents.
 - Browser 3D face renderer with state-driven animation:
   - eyebrow/eye/mouth/head movement
   - state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`)
+  - direct head drag control (mouse/finger) with mode-coupled expression amplification
+  - panel toggle shortcuts (`Esc`, double tap, double click)
 - Looking Glass WebXR support path
 - TTS pipeline:
   - Kokoro ONNX + Misaki (`af_heart`)
   - freshness-first speech policy (`interrupt`, TTL, generation invalidation)
   - speech result feedback (`say_result`)
+  - selectable output route (`local`, `browser`, `both`)
 
 ## Requirements
 
@@ -54,6 +57,42 @@ You can also use npm scripts:
 npm run face-app:start
 npm run mcp-server:start
 ```
+
+### Audio Output Target
+
+`./scripts/run-face-app.sh` supports selecting where speech is heard:
+
+```bash
+# default (host speaker only)
+./scripts/run-face-app.sh --audio-target local
+
+# browser clients only (useful for iOS over tailscale serve)
+./scripts/run-face-app.sh --audio-target browser
+
+# both host speaker and browser clients
+./scripts/run-face-app.sh --audio-target both
+```
+
+Tip: when using `--audio-target browser` or `--audio-target both`, you can run:
+
+```bash
+tailscale serve --bg 8765
+```
+
+Then open the Tailscale Serve URL from your phone/tablet to use the Face App remotely (it forwards to this host's `localhost:8765`).
+
+When using iOS Safari, the first tap/click unlocks browser audio. If autoplay is blocked, use the in-page `Tap to enable audio` button to replay the latest utterance.
+
+### Face Interaction Controls
+
+- Drag on the face/canvas area with mouse or finger to steer head direction.
+- While dragging, the active mood is amplified:
+  - `confidence` becomes more confident.
+  - negative modes (`confused`, `frustration`, `stuckness`) become more pronounced.
+- Panel visibility shortcuts remain:
+  - `Esc` (desktop keyboard)
+  - double tap (mobile)
+  - double click (desktop)
 
 ## TTS Model Files
 

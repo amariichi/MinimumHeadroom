@@ -348,6 +348,73 @@ function pickDominantMode(intensity) {
   return dominant;
 }
 
+function pickDragEmotionMode(metrics, modeHint = null) {
+  if (modeHint === 'confidence' || modeHint === 'confused' || modeHint === 'frustration' || modeHint === 'stuckness') {
+    return modeHint;
+  }
+
+  const intensity = deriveModeIntensities(metrics);
+  if (intensity.confidence > 0.16 && intensity.confidence >= intensity.confused && intensity.confidence >= intensity.frustration && intensity.confidence >= intensity.stuckness) {
+    return 'confidence';
+  }
+
+  let negativeMode = 'neutral';
+  let negativeScore = 0.14;
+  for (const mode of ['confused', 'frustration', 'stuckness']) {
+    if (intensity[mode] > negativeScore) {
+      negativeMode = mode;
+      negativeScore = intensity[mode];
+    }
+  }
+  return negativeMode;
+}
+
+export function applyDragEmotionBias(previousState, options = {}, dtSeconds = 0, nowMs = Date.now()) {
+  const base = previousState ?? createInitialFaceState(nowMs);
+  const dt = Math.max(0, Number.isFinite(dtSeconds) ? dtSeconds : 0);
+  const intensity = clamp(typeof options?.intensity === 'number' ? options.intensity : 0, 0, 1);
+
+  if (dt <= 0 || intensity <= 0) {
+    return normalizeState({ ...base, updated_at: nowMs }, nowMs);
+  }
+
+  const next = {
+    session_id: base.session_id,
+    updated_at: nowMs,
+    last_event: base.last_event,
+    metrics: copyMetrics(base.metrics),
+    gesture: { ...base.gesture }
+  };
+
+  const mode = pickDragEmotionMode(next.metrics, typeof options?.modeHint === 'string' ? options.modeHint : null);
+  const weight = dt * intensity;
+
+  if (mode === 'confidence') {
+    next.metrics.confidence += 0.34 * weight;
+    next.metrics.urgency += 0.06 * weight;
+    next.metrics.confused *= Math.exp(-0.9 * weight);
+    next.metrics.frustration *= Math.exp(-0.95 * weight);
+    next.metrics.stuckness *= Math.exp(-0.8 * weight);
+  } else if (mode === 'frustration') {
+    next.metrics.frustration += 0.34 * weight;
+    next.metrics.stuckness += 0.14 * weight;
+    next.metrics.confused += 0.08 * weight;
+    next.metrics.confidence -= 0.22 * weight;
+  } else if (mode === 'confused') {
+    next.metrics.confused += 0.32 * weight;
+    next.metrics.stuckness += 0.13 * weight;
+    next.metrics.urgency += 0.08 * weight;
+    next.metrics.confidence -= 0.2 * weight;
+  } else if (mode === 'stuckness') {
+    next.metrics.stuckness += 0.34 * weight;
+    next.metrics.confused += 0.11 * weight;
+    next.metrics.frustration += 0.09 * weight;
+    next.metrics.confidence -= 0.22 * weight;
+  }
+
+  return normalizeState(next, nowMs);
+}
+
 export function deriveFaceControls(state, nowMs = Date.now()) {
   const activeState = state ?? createInitialFaceState(nowMs);
   const metrics = activeState.metrics;

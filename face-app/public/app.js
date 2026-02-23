@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   AXIS_CONVENTION,
   FEATURE_ANCHORS,
+  applyDragEmotionBias,
   applyEventToFaceState,
   createInitialFaceState,
   deriveFaceControls,
@@ -9,8 +10,10 @@ import {
   validateFeatureAnchors,
   validateFeatureDepth
 } from './state_engine.js';
+import { createDoubleTapTracker, shouldIgnoreToggleTarget } from './gesture_controls.js';
 
 const canvas = document.getElementById('face-canvas');
+const stageEl = document.getElementById('stage');
 const wsStatusEl = document.getElementById('ws-status');
 const renderModeEl = document.getElementById('render-mode');
 const lgStatusEl = document.getElementById('lg-status');
@@ -27,6 +30,7 @@ const lgEnabledInput = document.getElementById('lg-enabled');
 const lgApplyButton = document.getElementById('lg-apply');
 const xrButtonSlot = document.getElementById('xr-button-slot');
 const uiHiddenHintEl = document.getElementById('ui-hidden-hint');
+const audioReplayButtonEl = document.getElementById('audio-replay');
 const uiPanels = Array.from(document.querySelectorAll('.panel'));
 
 const LOOKING_GLASS_ENABLED_KEY = 'mh_lg_webxr_enabled';
@@ -42,6 +46,20 @@ const LG_POLYFILL_SOURCES = [
   'https://unpkg.com/@lookingglass/webxr@0.6.0/dist/@lookingglass/bundle/webxr.js',
   'https://cdn.jsdelivr.net/npm/@lookingglass/webxr@0.6.0/dist/@lookingglass/bundle/webxr.js'
 ];
+const SILENT_WAV_SAMPLE_RATE = 24_000;
+const SILENT_WAV_DURATION_MS = 60;
+const UNLOCK_TIMEOUT_MS = 1200;
+const DOUBLE_TAP_MAX_INTERVAL_MS = 520;
+const DOUBLE_TAP_MAX_DISTANCE_PX = 44;
+const DRAG_START_THRESHOLD_PX = 10;
+const DRAG_YAW_PER_PX = 0.0084;
+const DRAG_PITCH_PER_PX = 0.0084;
+const DRAG_ROLL_FROM_YAW = 0.18;
+const DRAG_OFFSET_MAX = 0.8;
+const DRAG_OFFSET_DECAY_PER_SECOND = 6;
+const DRAG_INTENSITY_DECAY_PER_SECOND = 7.5;
+const DRAG_SPEED_FOR_FULL_INTENSITY_PX_PER_SEC = 780;
+const FACE_ROOT_BASE_Y = 0.56;
 
 function toneColor(tone) {
   if (tone === 'ok') {
@@ -107,7 +125,7 @@ function enforceFrontZ(value) {
 
 function createFaceRig(scene) {
   const root = new THREE.Group();
-  root.position.set(0, 0.22, 0);
+  root.position.set(0, FACE_ROOT_BASE_Y, 0);
   root.scale.setScalar(0.8);
   scene.add(root);
 
@@ -205,7 +223,7 @@ function applyControlsToRig(rig, controls) {
   const swayY = clamp(controls.head.sway_y ?? controls.head.pitch * 0.5, -1, 1);
   const pushZ = clamp(controls.head.push_z ?? 0, -1, 1);
 
-  rig.root.position.set(swayX * 0.2, 0.22 + swayY * 0.33, pushZ * 0.12);
+  rig.root.position.set(swayX * 0.2, FACE_ROOT_BASE_Y + swayY * 0.33, pushZ * 0.12);
   rig.root.rotation.y = controls.head.yaw * 0.08;
 
   rig.neckPivot.rotation.y = controls.head.yaw * HEAD_LIMITS.yaw;
@@ -329,6 +347,33 @@ let socket = null;
 let xrButtonEl = null;
 let panelsVisible = true;
 const latestSayMetaBySession = new Map();
+const latestAudioMetaBySession = new Map();
+let playbackAudioEl = null;
+let unlockInFlight = null;
+let audioUnlocked = false;
+let pendingReplayPayload = null;
+let activeAudioGeneration = null;
+let activeAudioSourceRelease = null;
+let silentAudioDataUrl = null;
+const registerDoubleTap = createDoubleTapTracker({
+  maxIntervalMs: DOUBLE_TAP_MAX_INTERVAL_MS,
+  maxDistancePx: DOUBLE_TAP_MAX_DISTANCE_PX
+});
+const dragState = {
+  pointerId: null,
+  pointerType: null,
+  startX: 0,
+  startY: 0,
+  lastX: 0,
+  lastY: 0,
+  lastTimeMs: 0,
+  startTarget: null,
+  dragging: false,
+  yawOffset: 0,
+  pitchOffset: 0,
+  intensity: 0,
+  modeHint: null
+};
 
 const view = {
   width: 0,
@@ -412,6 +457,8 @@ function updateHud() {
 
   debugValuesEl.textContent = [
     `mode    ${String(renderedControls.debug.mode ?? '-')}`,
+    `drag    ${dragState.pointerId !== null && dragState.dragging ? 'active' : 'idle'}   hint    ${String(dragState.modeHint ?? '-')}`,
+    `drag_y  ${formatValue(dragState.yawOffset)}   drag_p  ${formatValue(dragState.pitchOffset)}   drag_i  ${formatValue(dragState.intensity)}`,
     `brow_l  ${formatValue(renderedControls.debug.brow_l)}   brow_r  ${formatValue(renderedControls.debug.brow_r)}`,
     `eye_l   ${formatValue(renderedControls.debug.eye_l)}   eye_r   ${formatValue(renderedControls.debug.eye_r)}`,
     `blink_l ${formatValue(renderedControls.debug.blink_l)}   blink_r ${formatValue(renderedControls.debug.blink_r)}`,
@@ -437,6 +484,8 @@ function appendEvent(payload) {
           ? `say_result spoken=${payload.spoken === true ? 'yes' : 'no'} reason=${payload.reason ?? '-'}`
         : payload.type === 'tts_state'
           ? `tts ${String(payload.phase ?? '-')}${payload.reason ? `:${payload.reason}` : ''}`
+        : payload.type === 'tts_audio'
+          ? `tts_audio gen=${Number.isInteger(payload.generation) ? payload.generation : '-'}`
         : `${payload.type ?? 'unknown'}`;
 
   events.unshift(`${timeText}  ${label}`);
@@ -459,7 +508,7 @@ function showUtterance(text, ttlMs) {
   utteranceExpiresAt = Date.now() + Math.max(900, Math.min(ttl, 10_000));
 }
 
-function resolveSayRevision(payload) {
+function resolvePayloadRevision(payload) {
   if (Number.isFinite(payload?.revision)) {
     return Math.floor(payload.revision);
   }
@@ -469,7 +518,7 @@ function resolveSayRevision(payload) {
   return Date.now();
 }
 
-function resolveSayMessageId(payload) {
+function resolvePayloadMessageId(payload) {
   if (typeof payload?.message_id === 'string' && payload.message_id.trim() !== '') {
     return payload.message_id.trim();
   }
@@ -479,11 +528,16 @@ function resolveSayMessageId(payload) {
   return null;
 }
 
-function shouldDisplaySay(payload) {
+function resolvePayloadSessionId(payload) {
   const sessionId = typeof payload?.session_id === 'string' && payload.session_id.trim() !== '' ? payload.session_id : '-';
-  const revision = resolveSayRevision(payload);
-  const messageId = resolveSayMessageId(payload);
-  const latest = latestSayMetaBySession.get(sessionId);
+  return sessionId;
+}
+
+function shouldUseLatestPayload(payload, latestBySession) {
+  const sessionId = resolvePayloadSessionId(payload);
+  const revision = resolvePayloadRevision(payload);
+  const messageId = resolvePayloadMessageId(payload);
+  const latest = latestBySession.get(sessionId);
 
   if (latest && Number.isFinite(latest.revision)) {
     if (revision < latest.revision) {
@@ -494,15 +548,271 @@ function shouldDisplaySay(payload) {
     }
   }
 
-  latestSayMetaBySession.set(sessionId, { revision, messageId });
+  latestBySession.set(sessionId, { revision, messageId });
   return true;
+}
+
+function shouldDisplaySay(payload) {
+  return shouldUseLatestPayload(payload, latestSayMetaBySession);
+}
+
+function shouldPlayTtsAudio(payload) {
+  return shouldUseLatestPayload(payload, latestAudioMetaBySession);
+}
+
+function ensurePlaybackAudioElement() {
+  if (playbackAudioEl) {
+    return playbackAudioEl;
+  }
+
+  const player = new Audio();
+  player.preload = 'auto';
+  player.playsInline = true;
+  player.setAttribute('playsinline', 'true');
+  player.setAttribute('webkit-playsinline', 'true');
+  player.volume = 1;
+  player.addEventListener('ended', () => {
+    releaseActiveAudioSource();
+    resetActiveAudio();
+  });
+  player.addEventListener('error', () => {
+    releaseActiveAudioSource();
+    resetActiveAudio();
+    setTtsPhase('browser_error', 'warn');
+  });
+  playbackAudioEl = player;
+  return player;
+}
+
+function withTimeout(promise, timeoutMs) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => {
+        reject(new Error('audio unlock timeout'));
+      }, timeoutMs);
+    })
+  ]);
+}
+
+function createSilentAudioDataUrl() {
+  if (silentAudioDataUrl) {
+    return silentAudioDataUrl;
+  }
+
+  const sampleCount = Math.max(1, Math.floor((SILENT_WAV_SAMPLE_RATE * SILENT_WAV_DURATION_MS) / 1000));
+  const dataSize = sampleCount * 2;
+  const totalSize = 44 + dataSize;
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+
+  function writeAscii(offset, text) {
+    for (let index = 0; index < text.length; index += 1) {
+      view.setUint8(offset + index, text.charCodeAt(index));
+    }
+  }
+
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, totalSize - 8, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, SILENT_WAV_SAMPLE_RATE, true);
+  view.setUint32(28, SILENT_WAV_SAMPLE_RATE * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  silentAudioDataUrl = `data:audio/wav;base64,${btoa(binary)}`;
+  return silentAudioDataUrl;
+}
+
+function buildPlaybackSource(mimeType, audioBase64) {
+  if (typeof Blob === 'function' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' && typeof atob === 'function') {
+    try {
+      const binary = atob(audioBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      const blob = new Blob([bytes], { type: mimeType });
+      const objectUrl = URL.createObjectURL(blob);
+      return {
+        src: objectUrl,
+        release() {
+          URL.revokeObjectURL(objectUrl);
+        }
+      };
+    } catch {
+      // Fall through to data URL fallback.
+    }
+  }
+
+  return {
+    src: `data:${mimeType};base64,${audioBase64}`,
+    release: null
+  };
+}
+
+async function unlockPlaybackAudio() {
+  if (audioUnlocked) {
+    return true;
+  }
+
+  if (unlockInFlight) {
+    return unlockInFlight;
+  }
+
+  const player = ensurePlaybackAudioElement();
+  if (!player.paused) {
+    audioUnlocked = true;
+    return true;
+  }
+
+  unlockInFlight = (async () => {
+    const originalSrc = player.src;
+    try {
+      player.src = createSilentAudioDataUrl();
+      player.currentTime = 0;
+      await withTimeout(Promise.resolve(player.play()), UNLOCK_TIMEOUT_MS);
+      audioUnlocked = true;
+      return true;
+    } finally {
+      try {
+        player.pause();
+      } catch {
+        // Ignore pause errors in unlock cleanup.
+      }
+      try {
+        player.currentTime = 0;
+      } catch {
+        // Ignore seek errors in unlock cleanup.
+      }
+      player.src = originalSrc;
+      unlockInFlight = null;
+    }
+  })();
+
+  return unlockInFlight;
+}
+
+function hideAudioReplayButton() {
+  if (!audioReplayButtonEl) {
+    return;
+  }
+  audioReplayButtonEl.classList.add('hidden');
+}
+
+function showAudioReplayButton() {
+  if (!audioReplayButtonEl) {
+    return;
+  }
+  audioReplayButtonEl.classList.remove('hidden');
+}
+
+function resetActiveAudio() {
+  activeAudioGeneration = null;
+}
+
+function releaseActiveAudioSource() {
+  if (typeof activeAudioSourceRelease === 'function') {
+    activeAudioSourceRelease();
+    activeAudioSourceRelease = null;
+  }
+}
+
+function stopActiveBrowserAudio(generation = null) {
+  if (!playbackAudioEl) {
+    resetActiveAudio();
+    return;
+  }
+  if (Number.isInteger(generation) && Number.isInteger(activeAudioGeneration) && generation !== activeAudioGeneration) {
+    return;
+  }
+
+  try {
+    playbackAudioEl.pause();
+  } catch {
+    // Ignore pause errors while stopping active browser audio.
+  }
+  try {
+    playbackAudioEl.currentTime = 0;
+  } catch {
+    // Ignore seek errors while stopping active browser audio.
+  }
+  releaseActiveAudioSource();
+  resetActiveAudio();
+}
+
+function queueReplayPayload(payload) {
+  pendingReplayPayload = payload;
+  showAudioReplayButton();
+}
+
+async function playAudioSource(src, generation = null, release = null) {
+  const player = ensurePlaybackAudioElement();
+  stopActiveBrowserAudio();
+  player.src = src;
+  player.currentTime = 0;
+  activeAudioSourceRelease = typeof release === 'function' ? release : null;
+  try {
+    await player.play();
+    activeAudioGeneration = Number.isInteger(generation) ? generation : null;
+  } catch (error) {
+    releaseActiveAudioSource();
+    throw error;
+  }
+}
+
+async function playBrowserAudioPayload(payload) {
+  if (!shouldPlayTtsAudio(payload)) {
+    return;
+  }
+  if (typeof payload.audio_base64 !== 'string' || payload.audio_base64.trim() === '') {
+    return;
+  }
+
+  const mimeType = typeof payload.mime_type === 'string' && payload.mime_type.trim() !== '' ? payload.mime_type.trim() : 'audio/wav';
+  const source = buildPlaybackSource(mimeType, payload.audio_base64);
+  const generation = Number.isInteger(payload.generation) ? payload.generation : null;
+
+  try {
+    await unlockPlaybackAudio();
+    await playAudioSource(source.src, generation, source.release);
+    pendingReplayPayload = null;
+    hideAudioReplayButton();
+  } catch {
+    if (typeof source.release === 'function') {
+      source.release();
+    }
+    queueReplayPayload({
+      mimeType,
+      audioBase64: payload.audio_base64,
+      generation
+    });
+    setTtsPhase('browser_blocked', 'warn');
+  }
+}
+
+function handleTtsAudio(payload) {
+  void playBrowserAudioPayload(payload);
 }
 
 function handleTtsState(payload) {
   const phase = typeof payload.phase === 'string' ? payload.phase : '-';
+  const audioTarget = typeof payload.audio_target === 'string' ? payload.audio_target : 'local';
+  const reason = typeof payload.reason === 'string' ? payload.reason : null;
 
   if (phase === 'worker_ready') {
-    if (payload.playback_backend === 'silent') {
+    if (payload.playback_backend === 'silent' && audioTarget === 'local') {
       setTtsStatus('silent', 'warn');
       setTtsPhase('worker_ready:silent', 'warn');
       return;
@@ -529,10 +839,20 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'play_stop') {
+    if (reason === 'interrupted') {
+      stopActiveBrowserAudio(payload.generation);
+    }
     setTtsStatus('ready', 'ok');
     setTtsPhase(phase, 'default');
     speechActive = false;
     speechMouthOpen = 0;
+    return;
+  }
+
+  if (phase === 'interrupt_requested') {
+    stopActiveBrowserAudio(payload.generation);
+    setTtsStatus('busy', 'default');
+    setTtsPhase(`${phase}:${reason ?? '-'}`, 'default');
     return;
   }
 
@@ -543,6 +863,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'dropped') {
+    stopActiveBrowserAudio(payload.generation);
     setTtsPhase(`dropped:${payload.reason ?? '-'}`, 'warn');
     if (!speechActive) {
       setTtsStatus('ready', 'default');
@@ -551,6 +872,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'error') {
+    stopActiveBrowserAudio(payload.generation);
     setTtsStatus('error', 'warn');
     setTtsPhase(`error:${payload.reason ?? '-'}`, 'warn');
     speechActive = false;
@@ -612,6 +934,8 @@ function handlePayload(payload) {
     handleTtsState(payload);
   } else if (payload.type === 'tts_mouth') {
     handleTtsMouth(payload);
+  } else if (payload.type === 'tts_audio') {
+    handleTtsAudio(payload);
   }
 }
 
@@ -725,6 +1049,295 @@ function togglePanelsVisible() {
   setPanelsVisible(!panelsVisible);
 }
 
+function registerTapForPanelToggle(timestampMs, x, y, target) {
+  if (shouldIgnoreToggleTarget(target)) {
+    return;
+  }
+
+  if (registerDoubleTap(timestampMs, x, y)) {
+    togglePanelsVisible();
+  }
+}
+
+function beginDragTracking(pointerId, pointerType, x, y, timestampMs, target) {
+  dragState.pointerId = pointerId;
+  dragState.pointerType = pointerType;
+  dragState.startX = x;
+  dragState.startY = y;
+  dragState.lastX = x;
+  dragState.lastY = y;
+  dragState.lastTimeMs = timestampMs;
+  dragState.startTarget = target;
+  dragState.dragging = false;
+  dragState.modeHint = null;
+}
+
+function updateDragTracking(pointerId, x, y, timestampMs) {
+  if (dragState.pointerId === null || dragState.pointerId !== pointerId) {
+    return;
+  }
+
+  const deltaX = x - dragState.lastX;
+  const deltaY = y - dragState.lastY;
+  const elapsedMs = Math.max(1, timestampMs - dragState.lastTimeMs);
+  const movementFromStartPx = Math.hypot(x - dragState.startX, y - dragState.startY);
+  const speedPxPerSecond = Math.hypot(deltaX, deltaY) / (elapsedMs / 1000);
+
+  if (!dragState.dragging && movementFromStartPx >= DRAG_START_THRESHOLD_PX) {
+    dragState.dragging = true;
+    dragState.modeHint = String(targetControls.debug.mode ?? 'neutral');
+  }
+
+  if (dragState.dragging) {
+    dragState.yawOffset = clamp(dragState.yawOffset + deltaX * DRAG_YAW_PER_PX, -DRAG_OFFSET_MAX, DRAG_OFFSET_MAX);
+    dragState.pitchOffset = clamp(dragState.pitchOffset + deltaY * DRAG_PITCH_PER_PX, -DRAG_OFFSET_MAX, DRAG_OFFSET_MAX);
+
+    const speedIntensity = clamp(speedPxPerSecond / DRAG_SPEED_FOR_FULL_INTENSITY_PX_PER_SEC, 0, 1);
+    const offsetIntensity = clamp(Math.hypot(dragState.yawOffset, dragState.pitchOffset) / DRAG_OFFSET_MAX, 0, 1);
+    const targetIntensity = Math.max(speedIntensity, offsetIntensity * 0.86);
+    dragState.intensity = blend(dragState.intensity, targetIntensity, 0.42);
+  }
+
+  dragState.lastX = x;
+  dragState.lastY = y;
+  dragState.lastTimeMs = timestampMs;
+}
+
+function endDragTracking(pointerId, x, y, timestampMs, target, canceled = false) {
+  if (dragState.pointerId === null || dragState.pointerId !== pointerId) {
+    return;
+  }
+
+  const wasDragging = dragState.dragging;
+  const pointerType = dragState.pointerType;
+  const tapTarget = target ?? dragState.startTarget;
+
+  dragState.pointerId = null;
+  dragState.pointerType = null;
+  dragState.startX = 0;
+  dragState.startY = 0;
+  dragState.lastX = x;
+  dragState.lastY = y;
+  dragState.lastTimeMs = timestampMs;
+  dragState.startTarget = null;
+  dragState.dragging = false;
+
+  if (canceled || wasDragging || pointerType === 'mouse') {
+    return;
+  }
+
+  registerTapForPanelToggle(timestampMs, x, y, tapTarget);
+}
+
+function decayDragOffsets(dtSeconds) {
+  if (dragState.pointerId !== null && dragState.dragging) {
+    return;
+  }
+
+  const offsetDecay = Math.exp(-DRAG_OFFSET_DECAY_PER_SECOND * dtSeconds);
+  const intensityDecay = Math.exp(-DRAG_INTENSITY_DECAY_PER_SECOND * dtSeconds);
+  dragState.yawOffset *= offsetDecay;
+  dragState.pitchOffset *= offsetDecay;
+  dragState.intensity *= intensityDecay;
+
+  if (Math.abs(dragState.yawOffset) < 0.0006) {
+    dragState.yawOffset = 0;
+  }
+  if (Math.abs(dragState.pitchOffset) < 0.0006) {
+    dragState.pitchOffset = 0;
+  }
+  if (dragState.intensity < 0.004) {
+    dragState.intensity = 0;
+  }
+}
+
+function applyDragOffsetsToControls(controls) {
+  const yawOffset = dragState.yawOffset;
+  const pitchOffset = dragState.pitchOffset;
+  const rollOffset = yawOffset * DRAG_ROLL_FROM_YAW;
+
+  controls.head.yaw = clamp(controls.head.yaw + yawOffset, -1, 1);
+  controls.head.pitch = clamp(controls.head.pitch + pitchOffset, -1, 1);
+  controls.head.roll = clamp(controls.head.roll + rollOffset, -1, 1);
+  controls.head.sway_x = clamp(controls.head.sway_x + yawOffset * 0.36, -1, 1);
+  controls.head.sway_y = clamp(controls.head.sway_y + pitchOffset * 0.32, -1, 1);
+}
+
+function handleStagePointerDown(event) {
+  if (event.isPrimary === false) {
+    return;
+  }
+
+  if (event.pointerType === 'mouse' && event.button !== 0) {
+    return;
+  }
+
+  if (shouldIgnoreToggleTarget(event.target)) {
+    return;
+  }
+
+  beginDragTracking(event.pointerId, event.pointerType, event.clientX, event.clientY, event.timeStamp, event.target);
+  if (typeof stageEl.setPointerCapture === 'function') {
+    try {
+      stageEl.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore capture errors on browsers that restrict this by input source.
+    }
+  }
+}
+
+function handleStagePointerMove(event) {
+  updateDragTracking(event.pointerId, event.clientX, event.clientY, event.timeStamp);
+}
+
+function handleStagePointerUp(event) {
+  if (typeof stageEl.releasePointerCapture === 'function') {
+    try {
+      stageEl.releasePointerCapture(event.pointerId);
+    } catch {
+      // Ignore release errors when capture was never set.
+    }
+  }
+  endDragTracking(event.pointerId, event.clientX, event.clientY, event.timeStamp, event.target, false);
+}
+
+function handleStagePointerCancel(event) {
+  endDragTracking(event.pointerId, event.clientX, event.clientY, event.timeStamp, event.target, true);
+}
+
+function handleStageTouchStart(event) {
+  if (dragState.pointerId !== null || event.changedTouches.length < 1) {
+    return;
+  }
+
+  const touch = event.changedTouches[0];
+  if (shouldIgnoreToggleTarget(event.target)) {
+    return;
+  }
+  beginDragTracking(touch.identifier, 'touch', touch.clientX, touch.clientY, event.timeStamp, event.target);
+}
+
+function findTrackedTouch(touchList) {
+  for (let index = 0; index < touchList.length; index += 1) {
+    const touch = touchList[index];
+    if (touch.identifier === dragState.pointerId) {
+      return touch;
+    }
+  }
+  return null;
+}
+
+function handleStageTouchMove(event) {
+  if (dragState.pointerId === null) {
+    return;
+  }
+  const touch = findTrackedTouch(event.touches);
+  if (!touch) {
+    return;
+  }
+  updateDragTracking(touch.identifier, touch.clientX, touch.clientY, event.timeStamp);
+}
+
+function handleStageTouchEnd(event) {
+  if (dragState.pointerId === null) {
+    return;
+  }
+  const touch = findTrackedTouch(event.changedTouches);
+  if (!touch) {
+    return;
+  }
+  endDragTracking(touch.identifier, touch.clientX, touch.clientY, event.timeStamp, event.target, false);
+}
+
+function handleStageTouchCancel(event) {
+  if (dragState.pointerId === null) {
+    return;
+  }
+  const touch = findTrackedTouch(event.changedTouches);
+  if (!touch) {
+    return;
+  }
+  endDragTracking(touch.identifier, touch.clientX, touch.clientY, event.timeStamp, event.target, true);
+}
+
+function handleStageDoubleClick(event) {
+  if (shouldIgnoreToggleTarget(event.target)) {
+    return;
+  }
+  event.preventDefault();
+  togglePanelsVisible();
+}
+
+function installGestureShortcuts() {
+  if (!stageEl) {
+    return;
+  }
+
+  stageEl.addEventListener('dblclick', handleStageDoubleClick);
+
+  if (typeof window.PointerEvent === 'function') {
+    stageEl.addEventListener('pointerdown', handleStagePointerDown, { passive: true });
+    stageEl.addEventListener('pointermove', handleStagePointerMove, { passive: true });
+    stageEl.addEventListener('pointerup', handleStagePointerUp, { passive: true });
+    stageEl.addEventListener('pointercancel', handleStagePointerCancel, { passive: true });
+  } else {
+    stageEl.addEventListener('touchstart', handleStageTouchStart, { passive: true });
+    stageEl.addEventListener('touchmove', handleStageTouchMove, { passive: true });
+    stageEl.addEventListener('touchend', handleStageTouchEnd, { passive: true });
+    stageEl.addEventListener('touchcancel', handleStageTouchCancel, { passive: true });
+  }
+}
+
+function installAudioUnlockHooks() {
+  const triggerUnlock = () => {
+    void unlockPlaybackAudio();
+  };
+
+  window.addEventListener('pointerdown', triggerUnlock, { passive: true });
+  window.addEventListener('touchstart', triggerUnlock, { passive: true });
+  window.addEventListener('touchend', triggerUnlock, { passive: true });
+  window.addEventListener('click', triggerUnlock, { passive: true });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      void unlockPlaybackAudio();
+    }
+  });
+}
+
+function installAudioReplayButton() {
+  if (!audioReplayButtonEl) {
+    return;
+  }
+
+  audioReplayButtonEl.addEventListener('click', () => {
+    if (!pendingReplayPayload) {
+      return;
+    }
+
+    const replay = pendingReplayPayload;
+    pendingReplayPayload = null;
+    void (async () => {
+      try {
+        const directSource = buildPlaybackSource(replay.mimeType, replay.audioBase64);
+        await playAudioSource(directSource.src, replay.generation, directSource.release);
+        audioUnlocked = true;
+        hideAudioReplayButton();
+      } catch {
+        try {
+          await unlockPlaybackAudio();
+          const retrySource = buildPlaybackSource(replay.mimeType, replay.audioBase64);
+          await playAudioSource(retrySource.src, replay.generation, retrySource.release);
+          audioUnlocked = true;
+          hideAudioReplayButton();
+        } catch {
+          queueReplayPayload(replay);
+          setTtsPhase('browser_blocked', 'warn');
+        }
+      }
+    })();
+  });
+}
+
 async function startXrSession() {
   if (!navigator.xr || typeof navigator.xr.requestSession !== 'function') {
     setMetricValue(renderModeEl, 'xr-api-missing', 'warn');
@@ -783,6 +1396,22 @@ function tick(nowMs) {
 
   faceState = stepFaceState(faceState, dtSeconds, Date.now());
   targetControls = deriveFaceControls(faceState, nowMs);
+  decayDragOffsets(dtSeconds);
+
+  if (dragState.intensity > 0.01) {
+    faceState = applyDragEmotionBias(
+      faceState,
+      {
+        intensity: dragState.intensity,
+        modeHint: dragState.modeHint
+      },
+      dtSeconds,
+      Date.now()
+    );
+    targetControls = deriveFaceControls(faceState, nowMs);
+  }
+
+  applyDragOffsetsToControls(targetControls);
 
   const speechBlendOpen = clamp(speechMouthOpen, 0, 1);
   if (speechActive || speechBlendOpen > 0.01) {
@@ -813,6 +1442,9 @@ async function bootstrap() {
 
   await installLookingGlassPolyfill();
   mountXrButton();
+  installGestureShortcuts();
+  installAudioUnlockHooks();
+  installAudioReplayButton();
 
   lgApplyButton.addEventListener('click', () => {
     writeLookingGlassEnabled(lgEnabledInput.checked);
@@ -859,6 +1491,7 @@ window.addEventListener('beforeunload', () => {
     socket.close();
   }
 
+  stopActiveBrowserAudio();
   renderer.setAnimationLoop(null);
   renderer.dispose();
 });

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   AXIS_CONVENTION,
   FEATURE_ANCHORS,
+  applyDragEmotionBias,
   applyEventToFaceState,
   createInitialFaceState,
   deriveFaceControls,
@@ -85,6 +86,53 @@ test('step decay and control derivation follow expected bounds', () => {
   assert.ok(controls.head.yaw >= -1 && controls.head.yaw <= 1);
   assert.ok(controls.head.pitch >= -1 && controls.head.pitch <= 1);
   assert.ok(controls.head.roll >= -1 && controls.head.roll <= 1);
+});
+
+test('drag interaction in confidence mode amplifies confidence and damps negative metrics', () => {
+  const nowMs = 8_000;
+  const state = createInitialFaceState(nowMs);
+  state.metrics.confidence = 0.72;
+  state.metrics.confused = 0.26;
+  state.metrics.frustration = 0.24;
+  state.metrics.stuckness = 0.22;
+
+  const next = applyDragEmotionBias(
+    state,
+    {
+      intensity: 0.9,
+      modeHint: 'confidence'
+    },
+    1.4,
+    nowMs + 1_400
+  );
+
+  assert.ok(next.metrics.confidence > state.metrics.confidence);
+  assert.ok(next.metrics.confused < state.metrics.confused);
+  assert.ok(next.metrics.frustration < state.metrics.frustration);
+  assert.ok(next.metrics.stuckness < state.metrics.stuckness);
+});
+
+test('drag interaction in negative mode amplifies that negative metric and lowers confidence', () => {
+  const nowMs = 9_000;
+  const state = createInitialFaceState(nowMs);
+  state.metrics.confidence = 0.68;
+  state.metrics.confused = 0.22;
+  state.metrics.frustration = 0.3;
+  state.metrics.stuckness = 0.21;
+
+  const next = applyDragEmotionBias(
+    state,
+    {
+      intensity: 0.85,
+      modeHint: 'frustration'
+    },
+    1.3,
+    nowMs + 1_300
+  );
+
+  assert.ok(next.metrics.frustration > state.metrics.frustration);
+  assert.ok(next.metrics.stuckness > state.metrics.stuckness);
+  assert.ok(next.metrics.confidence < state.metrics.confidence);
 });
 
 test('deriveFaceControls produces distinct facial signatures per dominant state', () => {
