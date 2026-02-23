@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import math
 import shutil
 import subprocess
 import time
+import wave
 from typing import Awaitable, Callable
 
 import numpy as np
@@ -17,17 +20,20 @@ FADE_OUT_MS = 18
 
 
 class PlaybackEngine:
-  def __init__(self) -> None:
+  def __init__(self, allow_local_output: bool = True) -> None:
     try:
       import sounddevice as sd  # type: ignore
     except Exception:  # pragma: no cover - runtime dependent
       sd = None
 
+    self._allow_local_output = bool(allow_local_output)
     self._sd = sd
     self._aplay_path = shutil.which('aplay')
     self._aplay_proc: subprocess.Popen | None = None
 
-    if sd is not None:
+    if not self._allow_local_output:
+      self.backend = 'silent'
+    elif sd is not None:
       self.backend = 'sounddevice'
     elif self._aplay_path:
       self.backend = 'aplay'
@@ -189,3 +195,19 @@ def _feed_aplay_pcm(proc: subprocess.Popen, pcm_bytes: bytes) -> None:
       proc.stdin.close()
     except Exception:
       pass
+
+
+def encode_wav_base64(samples: np.ndarray, sample_rate: int) -> str:
+  audio = np.asarray(samples, dtype=np.float32)
+  pcm_bytes = _to_int16_pcm_bytes(audio)
+
+  with io.BytesIO() as output:
+    with wave.open(output, 'wb') as wav_file:
+      wav_file.setnchannels(1)
+      wav_file.setsampwidth(2)
+      wav_file.setframerate(int(sample_rate))
+      wav_file.writeframes(pcm_bytes)
+
+    wav_bytes = output.getvalue()
+
+  return base64.b64encode(wav_bytes).decode('ascii')

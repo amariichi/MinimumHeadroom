@@ -41,6 +41,17 @@ function normalizePolicy(value) {
   return value === 'interrupt' ? 'interrupt' : 'replace';
 }
 
+function normalizeAudioTarget(value) {
+  if (typeof value !== 'string') {
+    return 'local';
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'local' || normalized === 'browser' || normalized === 'both') {
+    return normalized;
+  }
+  return 'local';
+}
+
 function normalizeTtlMs(value, fallbackMs = 60_000) {
   if (!Number.isInteger(value)) {
     return Math.max(1, fallbackMs);
@@ -225,6 +236,8 @@ export function createTtsController(options = {}) {
   const log = toLogger(options.log ?? console);
   const now = typeof options.now === 'function' ? options.now : () => Date.now();
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => false;
+  const audioTarget = normalizeAudioTarget(options.audioTarget);
+  const browserAudioEnabled = audioTarget === 'browser' || audioTarget === 'both';
   const defaultTtlMs = Number.isInteger(options.defaultTtlMs) ? Math.max(1, options.defaultTtlMs) : 60_000;
   const autoInterruptAfterMs =
     Number.isInteger(options.autoInterruptAfterMs) && options.autoInterruptAfterMs >= 0
@@ -457,12 +470,13 @@ export function createTtsController(options = {}) {
       emitState('-', null, 'worker_ready', {
         voice: message.voice ?? 'af_heart',
         engine: message.engine ?? 'kokoro',
-        playback_backend: playbackBackend
+        playback_backend: playbackBackend,
+        audio_target: audioTarget
       });
-      if (playbackBackend === 'silent') {
+      if (playbackBackend === 'silent' && audioTarget === 'local') {
         log.warn('[face-app] tts worker ready (silent backend: PortAudio unavailable)');
       } else {
-        log.info(`[face-app] tts worker ready (backend=${playbackBackend})`);
+        log.info(`[face-app] tts worker ready (backend=${playbackBackend}, audio_target=${audioTarget})`);
       }
       maybeStartPending();
       return;
@@ -485,6 +499,33 @@ export function createTtsController(options = {}) {
         return;
       }
       emitMouth(active.sessionId, active.utteranceId, message.open, active.generation, active.messageId, active.revision);
+      return;
+    }
+
+    if (message.type === 'audio') {
+      if (!browserAudioEnabled) {
+        return;
+      }
+      if (!active || !Number.isInteger(message.generation) || message.generation !== active.generation) {
+        return;
+      }
+      if (typeof message.audio_base64 !== 'string' || message.audio_base64.trim() === '') {
+        return;
+      }
+
+      broadcast({
+        v: 1,
+        type: 'tts_audio',
+        session_id: active.sessionId,
+        utterance_id: active.utteranceId,
+        generation: active.generation,
+        message_id: active.messageId,
+        revision: active.revision,
+        mime_type: typeof message.mime_type === 'string' ? message.mime_type : 'audio/wav',
+        audio_base64: message.audio_base64,
+        sample_rate: Number.isInteger(message.sample_rate) ? message.sample_rate : null,
+        ts: now()
+      });
       return;
     }
 

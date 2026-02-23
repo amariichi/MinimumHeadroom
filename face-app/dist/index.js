@@ -9,6 +9,26 @@ import { loadFaceAppConfig } from './config_loader.js';
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
 const wsPath = process.env.FACE_WS_PATH ?? '/ws';
+const audioTargetInput = process.env.FACE_AUDIO_TARGET ?? 'local';
+
+function normalizeAudioTarget(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'local' || normalized === 'browser' || normalized === 'both') {
+    return normalized;
+  }
+  return null;
+}
+
+const audioTarget = normalizeAudioTarget(audioTargetInput);
+if (!audioTarget) {
+  console.error(`[face-app] invalid FACE_AUDIO_TARGET: ${audioTargetInput} (expected local|browser|both)`);
+  process.exit(2);
+}
+
+console.info(`[face-app] audio target=${audioTarget}`);
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -103,6 +123,7 @@ const server = await startFaceWebSocketServer({
 if (ttsEnabled) {
   ttsController = createTtsController({
     log: console,
+    audioTarget,
     broadcast(payload) {
       return server.broadcast(payload);
     },
@@ -111,6 +132,7 @@ if (ttsEnabled) {
     gateConfig: faceConfig.speechGate,
     workerCwd: repoRoot,
     workerEnv: {
+      MH_AUDIO_TARGET: audioTarget,
       MH_KOKORO_MODEL: path.resolve(repoRoot, 'assets/kokoro/kokoro-v1.0.onnx'),
       MH_KOKORO_VOICES: path.resolve(repoRoot, 'assets/kokoro/voices-v1.0.bin')
     }

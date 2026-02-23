@@ -351,6 +351,95 @@ test('tts controller keeps replace queued before auto-interrupt threshold', asyn
   assert.equal(speaks(worker)[1].generation, 2);
 });
 
+test('tts controller relays worker audio payload when browser audio is enabled', async () => {
+  const worker = new FakeWorker();
+  const broadcasts = [];
+  const controller = createTtsController({
+    worker,
+    now: () => 30_000,
+    audioTarget: 'browser',
+    gate: { check: () => ({ allow: true }) },
+    broadcast(payload) {
+      broadcasts.push(payload);
+      return true;
+    },
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro', playback_backend: 'silent' });
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    message_id: 'm-1',
+    revision: 123,
+    text: 'browser audio',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 4_000,
+    ts: 30_000
+  });
+
+  worker.emit('message', {
+    type: 'audio',
+    generation: 1,
+    session_id: 's1',
+    utterance_id: 'u1',
+    mime_type: 'audio/wav',
+    sample_rate: 24_000,
+    audio_base64: 'ZmFrZQ=='
+  });
+
+  const relayed = broadcasts.find((payload) => payload.type === 'tts_audio');
+  assert.ok(relayed);
+  assert.equal(relayed.generation, 1);
+  assert.equal(relayed.message_id, 'm-1');
+  assert.equal(relayed.revision, 123);
+  assert.equal(relayed.mime_type, 'audio/wav');
+  assert.equal(relayed.audio_base64, 'ZmFrZQ==');
+});
+
+test('tts controller does not relay worker audio payload in local-only mode', async () => {
+  const worker = new FakeWorker();
+  const broadcasts = [];
+  const controller = createTtsController({
+    worker,
+    now: () => 31_000,
+    audioTarget: 'local',
+    gate: { check: () => ({ allow: true }) },
+    broadcast(payload) {
+      broadcasts.push(payload);
+      return true;
+    },
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro', playback_backend: 'sounddevice' });
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    text: 'local only',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 4_000,
+    ts: 31_000
+  });
+
+  worker.emit('message', {
+    type: 'audio',
+    generation: 1,
+    session_id: 's1',
+    utterance_id: 'u1',
+    mime_type: 'audio/wav',
+    sample_rate: 24_000,
+    audio_base64: 'ZmFrZQ=='
+  });
+
+  const relayed = broadcasts.find((payload) => payload.type === 'tts_audio');
+  assert.equal(relayed, undefined);
+});
+
 test('tts controller normalizes smart apostrophe and keeps hyphen normalization', async () => {
   const { worker, result } = await speakOnce({
     text: 'That’s a 9-to-5 role.'
