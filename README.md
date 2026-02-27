@@ -176,6 +176,7 @@ sequenceDiagram
 ## Quick Start
 
 Choose one startup path depending on your goal.
+Before starting, configure your coding agent to load the MCP server, and instruct the agent to follow `doc/examples/AGENT_RULES.md`.
 
 ### Path A: Face + MCP (minimal)
 
@@ -781,6 +782,7 @@ sequenceDiagram
 ## クイックスタート
 
 目的に合わせて起動パスを選んでください。
+開始前に、コーディングエージェント側で MCP サーバー設定を行い、エージェントに `doc/examples/AGENT_RULES.md` を遵守するよう指示してください。
 
 ### Path A: Face + MCP（最小構成）
 
