@@ -1,11 +1,5 @@
 # minimum-headroom
 
-[English](#english) | [日本語](#japanese)
-
-<a id="english"></a>
-
-## English
-
 <p>
   <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/b3b0a1dd-ef19-49d0-bdaf-5068ee1a376c" />
   <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/fa7f65d5-f314-4118-90c7-3853fddd6668" />
@@ -13,6 +7,13 @@
 <p>
   <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/d6c46a9a-b2c1-41b6-b8e0-fda0fb88a7c4" />
 </p>
+
+[English](#english) | [日本語](#japanese)
+
+<a id="english"></a>
+
+## English
+
 ---
 
 A face and operator companion app for coding agents.
@@ -614,11 +615,6 @@ npm run asr-worker:smoke
 <a id="japanese"></a>
 
 ## 日本語
-
-<img width="800" height="475" alt="Image" src="https://github.com/user-attachments/assets/b3b0a1dd-ef19-49d0-bdaf-5068ee1a376c" />
-<img width="800" height="600" alt="Image" src="https://github.com/user-attachments/assets/fa7f65d5-f314-4118-90c7-3853fddd6668" />
-
----
 
 コーディングエージェント向けのフェイス・オペレーター支援アプリです。
 
