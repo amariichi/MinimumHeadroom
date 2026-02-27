@@ -5,11 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { startFaceWebSocketServer } from './ws_server.js';
 import { createTtsController } from './tts_controller.js';
 import { loadFaceAppConfig } from './config_loader.js';
+import { createOperatorAsrProxy } from './operator_asr_proxy.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
 const wsPath = process.env.FACE_WS_PATH ?? '/ws';
 const audioTargetInput = process.env.FACE_AUDIO_TARGET ?? 'local';
+const uiModeInput = process.env.FACE_UI_MODE ?? 'auto';
 
 function normalizeAudioTarget(value) {
   if (typeof value !== 'string') {
@@ -22,6 +24,25 @@ function normalizeAudioTarget(value) {
   return null;
 }
 
+function normalizeUiMode(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'auto' || normalized === 'pc' || normalized === 'mobile') {
+    return normalized;
+  }
+  return null;
+}
+
+function writeJson(response, statusCode, payload) {
+  response.writeHead(statusCode, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store'
+  });
+  response.end(JSON.stringify(payload));
+}
+
 const audioTarget = normalizeAudioTarget(audioTargetInput);
 if (!audioTarget) {
   console.error(`[face-app] invalid FACE_AUDIO_TARGET: ${audioTargetInput} (expected local|browser|both)`);
@@ -29,13 +50,30 @@ if (!audioTarget) {
 }
 
 console.info(`[face-app] audio target=${audioTarget}`);
+const uiMode = normalizeUiMode(uiModeInput);
+if (!uiMode) {
+  console.error(`[face-app] invalid FACE_UI_MODE: ${uiModeInput} (expected auto|pc|mobile)`);
+  process.exit(2);
+}
+console.info(`[face-app] ui mode=${uiMode}`);
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 const staticDir = path.resolve(currentDir, '../public');
 const repoRoot = path.resolve(currentDir, '../..');
 const ttsEnabled = (process.env.FACE_TTS_ENABLED ?? '1') !== '0';
+const operatorAsrBaseUrl = process.env.MH_OPERATOR_ASR_BASE_URL ?? 'http://127.0.0.1:8091';
+const operatorAsrEndpointUrl = process.env.MH_OPERATOR_ASR_ENDPOINT_URL ?? '';
+const operatorAsrTimeoutMs = Number.parseInt(process.env.MH_OPERATOR_ASR_TIMEOUT_MS ?? '20000', 10);
 const faceConfig = loadFaceAppConfig({ repoRoot, env: process.env, log: console });
+const operatorAsrProxy = createOperatorAsrProxy({
+  baseUrl: operatorAsrBaseUrl,
+  endpointUrl: operatorAsrEndpointUrl,
+  modelJa: process.env.MH_OPERATOR_ASR_MODEL_JA ?? '',
+  modelEn: process.env.MH_OPERATOR_ASR_MODEL_EN ?? '',
+  requestTimeoutMs: Number.isNaN(operatorAsrTimeoutMs) ? 20_000 : operatorAsrTimeoutMs,
+  log: console
+});
 
 let ttsController = null;
 
@@ -116,6 +154,17 @@ const server = await startFaceWebSocketServer({
         console.error(`[face-app] tts handleSay error: ${error.message}`);
         server.broadcast(toSayResultPayload(sayPayload, { accepted: false, spoken: false }, 'controller_error'));
       });
+  },
+  onHttpRequest(request, response) {
+    const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (parsedUrl.pathname === '/api/operator/ui-config') {
+      writeJson(response, 200, {
+        ok: true,
+        uiMode
+      });
+      return true;
+    }
+    return operatorAsrProxy.handleHttpRequest(request, response);
   },
   log: console
 });

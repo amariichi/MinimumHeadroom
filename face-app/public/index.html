@@ -69,6 +69,68 @@
         <ol id="event-log" class="event-log"></ol>
       </section>
 
+      <button id="operator-esc" class="operator-esc" type="button">Esc</button>
+
+      <section id="operator-panel" class="operator-panel" aria-live="polite">
+        <header class="operator-header">
+          <h2 id="operator-title" class="operator-title">Operator</h2>
+          <div class="operator-header-actions">
+            <button id="operator-esc-inline" type="button" class="operator-btn">Esc</button>
+            <button id="operator-restart" type="button" class="operator-btn">Restart</button>
+            <button id="operator-close" type="button" class="operator-btn">Close</button>
+          </div>
+        </header>
+
+        <p id="operator-status" class="operator-status">idle</p>
+        <p id="operator-prompt" class="operator-prompt">No active prompt.</p>
+
+        <div id="operator-approval-meta" class="operator-approval-meta hidden"></div>
+        <div id="operator-choice-buttons" class="operator-choice-buttons"></div>
+
+        <div class="operator-ptt-row">
+          <button id="operator-ptt-ja" type="button" class="operator-btn">PTT JA</button>
+          <button id="operator-ptt-en" type="button" class="operator-btn">PTT EN</button>
+        </div>
+
+        <div id="operator-transcript-card" class="operator-transcript-card hidden">
+          <p id="operator-transcript-text" class="operator-transcript-text"></p>
+          <div class="operator-transcript-actions">
+            <button id="operator-transcript-send" type="button" class="operator-btn">Send</button>
+            <button id="operator-transcript-retry" type="button" class="operator-btn">Retry</button>
+            <button id="operator-transcript-cancel" type="button" class="operator-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="operator-text-card" class="operator-text-card">
+          <input
+            id="operator-text-input"
+            class="operator-text-input"
+            type="text"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            placeholder="Text fallback input"
+          />
+          <div class="operator-text-actions">
+            <button id="operator-text-send" type="button" class="operator-btn">Send Text</button>
+            <button id="operator-text-clear" type="button" class="operator-btn">Clear</button>
+            <button id="operator-text-cancel" type="button" class="operator-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div class="operator-keypad">
+          <button id="operator-key-up" type="button" class="operator-key-btn" aria-label="Up">↑</button>
+          <button id="operator-key-enter" type="button" class="operator-key-btn">ENTER</button>
+          <button id="operator-key-down" type="button" class="operator-key-btn" aria-label="Down">↓</button>
+        </div>
+
+        <div class="operator-mirror-row">
+          <button id="operator-mirror-toggle" type="button" class="operator-btn">Terminal</button>
+        </div>
+        <pre id="operator-mirror" class="operator-mirror hidden" aria-label="Read only terminal mirror"></pre>
+        <p id="operator-ack" class="operator-ack">ack: -</p>
+      </section>
+
       <aside id="utterance" class="utterance hidden" aria-live="assertive"></aside>
       <div id="ui-hidden-hint" class="ui-hidden-hint hidden" aria-live="polite">UI hidden. Double tap, double click, or press Esc.</div>
       <button id="audio-replay" class="audio-replay hidden" type="button">Tap to enable audio</button>

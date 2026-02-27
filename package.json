@@ -1,13 +1,19 @@
 {
   "name": "minimum-headroom",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "setup": "./scripts/setup.sh",
     "face-app:start": "node face-app/dist/index.js",
+    "operator-bridge:start": "node face-app/dist/operator_bridge.js",
     "mcp-server:start": "node mcp-server/dist/index.js",
     "face-app:run": "./scripts/run-face-app.sh",
+    "operator-bridge:run": "./scripts/run-operator-bridge.sh",
+    "operator-stack:run": "./scripts/run-operator-stack.sh",
+    "asr-worker:start": "./scripts/run-asr-worker.sh",
+    "asr-worker:run": "./scripts/run-asr-worker.sh",
+    "asr-worker:smoke": "uv run --project asr-worker asr-worker --smoke",
     "mcp-server:run": "./scripts/run-mcp-server.sh",
     "tts-worker:smoke": "uv run --project tts-worker python -m tts_worker --smoke",
     "test": "node --test"
