@@ -15,4 +15,7 @@ uv --version
 echo "[setup] syncing Python deps for tts-worker"
 uv sync --project tts-worker
 
+echo "[setup] syncing Python deps for asr-worker"
+uv sync --project asr-worker --locked
+
 echo "[setup] done"

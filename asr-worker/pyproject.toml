@@ -1,0 +1,24 @@
+[project]
+name = "english-trainer-asr-worker"
+version = "0.2.0"
+description = "Local ASR worker for english-trainer (Parakeet EN/JA routing)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.116.0",
+  "uvicorn[standard]>=0.35.0",
+  "pydantic>=2.11.0",
+  "numpy>=2.0.0",
+  "soundfile>=0.13.0",
+  "nemo-toolkit[asr]>=2.3.0",
+]
+
+[project.scripts]
+asr-worker = "asr_worker.__main__:main"
+
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/asr_worker"]

@@ -197,6 +197,7 @@ export async function startFaceWebSocketServer(options = {}) {
   const port = Number.isNaN(configuredPort) ? 8765 : configuredPort;
   const wsPath = normalizePath(options.path ?? '/ws');
   const onPayload = typeof options.onPayload === 'function' ? options.onPayload : () => {};
+  const onHttpRequest = typeof options.onHttpRequest === 'function' ? options.onHttpRequest : null;
   const relayPayloads = options.relayPayloads ?? true;
   const staticDir = options.staticDir ?? null;
   const log = toLogger(options.log ?? console);
@@ -224,6 +225,19 @@ export async function startFaceWebSocketServer(options = {}) {
   }
 
   const server = http.createServer(async (request, response) => {
+    if (onHttpRequest) {
+      try {
+        const handled = await onHttpRequest(request, response);
+        if (handled || response.writableEnded) {
+          return;
+        }
+      } catch (error) {
+        response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end(`Server Error: ${error.message}\n`);
+        return;
+      }
+    }
+
     await serveStaticFile(request, response, staticDir);
   });
 

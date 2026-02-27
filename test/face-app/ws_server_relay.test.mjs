@@ -118,3 +118,31 @@ test('ws server serves static ui and relays payloads to display clients', async 
   assert.equal(received.length, 1);
   assert.equal(received[0].session_id, 'relay#test');
 });
+
+test('ws server allows custom HTTP API route handling', async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    relayPayloads: false,
+    onHttpRequest(request, response) {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      if (url.pathname !== '/api/health') {
+        return false;
+      }
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ ok: true }));
+      return true;
+    },
+    log: { info: () => {}, error: () => {} }
+  });
+
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const response = await fetch(`${server.httpUrl}api/health`);
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.deepEqual(payload, { ok: true });
+});

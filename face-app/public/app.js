@@ -11,6 +11,8 @@ import {
   validateFeatureDepth
 } from './state_engine.js';
 import { createDoubleTapTracker, shouldIgnoreToggleTarget } from './gesture_controls.js';
+import { createInitialOperatorUiState, deriveOperatorUiFlags, reduceOperatorUiState } from './operator_ui_state.js';
+import { isDefaultAnsiStyle, parseAnsiRuns } from './operator_ansi.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -32,6 +34,35 @@ const xrButtonSlot = document.getElementById('xr-button-slot');
 const uiHiddenHintEl = document.getElementById('ui-hidden-hint');
 const audioReplayButtonEl = document.getElementById('audio-replay');
 const uiPanels = Array.from(document.querySelectorAll('.panel'));
+const operatorPanelEl = document.getElementById('operator-panel');
+const operatorHandleEl = document.getElementById('operator-handle');
+const operatorEscButtonEl = document.getElementById('operator-esc');
+const operatorEscInlineButtonEl = document.getElementById('operator-esc-inline');
+const operatorCloseButtonEl = document.getElementById('operator-close');
+const operatorRestartButtonEl = document.getElementById('operator-restart');
+const operatorTitleEl = document.getElementById('operator-title');
+const operatorStatusEl = document.getElementById('operator-status');
+const operatorPromptEl = document.getElementById('operator-prompt');
+const operatorAckEl = document.getElementById('operator-ack');
+const operatorChoiceButtonsEl = document.getElementById('operator-choice-buttons');
+const operatorApprovalMetaEl = document.getElementById('operator-approval-meta');
+const operatorPttJaButtonEl = document.getElementById('operator-ptt-ja');
+const operatorPttEnButtonEl = document.getElementById('operator-ptt-en');
+const operatorTranscriptCardEl = document.getElementById('operator-transcript-card');
+const operatorTranscriptTextEl = document.getElementById('operator-transcript-text');
+const operatorTranscriptSendButtonEl = document.getElementById('operator-transcript-send');
+const operatorTranscriptRetryButtonEl = document.getElementById('operator-transcript-retry');
+const operatorTranscriptCancelButtonEl = document.getElementById('operator-transcript-cancel');
+const operatorTextCardEl = document.getElementById('operator-text-card');
+const operatorTextInputEl = document.getElementById('operator-text-input');
+const operatorTextSendButtonEl = document.getElementById('operator-text-send');
+const operatorTextClearButtonEl = document.getElementById('operator-text-clear');
+const operatorTextCancelButtonEl = document.getElementById('operator-text-cancel');
+const operatorKeyUpEl = document.getElementById('operator-key-up');
+const operatorKeyDownEl = document.getElementById('operator-key-down');
+const operatorKeyEnterEl = document.getElementById('operator-key-enter');
+const operatorMirrorToggleEl = document.getElementById('operator-mirror-toggle');
+const operatorMirrorEl = document.getElementById('operator-mirror');
 
 const LOOKING_GLASS_ENABLED_KEY = 'mh_lg_webxr_enabled';
 const HEAD_LIMITS = {
@@ -60,6 +91,20 @@ const DRAG_OFFSET_DECAY_PER_SECOND = 6;
 const DRAG_INTENSITY_DECAY_PER_SECOND = 7.5;
 const DRAG_SPEED_FOR_FULL_INTENSITY_PX_PER_SEC = 780;
 const FACE_ROOT_BASE_Y = 0.56;
+const OPERATOR_ASR_MAX_RECORDING_MS = 15_000;
+const OPERATOR_MIN_AUDIO_BLOB_BYTES = 900;
+const OPERATOR_UI_MODE_AUTO = 'auto';
+const OPERATOR_UI_MODE_PC = 'pc';
+const OPERATOR_UI_MODE_MOBILE = 'mobile';
+const OPERATOR_UI_MODES = new Set([OPERATOR_UI_MODE_AUTO, OPERATOR_UI_MODE_PC, OPERATOR_UI_MODE_MOBILE]);
+const OPERATOR_MIRROR_DEFAULT_FG_CSS_VAR = 'var(--operator-mirror-fg)';
+const OPERATOR_MIRROR_DEFAULT_BG_CSS_VAR = 'var(--operator-mirror-bg-solid)';
+const OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX = 24;
+const MIC_AUDIO_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true
+};
 
 function toneColor(tone) {
   if (tone === 'ok') {
@@ -374,6 +419,24 @@ const dragState = {
   intensity: 0,
   modeHint: null
 };
+let operatorUiState = createInitialOperatorUiState();
+let operatorActivePrompt = null;
+let operatorTranscriptDraft = null;
+let operatorTerminalSnapshotLines = [];
+let operatorMirrorAutoFollow = true;
+let operatorMirrorInitialScrollDone = false;
+const operatorMicState = {
+  recorder: null,
+  stream: null,
+  chunks: [],
+  recording: false,
+  pointerArmed: false,
+  language: 'en',
+  startedAtMs: 0,
+  stopTimer: null
+};
+let operatorConfiguredUiMode = OPERATOR_UI_MODE_AUTO;
+let operatorEffectiveUiMode = OPERATOR_UI_MODE_PC;
 
 const view = {
   width: 0,
@@ -499,6 +562,493 @@ function appendEvent(payload) {
     entry.textContent = item;
     eventLogEl.appendChild(entry);
   }
+}
+
+function resolveOperatorSessionId() {
+  if (typeof faceState.session_id === 'string' && faceState.session_id.trim() !== '' && faceState.session_id !== '-') {
+    return faceState.session_id;
+  }
+  return 'default';
+}
+
+function normalizeOperatorUiMode(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!OPERATOR_UI_MODES.has(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function detectDefaultOperatorUiMode() {
+  const narrowViewport = window.matchMedia?.('(max-width: 960px)')?.matches === true;
+  const touchPrimary = Number.isFinite(navigator.maxTouchPoints) && navigator.maxTouchPoints > 0;
+  return narrowViewport || touchPrimary ? OPERATOR_UI_MODE_MOBILE : OPERATOR_UI_MODE_PC;
+}
+
+function applyOperatorUiMode(mode) {
+  const configured = normalizeOperatorUiMode(mode) ?? OPERATOR_UI_MODE_AUTO;
+  operatorConfiguredUiMode = configured;
+  operatorEffectiveUiMode = configured === OPERATOR_UI_MODE_AUTO ? detectDefaultOperatorUiMode() : configured;
+
+  document.body.classList.remove('ui-mode-mobile', 'ui-mode-pc');
+  document.body.classList.add(operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE ? 'ui-mode-mobile' : 'ui-mode-pc');
+
+  if (operatorTitleEl) {
+    operatorTitleEl.textContent = operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE ? 'MINIMUM HEADROOM OPERATOR' : 'Operator';
+  }
+}
+
+async function loadOperatorUiConfig() {
+  let mode = normalizeOperatorUiMode(new URL(window.location.href).searchParams.get('ui'));
+  if (!mode) {
+    try {
+      const response = await fetch('/api/operator/ui-config', {
+        method: 'GET',
+        cache: 'no-store'
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        mode = normalizeOperatorUiMode(payload?.uiMode);
+      }
+    } catch {
+      // Keep auto mode on fetch failures.
+    }
+  }
+  applyOperatorUiMode(mode ?? OPERATOR_UI_MODE_AUTO);
+}
+
+function sendSocketPayload(payload) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  try {
+    socket.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function setOperatorStatusLine(text, tone = 'default') {
+  if (!operatorStatusEl) {
+    return;
+  }
+  operatorStatusEl.textContent = text;
+  operatorStatusEl.style.color = toneColor(tone);
+}
+
+function setOperatorAckLine(text, tone = 'default') {
+  if (!operatorAckEl) {
+    return;
+  }
+  operatorAckEl.textContent = text;
+  operatorAckEl.style.color = toneColor(tone);
+}
+
+function dispatchOperatorUiAction(action) {
+  operatorUiState = reduceOperatorUiState(operatorUiState, action);
+  updateOperatorUi();
+}
+
+function formatOperatorApprovalMeta(payload) {
+  const lines = [];
+  if (typeof payload.purpose === 'string' && payload.purpose.trim() !== '') {
+    lines.push(`purpose: ${payload.purpose.trim()}`);
+  }
+  if (typeof payload.action === 'string' && payload.action.trim() !== '') {
+    lines.push(`action: ${payload.action.trim()}`);
+  }
+  if (typeof payload.effect === 'string' && payload.effect.trim() !== '') {
+    lines.push(`effect: ${payload.effect.trim()}`);
+  }
+  if (typeof payload.risk === 'string' && payload.risk.trim() !== '') {
+    lines.push(`risk: ${payload.risk.trim()}`);
+  }
+  return lines.join('\n');
+}
+
+function normalizeOperatorPromptChoices(payload) {
+  if (Array.isArray(payload?.choices) && payload.choices.length > 0) {
+    return payload.choices.map((item) => String(item));
+  }
+  if (payload?.state === 'awaiting_approval') {
+    return ['approve', 'deny'];
+  }
+  return [];
+}
+
+function sendOperatorResponse(responseKind, value, extra = {}) {
+  const requestId = Object.prototype.hasOwnProperty.call(extra, 'requestId')
+    ? extra.requestId ?? null
+    : operatorActivePrompt?.request_id ?? null;
+  const payload = {
+    v: 1,
+    type: 'operator_response',
+    session_id: resolveOperatorSessionId(),
+    request_id: requestId,
+    response_kind: responseKind,
+    value,
+    source: 'ui',
+    ts: Date.now()
+  };
+  if (extra.submit === false) {
+    payload.submit = false;
+  }
+
+  const sent = sendSocketPayload(payload);
+  if (!sent) {
+    setOperatorStatusLine('bridge offline', 'warn');
+    setOperatorAckLine('ack: not sent (offline)', 'warn');
+    dispatchOperatorUiAction({ type: 'socket_close' });
+    return false;
+  }
+
+  setOperatorAckLine(`ack: queued ${responseKind}`, 'default');
+  return true;
+}
+
+function renderOperatorChoices(payload) {
+  if (!operatorChoiceButtonsEl) {
+    return;
+  }
+  operatorChoiceButtonsEl.innerHTML = '';
+
+  const choices = normalizeOperatorPromptChoices(payload);
+  if (choices.length === 0) {
+    return;
+  }
+
+  for (const rawChoice of choices) {
+    const choice = String(rawChoice);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'operator-btn';
+    button.textContent = choice;
+    button.addEventListener('click', () => {
+      sendOperatorResponse('choice_single', choice);
+    });
+    operatorChoiceButtonsEl.appendChild(button);
+  }
+}
+
+function setOperatorTranscriptDraft(value, language = 'en') {
+  if (typeof value !== 'string' || value.trim() === '') {
+    operatorTranscriptDraft = null;
+  } else {
+    operatorTranscriptDraft = {
+      text: value.trim(),
+      language
+    };
+  }
+  updateOperatorUi();
+}
+
+function submitOperatorTextInput() {
+  if (!operatorTextInputEl) {
+    return;
+  }
+  const text = operatorTextInputEl.value.trim();
+  if (text === '') {
+    setOperatorStatusLine('text is empty', 'warn');
+    return;
+  }
+  const sent = sendOperatorResponse('text', text, { submit: true });
+  if (sent) {
+    operatorTextInputEl.value = '';
+    setOperatorStatusLine('text sent', 'ok');
+  }
+}
+
+function cancelOperatorTextInput() {
+  if (!operatorTextInputEl) {
+    return;
+  }
+  operatorTextInputEl.blur();
+  window.setTimeout(() => {
+    operatorTextInputEl.blur();
+  }, 50);
+  setOperatorStatusLine('text input canceled', 'default');
+}
+
+function applyAnsiRunStyle(element, run) {
+  let color = run.fg;
+  let backgroundColor = run.bg;
+
+  if (run.inverse) {
+    color = run.bg ?? OPERATOR_MIRROR_DEFAULT_BG_CSS_VAR;
+    backgroundColor = run.fg ?? OPERATOR_MIRROR_DEFAULT_FG_CSS_VAR;
+  }
+
+  if (color) {
+    element.style.color = color;
+  }
+  if (backgroundColor) {
+    element.style.backgroundColor = backgroundColor;
+  }
+  if (run.bold) {
+    element.style.fontWeight = '700';
+  }
+  if (run.faint) {
+    element.style.opacity = '0.78';
+  }
+  if (run.italic) {
+    element.style.fontStyle = 'italic';
+  }
+  if (run.underline) {
+    element.style.textDecoration = 'underline';
+  }
+}
+
+function renderAnsiTextToMirror(text) {
+  if (!operatorMirrorEl) {
+    return;
+  }
+
+  const runs = parseAnsiRuns(text);
+  if (runs.length === 0) {
+    operatorMirrorEl.textContent = '';
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const run of runs) {
+    if (run.text === '') {
+      continue;
+    }
+    if (isDefaultAnsiStyle(run)) {
+      fragment.appendChild(document.createTextNode(run.text));
+      continue;
+    }
+    const span = document.createElement('span');
+    span.textContent = run.text;
+    applyAnsiRunStyle(span, run);
+    fragment.appendChild(span);
+  }
+
+  operatorMirrorEl.replaceChildren(fragment);
+}
+
+function isOperatorMirrorNearBottom() {
+  if (!operatorMirrorEl) {
+    return true;
+  }
+  const distance = operatorMirrorEl.scrollHeight - operatorMirrorEl.scrollTop - operatorMirrorEl.clientHeight;
+  return distance <= OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX;
+}
+
+function scrollOperatorMirrorToBottom() {
+  if (!operatorMirrorEl) {
+    return;
+  }
+  operatorMirrorEl.scrollTop = operatorMirrorEl.scrollHeight;
+}
+
+function handleOperatorMirrorScroll() {
+  operatorMirrorAutoFollow = isOperatorMirrorNearBottom();
+}
+
+function renderOperatorTerminalSnapshot() {
+  if (!operatorMirrorEl) {
+    return;
+  }
+  if (!operatorTerminalSnapshotLines || operatorTerminalSnapshotLines.length === 0) {
+    operatorMirrorEl.textContent = '(empty)';
+    return;
+  }
+
+  const shouldStickToBottom = operatorMirrorAutoFollow || isOperatorMirrorNearBottom();
+  renderAnsiTextToMirror(operatorTerminalSnapshotLines.join('\n'));
+
+  if (!operatorMirrorInitialScrollDone) {
+    scrollOperatorMirrorToBottom();
+    operatorMirrorInitialScrollDone = true;
+    operatorMirrorAutoFollow = true;
+    return;
+  }
+
+  if (shouldStickToBottom) {
+    scrollOperatorMirrorToBottom();
+    operatorMirrorAutoFollow = true;
+  }
+}
+
+function updateOperatorUi() {
+  const flags = deriveOperatorUiFlags(operatorUiState);
+  const prompt = operatorActivePrompt;
+  const awaiting = operatorUiState.awaiting;
+  const inputKind = prompt?.input_kind ?? null;
+  const isMobileUi = operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE;
+  const approvalMeta = prompt ? formatOperatorApprovalMeta(prompt) : '';
+
+  if (operatorPanelEl) {
+    operatorPanelEl.classList.toggle('hidden', !flags.showPanel);
+  }
+  if (operatorEscButtonEl) {
+    const showFloatingEsc = flags.showEsc && (!flags.showPanel || !isMobileUi);
+    operatorEscButtonEl.classList.toggle('hidden', !showFloatingEsc);
+  }
+  if (operatorEscInlineButtonEl) {
+    const showInlineEsc = flags.showEsc && flags.showPanel && isMobileUi;
+    operatorEscInlineButtonEl.classList.toggle('hidden', !showInlineEsc);
+  }
+  if (operatorHandleEl) {
+    operatorHandleEl.classList.add('hidden');
+  }
+  if (operatorCloseButtonEl) {
+    operatorCloseButtonEl.classList.add('hidden');
+  }
+  if (operatorRestartButtonEl) {
+    operatorRestartButtonEl.classList.toggle('hidden', !flags.showRestart);
+  }
+  if (operatorMirrorEl) {
+    const showMirror = isMobileUi || flags.showMirror;
+    operatorMirrorEl.classList.toggle('hidden', !showMirror);
+  }
+  if (operatorMirrorToggleEl) {
+    operatorMirrorToggleEl.classList.toggle('hidden', isMobileUi);
+    operatorMirrorToggleEl.textContent = flags.showMirror ? 'Hide Terminal' : 'Terminal';
+  }
+
+  if (operatorPromptEl) {
+    let promptText = '';
+    if (prompt?.prompt) {
+      promptText = prompt.prompt;
+    } else if (awaiting) {
+      promptText = 'Awaiting input.';
+    }
+    operatorPromptEl.textContent = promptText;
+    operatorPromptEl.classList.toggle('hidden', promptText === '');
+  }
+  if (operatorApprovalMetaEl) {
+    operatorApprovalMetaEl.textContent = approvalMeta;
+    operatorApprovalMetaEl.classList.toggle('hidden', approvalMeta === '');
+  }
+
+  const showChoices = awaiting && (inputKind === 'choice_single' || prompt?.state === 'awaiting_approval');
+  if (operatorChoiceButtonsEl) {
+    operatorChoiceButtonsEl.classList.toggle('hidden', !showChoices || operatorChoiceButtonsEl.childElementCount === 0);
+  }
+
+  const showPtt = isMobileUi ? !awaiting || inputKind === 'text' || inputKind === null : awaiting && inputKind === 'text';
+  if (operatorPttJaButtonEl) {
+    operatorPttJaButtonEl.classList.toggle('hidden', !showPtt);
+  }
+  if (operatorPttEnButtonEl) {
+    operatorPttEnButtonEl.classList.toggle('hidden', !showPtt);
+  }
+  if (operatorTranscriptCardEl) {
+    operatorTranscriptCardEl.classList.toggle('hidden', !showPtt || !operatorTranscriptDraft);
+  }
+  if (operatorTranscriptTextEl) {
+    operatorTranscriptTextEl.textContent = operatorTranscriptDraft
+      ? `[${operatorTranscriptDraft.language}] ${operatorTranscriptDraft.text}`
+      : '';
+  }
+  if (operatorTextCardEl) {
+    operatorTextCardEl.classList.toggle('hidden', false);
+  }
+  if (operatorTextInputEl) {
+    if (awaiting && inputKind === 'text') {
+      operatorTextInputEl.placeholder = 'Type response text';
+    } else if (awaiting && inputKind) {
+      operatorTextInputEl.placeholder = 'Type manual input (prompt expects choice)';
+    } else {
+      operatorTextInputEl.placeholder = 'Text fallback input';
+    }
+  }
+
+  if (!awaiting && !operatorTranscriptDraft) {
+    if (flags.showRestart) {
+      setOperatorStatusLine('recovery', 'warn');
+    } else {
+      setOperatorStatusLine(isMobileUi ? 'manual input ready' : 'idle', 'ok');
+    }
+  }
+
+  renderOperatorTerminalSnapshot();
+}
+
+function handleOperatorPrompt(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return;
+  }
+
+  operatorActivePrompt = payload;
+  operatorTranscriptDraft = null;
+  renderOperatorChoices(payload);
+  dispatchOperatorUiAction({
+    type: 'prompt_received',
+    requestId: payload.request_id ?? null,
+    prompt: payload
+  });
+  setOperatorStatusLine(payload.state === 'awaiting_approval' ? 'awaiting approval' : 'awaiting input', 'ok');
+}
+
+function handleOperatorAck(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return;
+  }
+  const stage = typeof payload.stage === 'string' ? payload.stage : '-';
+  const reason = typeof payload.reason === 'string' && payload.reason !== '' ? payload.reason : '';
+  const ok = payload.ok === true;
+
+  setOperatorAckLine(`ack: ${stage}${reason ? ` (${reason})` : ''}`, ok ? 'ok' : 'warn');
+  if (!ok) {
+    setOperatorStatusLine(`ack failed: ${reason || 'unknown'}`, 'warn');
+  } else if (stage === 'sent_to_tmux') {
+    setOperatorStatusLine('input delivered', 'ok');
+  }
+
+  if (operatorEffectiveUiMode !== OPERATOR_UI_MODE_MOBILE) {
+    dispatchOperatorUiAction({
+      type: 'ack_received',
+      ok,
+      stage,
+      requestId: payload.request_id ?? null
+    });
+  }
+
+  if (ok && stage === 'sent_to_tmux') {
+    operatorActivePrompt = null;
+    setOperatorTranscriptDraft(null);
+  }
+}
+
+function handleOperatorStatePayload(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return;
+  }
+
+  dispatchOperatorUiAction({
+    type: 'operator_state',
+    bridgeOnline: payload.bridge_online === true,
+    recoveryMode: payload.recovery_mode === true,
+    noResponse: payload.no_response === true,
+    awaiting: payload.awaiting === true,
+    requestId: typeof payload.request_id === 'string' ? payload.request_id : null
+  });
+
+  if (payload.awaiting === false && !payload.request_id) {
+    operatorActivePrompt = null;
+    setOperatorTranscriptDraft(null);
+  }
+
+  if (payload.bridge_online === false) {
+    setOperatorStatusLine('bridge offline', 'warn');
+  } else if (payload.recovery_mode === true) {
+    setOperatorStatusLine(`recovery${payload.reason ? `: ${payload.reason}` : ''}`, 'warn');
+  }
+}
+
+function handleOperatorTerminalSnapshot(payload) {
+  if (!payload || !Array.isArray(payload.lines)) {
+    return;
+  }
+  operatorTerminalSnapshotLines = payload.lines.map((line) => String(line));
+  renderOperatorTerminalSnapshot();
 }
 
 function showUtterance(text, ttlMs) {
@@ -802,6 +1352,185 @@ async function playBrowserAudioPayload(payload) {
   }
 }
 
+function releaseOperatorMicCapture() {
+  if (operatorMicState.recorder && operatorMicState.recorder.state !== 'inactive') {
+    try {
+      operatorMicState.recorder.stop();
+    } catch {
+      // Ignore cleanup errors while stopping recorder.
+    }
+  }
+  if (operatorMicState.stream) {
+    operatorMicState.stream.getTracks().forEach((track) => track.stop());
+  }
+  if (operatorMicState.stopTimer) {
+    clearTimeout(operatorMicState.stopTimer);
+    operatorMicState.stopTimer = null;
+  }
+  operatorMicState.recorder = null;
+  operatorMicState.stream = null;
+  operatorMicState.chunks = [];
+  operatorMicState.recording = false;
+  operatorMicState.pointerArmed = false;
+}
+
+function stopMediaRecorder(recorder, chunks) {
+  if (!recorder || recorder.state === 'inactive') {
+    return Promise.resolve(new Blob(chunks, { type: recorder?.mimeType || 'audio/webm' }));
+  }
+
+  return new Promise((resolve, reject) => {
+    const handleStop = () => {
+      cleanup();
+      resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error('MediaRecorder error'));
+    };
+    const cleanup = () => {
+      recorder.removeEventListener('stop', handleStop);
+      recorder.removeEventListener('error', handleError);
+    };
+
+    recorder.addEventListener('stop', handleStop, { once: true });
+    recorder.addEventListener('error', handleError, { once: true });
+    recorder.stop();
+  });
+}
+
+async function ensureOperatorMediaRecorder() {
+  if (operatorMicState.recorder && operatorMicState.stream && operatorMicState.stream.active) {
+    return operatorMicState.recorder;
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO_CONSTRAINTS });
+  const preferredTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  const mimeType = preferredTypes.find((type) => {
+    try {
+      return MediaRecorder.isTypeSupported(type);
+    } catch {
+      return false;
+    }
+  });
+
+  const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  operatorMicState.stream = stream;
+  operatorMicState.recorder = recorder;
+  return recorder;
+}
+
+async function startOperatorRecording(language) {
+  if (operatorMicState.recording) {
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    setOperatorStatusLine('microphone unavailable (use text input)', 'warn');
+    return;
+  }
+  const activeInputKind = operatorActivePrompt?.input_kind ?? null;
+  if (operatorUiState.awaiting && activeInputKind && activeInputKind !== 'text') {
+    setOperatorStatusLine('prompt expects choice; use buttons or text input', 'warn');
+    return;
+  }
+
+  try {
+    await unlockPlaybackAudio();
+    const recorder = await ensureOperatorMediaRecorder();
+    operatorMicState.language = language === 'ja' ? 'ja' : 'en';
+    operatorMicState.chunks = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        operatorMicState.chunks.push(event.data);
+      }
+    };
+    recorder.start();
+    operatorMicState.recording = true;
+    operatorMicState.startedAtMs = Date.now();
+    if (operatorMicState.stopTimer) {
+      clearTimeout(operatorMicState.stopTimer);
+    }
+    operatorMicState.stopTimer = setTimeout(() => {
+      if (!operatorMicState.recording) {
+        return;
+      }
+      stopOperatorRecordingAndTranscribe().catch(() => {
+        // Ignore here. UI path already updates status on errors.
+      });
+    }, OPERATOR_ASR_MAX_RECORDING_MS);
+    setOperatorStatusLine(`recording (${operatorMicState.language})...`, 'ok');
+  } catch (error) {
+    setOperatorStatusLine(`mic error: ${error.message} (use text input)`, 'warn');
+    releaseOperatorMicCapture();
+  }
+}
+
+async function requestOperatorAsrTranscript(blob, mimeType, language) {
+  const query = new URLSearchParams();
+  query.set('lang', language === 'ja' ? 'ja' : 'en');
+  const response = await fetch(`/api/operator/asr?${query.toString()}`, {
+    method: 'POST',
+    headers: {
+      'content-type': mimeType || 'audio/webm'
+    },
+    body: blob
+  });
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok || !payload || payload.ok === false) {
+    const detail = payload?.detail ? `: ${payload.detail}` : '';
+    throw new Error(`ASR failed (${response.status})${detail}`);
+  }
+
+  if (typeof payload.text !== 'string' || payload.text.trim() === '') {
+    throw new Error('ASR returned empty text');
+  }
+
+  return {
+    text: payload.text.trim(),
+    language: payload.language === 'ja' ? 'ja' : 'en'
+  };
+}
+
+async function stopOperatorRecordingAndTranscribe() {
+  if (!operatorMicState.recording || !operatorMicState.recorder) {
+    return;
+  }
+
+  operatorMicState.recording = false;
+  if (operatorMicState.stopTimer) {
+    clearTimeout(operatorMicState.stopTimer);
+    operatorMicState.stopTimer = null;
+  }
+
+  setOperatorStatusLine('processing audio...', 'default');
+  try {
+    const recorder = operatorMicState.recorder;
+    const chunks = operatorMicState.chunks;
+    const blob = await stopMediaRecorder(recorder, chunks);
+    operatorMicState.chunks = [];
+
+    if (!blob || blob.size < OPERATOR_MIN_AUDIO_BLOB_BYTES) {
+      setOperatorStatusLine('recording was too short', 'warn');
+      return;
+    }
+
+    const result = await requestOperatorAsrTranscript(blob, blob.type || recorder.mimeType || 'audio/webm', operatorMicState.language);
+    setOperatorTranscriptDraft(result.text, result.language);
+    setOperatorStatusLine(`asr ready (${result.language})`, 'ok');
+  } catch (error) {
+    setOperatorStatusLine(`asr error: ${error.message}`, 'warn');
+  } finally {
+    releaseOperatorMicCapture();
+  }
+}
+
 function handleTtsAudio(payload) {
   void playBrowserAudioPayload(payload);
 }
@@ -930,6 +1659,14 @@ function handlePayload(payload) {
     }
   } else if (payload.type === 'say_result') {
     handleSayResult(payload);
+  } else if (payload.type === 'operator_prompt') {
+    handleOperatorPrompt(payload);
+  } else if (payload.type === 'operator_ack') {
+    handleOperatorAck(payload);
+  } else if (payload.type === 'operator_state') {
+    handleOperatorStatePayload(payload);
+  } else if (payload.type === 'operator_terminal_snapshot') {
+    handleOperatorTerminalSnapshot(payload);
   } else if (payload.type === 'tts_state') {
     handleTtsState(payload);
   } else if (payload.type === 'tts_mouth') {
@@ -950,6 +1687,8 @@ function connectWebSocket() {
   socket.addEventListener('open', () => {
     reconnectAttempts = 0;
     setWsStatus('online', 'ok');
+    dispatchOperatorUiAction({ type: 'socket_open' });
+    setOperatorStatusLine('connected', 'ok');
   });
 
   socket.addEventListener('message', async (event) => {
@@ -963,10 +1702,13 @@ function connectWebSocket() {
 
   socket.addEventListener('error', () => {
     setWsStatus('socket-error', 'warn');
+    setOperatorStatusLine('socket error', 'warn');
   });
 
   socket.addEventListener('close', () => {
     setWsStatus('offline', 'warn');
+    dispatchOperatorUiAction({ type: 'socket_close' });
+    setOperatorStatusLine('offline', 'warn');
 
     if (reconnectTimer !== null) {
       return;
@@ -1338,6 +2080,164 @@ function installAudioReplayButton() {
   });
 }
 
+function registerOperatorPttButton(button, language) {
+  if (!button) {
+    return;
+  }
+
+  button.addEventListener('pointerdown', async (event) => {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    operatorMicState.pointerArmed = true;
+    await startOperatorRecording(language);
+  });
+
+  const stopHandler = async () => {
+    if (!operatorMicState.pointerArmed) {
+      return;
+    }
+    operatorMicState.pointerArmed = false;
+    await stopOperatorRecordingAndTranscribe();
+  };
+
+  button.addEventListener('pointerup', stopHandler);
+  button.addEventListener('pointerleave', stopHandler);
+  button.addEventListener('pointercancel', stopHandler);
+}
+
+function installOperatorControls() {
+  if (!operatorPanelEl) {
+    return;
+  }
+
+  operatorUiState = createInitialOperatorUiState();
+  dispatchOperatorUiAction({ type: 'panel_open' });
+  setOperatorStatusLine('connecting', 'default');
+  setOperatorAckLine('ack: -', 'default');
+
+  if (operatorHandleEl) {
+    operatorHandleEl.addEventListener('click', () => {
+      dispatchOperatorUiAction({ type: operatorUiState.panelOpen ? 'panel_close' : 'panel_open' });
+    });
+  }
+
+  if (operatorCloseButtonEl) {
+    operatorCloseButtonEl.addEventListener('click', () => {
+      cancelOperatorTextInput();
+      dispatchOperatorUiAction({ type: 'panel_close' });
+    });
+  }
+
+  if (operatorRestartButtonEl) {
+    operatorRestartButtonEl.addEventListener('click', () => {
+      if (sendOperatorResponse('restart', 'restart', { requestId: null })) {
+        setOperatorStatusLine('restart requested', 'default');
+      }
+    });
+  }
+
+  if (operatorEscButtonEl) {
+    operatorEscButtonEl.addEventListener('click', () => {
+      cancelOperatorTextInput();
+      sendOperatorResponse('key', 'Esc', { requestId: null, submit: false });
+    });
+  }
+  if (operatorEscInlineButtonEl) {
+    operatorEscInlineButtonEl.addEventListener('click', () => {
+      cancelOperatorTextInput();
+      sendOperatorResponse('key', 'Esc', { requestId: null, submit: false });
+    });
+  }
+
+  if (operatorMirrorToggleEl) {
+    operatorMirrorToggleEl.addEventListener('click', () => {
+      dispatchOperatorUiAction({ type: 'mirror_toggle' });
+    });
+  }
+  if (operatorMirrorEl) {
+    operatorMirrorEl.addEventListener('scroll', handleOperatorMirrorScroll, { passive: true });
+  }
+
+  if (operatorTranscriptSendButtonEl) {
+    operatorTranscriptSendButtonEl.addEventListener('click', () => {
+      if (!operatorTranscriptDraft) {
+        return;
+      }
+      const sent = sendOperatorResponse('text', operatorTranscriptDraft.text, { submit: true });
+      if (sent) {
+        setOperatorTranscriptDraft(null);
+      }
+    });
+  }
+
+  if (operatorTranscriptRetryButtonEl) {
+    operatorTranscriptRetryButtonEl.addEventListener('click', () => {
+      setOperatorTranscriptDraft(null);
+      setOperatorStatusLine('hold PTT to retry', 'default');
+    });
+  }
+
+  if (operatorTranscriptCancelButtonEl) {
+    operatorTranscriptCancelButtonEl.addEventListener('click', () => {
+      setOperatorTranscriptDraft(null);
+      setOperatorStatusLine('transcript canceled', 'default');
+    });
+  }
+
+  if (operatorTextSendButtonEl) {
+    operatorTextSendButtonEl.addEventListener('click', () => {
+      submitOperatorTextInput();
+    });
+  }
+  if (operatorTextClearButtonEl) {
+    operatorTextClearButtonEl.addEventListener('click', () => {
+      if (!operatorTextInputEl) {
+        return;
+      }
+      operatorTextInputEl.value = '';
+      setOperatorStatusLine('text cleared', 'default');
+    });
+  }
+  if (operatorTextCancelButtonEl) {
+    operatorTextCancelButtonEl.addEventListener('click', () => {
+      cancelOperatorTextInput();
+    });
+  }
+  if (operatorTextInputEl) {
+    operatorTextInputEl.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelOperatorTextInput();
+        }
+        return;
+      }
+      event.preventDefault();
+      submitOperatorTextInput();
+    });
+  }
+
+  const keyBindings = [
+    [operatorKeyUpEl, 'Up'],
+    [operatorKeyDownEl, 'Down'],
+    [operatorKeyEnterEl, 'Enter']
+  ];
+  for (const [button, token] of keyBindings) {
+    if (!button) {
+      continue;
+    }
+    button.addEventListener('click', () => {
+      sendOperatorResponse('key', token, { submit: false });
+    });
+  }
+
+  registerOperatorPttButton(operatorPttJaButtonEl, 'ja');
+  registerOperatorPttButton(operatorPttEnButtonEl, 'en');
+  updateOperatorUi();
+}
+
 async function startXrSession() {
   if (!navigator.xr || typeof navigator.xr.requestSession !== 'function') {
     setMetricValue(renderModeEl, 'xr-api-missing', 'warn');
@@ -1436,6 +2336,7 @@ function tick(nowMs) {
 let resizeObserver;
 
 async function bootstrap() {
+  await loadOperatorUiConfig();
   setMetricValue(renderModeEl, 'monitor', 'default');
   setTtsStatus('starting', 'default');
   setTtsPhase('-', 'default');
@@ -1445,6 +2346,7 @@ async function bootstrap() {
   installGestureShortcuts();
   installAudioUnlockHooks();
   installAudioReplayButton();
+  installOperatorControls();
 
   lgApplyButton.addEventListener('click', () => {
     writeLookingGlassEnabled(lgEnabledInput.checked);
@@ -1491,6 +2393,7 @@ window.addEventListener('beforeunload', () => {
     socket.close();
   }
 
+  releaseOperatorMicCapture();
   stopActiveBrowserAudio();
   renderer.setAnimationLoop(null);
   renderer.dispose();

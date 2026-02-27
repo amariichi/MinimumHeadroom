@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 tts-worker/.venv/
+asr-worker/.venv/
 
 # Local tool configs and caches
 .codex_/
