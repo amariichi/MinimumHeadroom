@@ -51,6 +51,17 @@ function waitForMessage(socket, timeoutMs = 2000) {
   });
 }
 
+async function waitForCondition(predicate, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Condition timeout');
+}
+
 test('ws server serves static ui and relays payloads to display clients', async (t) => {
   const currentFile = fileURLToPath(import.meta.url);
   const currentDir = path.dirname(currentFile);
@@ -117,6 +128,62 @@ test('ws server serves static ui and relays payloads to display clients', async 
 
   assert.equal(received.length, 1);
   assert.equal(received[0].session_id, 'relay#test');
+});
+
+test('ws server replays latest replayable payloads to newly connected clients', async (t) => {
+  const received = [];
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    relayPayloads: true,
+    onPayload(payload) {
+      received.push(payload);
+    },
+    log: { info: () => {}, error: () => {} }
+  });
+
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const sender = new WebSocket(server.url);
+  let lateViewer = null;
+
+  t.after(() => {
+    try {
+      sender.close();
+    } catch {
+      // no-op
+    }
+
+    try {
+      lateViewer?.close();
+    } catch {
+      // no-op
+    }
+  });
+
+  await waitForOpen(sender);
+
+  const payload = {
+    v: 1,
+    type: 'operator_terminal_snapshot',
+    session_id: 'replay#test',
+    ts: Date.now(),
+    lines: ['hello']
+  };
+
+  sender.send(JSON.stringify(payload));
+  await waitForCondition(() => received.length === 1);
+
+  lateViewer = new WebSocket(server.url);
+  await waitForOpen(lateViewer);
+  const replayed = await waitForMessage(lateViewer);
+
+  assert.equal(replayed.type, 'operator_terminal_snapshot');
+  assert.equal(replayed.session_id, 'replay#test');
+  assert.deepEqual(replayed.lines, ['hello']);
 });
 
 test('ws server allows custom HTTP API route handling', async (t) => {
