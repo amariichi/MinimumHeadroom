@@ -22,7 +22,7 @@ Start Codex + operator stack in tmux with one command.
 Options:
   --session <name>          tmux session name (default: agent)
   --window <name>           base window name (default: operator)
-  --agent-cmd <command>     command to run in agent pane (default: codex)
+  --agent-cmd <command>     command to run in agent pane (default: codex; use 'codex --cd /path/to/project' for another working directory)
   --stack-cmd <command>     stack launcher command (default: ./scripts/run-operator-stack.sh)
   --ui-mode <auto|pc|mobile>
                             FACE_UI_MODE override for stack launch
@@ -35,6 +35,7 @@ Options:
 Examples:
   ./scripts/run-operator-once.sh
   ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
+  ./scripts/run-operator-once.sh --agent-cmd 'codex --cd /path/to/your/project'
   ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
 EOF
 }
