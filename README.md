@@ -208,7 +208,7 @@ This script automatically:
 - creates or reuses tmux session `agent` (override with `--session`)
 - creates a dedicated window `operator` (auto-suffixed if name exists; override with `--window`)
 - splits two panes in that window:
-  - pane 0: your agent command (default `codex`, override `--agent-cmd`)
+  - pane 0: your agent command (default `codex`, override `--agent-cmd`; use `codex --cd /path/to/project` to start in another working directory)
   - pane 1: integrated operator stack (default `./scripts/run-operator-stack.sh`, override `--stack-cmd`)
 - resolves the real agent pane id and injects it as `MH_BRIDGE_TMUX_PANE` for the stack
 
@@ -217,6 +217,9 @@ Common examples:
 ```bash
 # resume existing Codex conversation
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
+
+# start Codex in another project directory
+./scripts/run-operator-once.sh --agent-cmd 'codex --cd /path/to/your/project'
 
 # custom tmux names + mobile browser audio
 ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
@@ -814,7 +817,7 @@ sequenceDiagram
 - tmux セッション `agent` を作成または再利用（`--session` で変更可）
 - 専用ウィンドウ `operator` を作成（同名があれば `operator-1` のように自動採番、`--window` で変更可）
 - 2ペインへ分割:
-  - 0番ペイン: エージェント起動コマンド（既定 `codex`、`--agent-cmd` で変更）
+  - 0番ペイン: エージェント起動コマンド（既定 `codex`、`--agent-cmd` で変更。別ディレクトリで始めるなら `codex --cd /path/to/project` を指定）
   - 1番ペイン: 統合スタック起動（既定 `./scripts/run-operator-stack.sh`、`--stack-cmd` で変更）
 - 実際のエージェントペインIDを解決し、`MH_BRIDGE_TMUX_PANE` として統合スタックへ自動注入
 
@@ -823,6 +826,9 @@ sequenceDiagram
 ```bash
 # 直前セッションを再開
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
+
+# 別プロジェクトを作業ディレクトリにして起動
+./scripts/run-operator-once.sh --agent-cmd 'codex --cd /path/to/your/project'
 
 # tmux名を変更 + モバイル向けブラウザ音声
 ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
