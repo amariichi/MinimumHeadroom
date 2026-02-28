@@ -203,6 +203,52 @@ export async function startFaceWebSocketServer(options = {}) {
   const log = toLogger(options.log ?? console);
 
   const sockets = new Set();
+  const replayablePayloads = new Map();
+
+  function replayCacheKey(payload) {
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    const sessionId =
+      typeof payload.session_id === 'string' && payload.session_id.trim() !== ''
+        ? payload.session_id.trim()
+        : '-';
+
+    switch (payload.type) {
+      case 'operator_state':
+      case 'operator_terminal_snapshot':
+      case 'operator_prompt':
+      case 'operator_ack':
+      case 'tts_state':
+        return `${payload.type}:${sessionId}`;
+      default:
+        return null;
+    }
+  }
+
+  function rememberReplayablePayload(payload) {
+    const key = replayCacheKey(payload);
+    if (!key) {
+      return;
+    }
+    replayablePayloads.set(key, payload);
+  }
+
+  function sendPayloadToSocket(socket, payload) {
+    try {
+      safeSocketWrite(socket, encodeServerFrame(0x1, JSON.stringify(payload)));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function replayCachedPayloads(socket) {
+    for (const payload of replayablePayloads.values()) {
+      sendPayloadToSocket(socket, payload);
+    }
+  }
 
   function broadcastText(text, excludeSocket = null) {
     const frame = encodeServerFrame(0x1, text);
@@ -216,6 +262,7 @@ export async function startFaceWebSocketServer(options = {}) {
 
   function broadcastPayload(payload, excludeSocket = null) {
     try {
+      rememberReplayablePayload(payload);
       const text = JSON.stringify(payload);
       broadcastText(text, excludeSocket);
       return true;
@@ -275,6 +322,7 @@ export async function startFaceWebSocketServer(options = {}) {
     );
 
     sockets.add(socket);
+    replayCachedPayloads(socket);
     const state = { buffer: Buffer.alloc(0) };
 
     socket.on('data', (chunk) => {

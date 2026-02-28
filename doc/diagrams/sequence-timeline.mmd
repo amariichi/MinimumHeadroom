@@ -1,0 +1,58 @@
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant TS as Tailscale (optional)
+  participant FE as Frontend UI
+  participant FA as face-app (:8765, /ws, /api/operator/asr)
+  participant ASR as asr-worker (Parakeet)
+  participant BR as operator-bridge
+  participant TM as tmux (Codex pane)
+  participant CX as GPT-5.3 Codex
+  participant MCP as mcp-server
+  participant TTS as tts-worker (Kokoro)
+
+  opt Remote access
+    U->>TS: Open Face UI URL
+    TS->>FE: Serve forwarded UI
+  end
+
+  FE->>FA: Connect WebSocket /ws
+  BR->>FA: Connect WebSocket /ws
+
+  alt Input path A: direct terminal prompt
+    U->>TM: Type prompt
+    TM->>CX: Prompt arrives
+  else Input path B: frontend PTT
+    U->>FE: Hold PTT JA/EN
+    FE->>FA: POST /api/operator/asr?lang=ja|en (audio)
+    FA->>ASR: /v1/asr/ja|en (audioBase64,mimeType)
+    ASR-->>FA: Transcript JSON
+    FA-->>FE: Transcript response
+    U->>FE: Tap Send
+    FE->>FA: operator_response{text}
+    FA-->>BR: Relay payload
+    BR->>TM: tmux send-keys(text + Enter)
+    TM->>CX: Prompt arrives
+  else Input path C: frontend text
+    U->>FE: Enter text + Send Text
+    FE->>FA: operator_response{text}
+    FA-->>BR: Relay payload
+    BR->>TM: tmux send-keys(text + Enter)
+    TM->>CX: Prompt arrives
+  end
+
+  loop During work
+    CX-->>TM: Progress/result logs
+    BR->>TM: capture-pane -e (500ms)
+    BR-->>FA: operator_terminal_snapshot
+    FA-->>FE: Terminal mirror update
+  end
+
+  CX->>MCP: face_event / face_say / face_ping
+  MCP->>FA: Forward WebSocket JSON
+  FA-->>FE: event/say/state payloads
+
+  FA->>TTS: TTS request
+  TTS-->>FA: tts_audio / tts_mouth / say_result
+  FA-->>FE: Realtime status + audio
+  FE-->>U: Voice, facial state, and status updates

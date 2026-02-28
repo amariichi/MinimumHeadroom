@@ -1,5 +1,5 @@
 [project]
-name = "english-trainer-asr-worker"
+name = "asr-worker"
 version = "0.2.0"
 description = "Local ASR worker for english-trainer (Parakeet EN/JA routing)"
 readme = "README.md"

@@ -1,0 +1,41 @@
+flowchart LR
+  U[User]
+  TMUX["tmux Terminal\nCodex pane"]
+  C[GPT-5.3 Codex]
+  MCP["MCP Server\nface_event / face_say / face_ping"]
+  WS["face-app\nWebSocket + HTTP :8765"]
+  FE["Frontend UI\nBrowser"]
+  BR[operator-bridge]
+  ASRP[/POST /api/operator/asr/]
+  ASR["asr-worker\nParakeet ASR\nJA/EN"]
+  TTS["tts-worker\nKokoro TTS"]
+  TS[Tailscale VPN / serve]
+
+  U -- Direct prompt --> TMUX
+  U -- PTT recording --> FE
+  U -- Text input --> FE
+
+  FE -- Audio binary --> ASRP
+  ASRP -- JSON (audioBase64,mimeType,lang) --> ASR
+  ASR -- JSON transcript --> ASRP
+  ASRP -- Transcript --> FE
+
+  FE -- operator_response JSON --> WS
+  WS -- relay --> BR
+  BR -- tmux send-keys --> TMUX
+  TMUX --> C
+  C -- Work logs / results --> TMUX
+
+  BR -- capture-pane (500ms, change-only) --> BR
+  BR -- operator_terminal_snapshot --> WS
+  WS --> FE
+
+  C -- stdio tool calls --> MCP
+  MCP -- WebSocket JSON --> WS
+  WS --> FE
+
+  WS -- say payload --> TTS
+  TTS -- audio + tts state --> FE
+
+  FE <-- HTTPS/WS --> TS
+  TS <---> WS

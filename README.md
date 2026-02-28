@@ -54,6 +54,8 @@ A face and operator companion app for coding agents.
 
 ## System Flow Diagrams
 
+Static exports: [High-Level Flow PNG](doc/diagrams/high-level-flow.png), [Sequence Timeline PNG](doc/diagrams/sequence-timeline.png), [High-Level Flow SVG](doc/diagrams/high-level-flow.svg), [Sequence Timeline SVG](doc/diagrams/sequence-timeline.svg)
+
 ### High-Level Flow
 
 ```mermaid
@@ -662,6 +664,8 @@ npm run asr-worker:smoke
   - 出力先切替（`local`, `browser`, `both`）
 
 ## システムフロー図
+
+静的エクスポート: [High-Level Flow PNG](doc/diagrams/high-level-flow.png), [Sequence Timeline PNG](doc/diagrams/sequence-timeline.png), [High-Level Flow SVG](doc/diagrams/high-level-flow.svg), [Sequence Timeline SVG](doc/diagrams/sequence-timeline.svg)
 
 ### ハイレベルフロー
 
