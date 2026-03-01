@@ -48,11 +48,6 @@ const operatorChoiceButtonsEl = document.getElementById('operator-choice-buttons
 const operatorApprovalMetaEl = document.getElementById('operator-approval-meta');
 const operatorPttJaButtonEl = document.getElementById('operator-ptt-ja');
 const operatorPttEnButtonEl = document.getElementById('operator-ptt-en');
-const operatorTranscriptCardEl = document.getElementById('operator-transcript-card');
-const operatorTranscriptTextEl = document.getElementById('operator-transcript-text');
-const operatorTranscriptSendButtonEl = document.getElementById('operator-transcript-send');
-const operatorTranscriptRetryButtonEl = document.getElementById('operator-transcript-retry');
-const operatorTranscriptCancelButtonEl = document.getElementById('operator-transcript-cancel');
 const operatorTextCardEl = document.getElementById('operator-text-card');
 const operatorTextInputEl = document.getElementById('operator-text-input');
 const operatorTextSendButtonEl = document.getElementById('operator-text-send');
@@ -421,7 +416,6 @@ const dragState = {
 };
 let operatorUiState = createInitialOperatorUiState();
 let operatorActivePrompt = null;
-let operatorTranscriptDraft = null;
 let operatorTerminalSnapshotLines = [];
 let operatorMirrorAutoFollow = true;
 let operatorMirrorInitialScrollDone = false;
@@ -734,16 +728,30 @@ function renderOperatorChoices(payload) {
   }
 }
 
-function setOperatorTranscriptDraft(value, language = 'en') {
-  if (typeof value !== 'string' || value.trim() === '') {
-    operatorTranscriptDraft = null;
-  } else {
-    operatorTranscriptDraft = {
-      text: value.trim(),
-      language
-    };
+function resolveOperatorAppendSeparator(currentText, language = 'en') {
+  if (currentText === '' || /\s$/.test(currentText)) {
+    return '';
   }
-  updateOperatorUi();
+  if (language === 'ja') {
+    return /[A-Za-z0-9]$/.test(currentText) ? ' ' : '';
+  }
+  return ' ';
+}
+
+function appendOperatorTextInput(value, language = 'en') {
+  if (!operatorTextInputEl || typeof value !== 'string') {
+    return false;
+  }
+  const text = value.trim();
+  if (text === '') {
+    return false;
+  }
+  const currentText = operatorTextInputEl.value;
+  const separator = resolveOperatorAppendSeparator(currentText, language);
+  operatorTextInputEl.value = `${currentText}${separator}${text}`;
+  operatorTextInputEl.scrollLeft = operatorTextInputEl.scrollWidth;
+  setOperatorStatusLine(`asr appended (${language})`, 'ok');
+  return true;
 }
 
 function submitOperatorTextInput() {
@@ -762,7 +770,7 @@ function submitOperatorTextInput() {
   }
 }
 
-function cancelOperatorTextInput() {
+function hideOperatorKeyboard(updateStatus = true) {
   if (!operatorTextInputEl) {
     return;
   }
@@ -770,7 +778,9 @@ function cancelOperatorTextInput() {
   window.setTimeout(() => {
     operatorTextInputEl.blur();
   }, 50);
-  setOperatorStatusLine('text input canceled', 'default');
+  if (updateStatus) {
+    setOperatorStatusLine('keyboard hidden', 'default');
+  }
 }
 
 function applyAnsiRunStyle(element, run) {
@@ -939,14 +949,6 @@ function updateOperatorUi() {
   if (operatorPttEnButtonEl) {
     operatorPttEnButtonEl.classList.toggle('hidden', !showPtt);
   }
-  if (operatorTranscriptCardEl) {
-    operatorTranscriptCardEl.classList.toggle('hidden', !showPtt || !operatorTranscriptDraft);
-  }
-  if (operatorTranscriptTextEl) {
-    operatorTranscriptTextEl.textContent = operatorTranscriptDraft
-      ? `[${operatorTranscriptDraft.language}] ${operatorTranscriptDraft.text}`
-      : '';
-  }
   if (operatorTextCardEl) {
     operatorTextCardEl.classList.toggle('hidden', false);
   }
@@ -960,7 +962,8 @@ function updateOperatorUi() {
     }
   }
 
-  if (!awaiting && !operatorTranscriptDraft) {
+  const hasTextDraft = operatorTextInputEl ? operatorTextInputEl.value.trim() !== '' : false;
+  if (!awaiting && !hasTextDraft) {
     if (flags.showRestart) {
       setOperatorStatusLine('recovery', 'warn');
     } else {
@@ -977,7 +980,6 @@ function handleOperatorPrompt(payload) {
   }
 
   operatorActivePrompt = payload;
-  operatorTranscriptDraft = null;
   renderOperatorChoices(payload);
   dispatchOperatorUiAction({
     type: 'prompt_received',
@@ -1013,7 +1015,6 @@ function handleOperatorAck(payload) {
 
   if (ok && stage === 'sent_to_tmux') {
     operatorActivePrompt = null;
-    setOperatorTranscriptDraft(null);
   }
 }
 
@@ -1033,7 +1034,6 @@ function handleOperatorStatePayload(payload) {
 
   if (payload.awaiting === false && !payload.request_id) {
     operatorActivePrompt = null;
-    setOperatorTranscriptDraft(null);
   }
 
   if (payload.bridge_online === false) {
@@ -1435,6 +1435,7 @@ async function startOperatorRecording(language) {
   }
 
   try {
+    hideOperatorKeyboard(false);
     await unlockPlaybackAudio();
     const recorder = await ensureOperatorMediaRecorder();
     operatorMicState.language = language === 'ja' ? 'ja' : 'en';
@@ -1522,8 +1523,7 @@ async function stopOperatorRecordingAndTranscribe() {
     }
 
     const result = await requestOperatorAsrTranscript(blob, blob.type || recorder.mimeType || 'audio/webm', operatorMicState.language);
-    setOperatorTranscriptDraft(result.text, result.language);
-    setOperatorStatusLine(`asr ready (${result.language})`, 'ok');
+    appendOperatorTextInput(result.text, result.language);
   } catch (error) {
     setOperatorStatusLine(`asr error: ${error.message}`, 'warn');
   } finally {
@@ -2125,7 +2125,7 @@ function installOperatorControls() {
 
   if (operatorCloseButtonEl) {
     operatorCloseButtonEl.addEventListener('click', () => {
-      cancelOperatorTextInput();
+      hideOperatorKeyboard();
       dispatchOperatorUiAction({ type: 'panel_close' });
     });
   }
@@ -2140,13 +2140,13 @@ function installOperatorControls() {
 
   if (operatorEscButtonEl) {
     operatorEscButtonEl.addEventListener('click', () => {
-      cancelOperatorTextInput();
+      hideOperatorKeyboard();
       sendOperatorResponse('key', 'Esc', { requestId: null, submit: false });
     });
   }
   if (operatorEscInlineButtonEl) {
     operatorEscInlineButtonEl.addEventListener('click', () => {
-      cancelOperatorTextInput();
+      hideOperatorKeyboard();
       sendOperatorResponse('key', 'Esc', { requestId: null, submit: false });
     });
   }
@@ -2158,32 +2158,6 @@ function installOperatorControls() {
   }
   if (operatorMirrorEl) {
     operatorMirrorEl.addEventListener('scroll', handleOperatorMirrorScroll, { passive: true });
-  }
-
-  if (operatorTranscriptSendButtonEl) {
-    operatorTranscriptSendButtonEl.addEventListener('click', () => {
-      if (!operatorTranscriptDraft) {
-        return;
-      }
-      const sent = sendOperatorResponse('text', operatorTranscriptDraft.text, { submit: true });
-      if (sent) {
-        setOperatorTranscriptDraft(null);
-      }
-    });
-  }
-
-  if (operatorTranscriptRetryButtonEl) {
-    operatorTranscriptRetryButtonEl.addEventListener('click', () => {
-      setOperatorTranscriptDraft(null);
-      setOperatorStatusLine('hold PTT to retry', 'default');
-    });
-  }
-
-  if (operatorTranscriptCancelButtonEl) {
-    operatorTranscriptCancelButtonEl.addEventListener('click', () => {
-      setOperatorTranscriptDraft(null);
-      setOperatorStatusLine('transcript canceled', 'default');
-    });
   }
 
   if (operatorTextSendButtonEl) {
@@ -2202,7 +2176,7 @@ function installOperatorControls() {
   }
   if (operatorTextCancelButtonEl) {
     operatorTextCancelButtonEl.addEventListener('click', () => {
-      cancelOperatorTextInput();
+      hideOperatorKeyboard();
     });
   }
   if (operatorTextInputEl) {
@@ -2210,7 +2184,7 @@ function installOperatorControls() {
       if (event.key !== 'Enter') {
         if (event.key === 'Escape') {
           event.preventDefault();
-          cancelOperatorTextInput();
+          hideOperatorKeyboard();
         }
         return;
       }
