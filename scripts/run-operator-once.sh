@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CALLER_DIR="$(pwd)"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
@@ -22,7 +23,7 @@ Start Codex + operator stack in tmux with one command.
 Options:
   --session <name>          tmux session name (default: agent)
   --window <name>           base window name (default: operator)
-  --agent-cmd <command>     command to run in agent pane (default: codex; use 'codex --cd /path/to/project' for another working directory)
+  --agent-cmd <command>     command to run in agent pane (default: codex; starts in the shell directory where this script was invoked)
   --stack-cmd <command>     stack launcher command (default: ./scripts/run-operator-stack.sh)
   --ui-mode <auto|pc|mobile>
                             FACE_UI_MODE override for stack launch
@@ -35,7 +36,7 @@ Options:
 Examples:
   ./scripts/run-operator-once.sh
   ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
-  ./scripts/run-operator-once.sh --agent-cmd 'codex --cd /path/to/your/project'
+  ./scripts/run-operator-once.sh --agent-cmd 'bash -l'
   ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
 EOF
 }
@@ -155,6 +156,8 @@ stack_pane="$(tmux display-message -p -t "${SESSION_NAME}:${window_name}.1" '#{p
 tmux select-layout -t "${SESSION_NAME}:${window_name}" even-horizontal >/dev/null 2>&1 || true
 
 # Launch agent command in the first pane.
+printf -v quoted_agent_cwd '%q' "$CALLER_DIR"
+tmux send-keys -t "$agent_pane" "cd $quoted_agent_cwd" C-m
 tmux send-keys -t "$agent_pane" "$AGENT_CMD" C-m
 
 # Launch operator stack in the second pane with resolved pane id.
@@ -183,7 +186,7 @@ stack_launch+="$quoted_stack_cmd"
 tmux send-keys -t "$stack_pane" "$stack_launch" C-m
 
 echo "[run-operator-once] session=${SESSION_NAME} window=${window_name}"
-echo "[run-operator-once] agent pane=${agent_pane} command=${AGENT_CMD}"
+echo "[run-operator-once] agent pane=${agent_pane} cwd=${CALLER_DIR} command=${AGENT_CMD}"
 echo "[run-operator-once] stack pane=${stack_pane} command=${STACK_CMD}"
 echo "[run-operator-once] MH_BRIDGE_TMUX_PANE=${agent_pane}"
 

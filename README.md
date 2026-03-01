@@ -178,7 +178,12 @@ sequenceDiagram
 ## Quick Start
 
 Choose one startup path depending on your goal.
-Before starting, configure MCP server settings for your coding agent, set up the agent-specific `AGENTS.md`, and reflect `doc/examples/AGENT_RULES.md` in the agent instructions.
+Before starting, configure MCP server settings for your coding agent (see [MCP Client Setup](#mcp-client-setup)), set up the agent-specific `AGENTS.md`, and reflect `doc/examples/AGENT_RULES.md` in the agent instructions.
+If you plan to use the mobile UI remotely, it is also convenient to start Tailscale Serve in advance:
+
+```bash
+tailscale serve --bg 8765
+```
 
 ### Path A: Face + MCP (minimal)
 
@@ -210,9 +215,12 @@ This script automatically:
 - creates or reuses tmux session `agent` (override with `--session`)
 - creates a dedicated window `operator` (auto-suffixed if name exists; override with `--window`)
 - splits two panes in that window:
-  - pane 0: your agent command (default `codex`, override `--agent-cmd`; use `codex --cd /path/to/project` to start in another working directory)
+  - pane 0: your agent command (default `codex`, override `--agent-cmd`; starts in the shell directory where you invoked this script, even if you call it via an absolute path)
   - pane 1: integrated operator stack (default `./scripts/run-operator-stack.sh`, override `--stack-cmd`)
 - resolves the real agent pane id and injects it as `MH_BRIDGE_TMUX_PANE` for the stack
+
+If you mainly use a different agent, you can also change the default launcher by editing `AGENT_CMD="codex"` in `scripts/run-operator-once.sh`.
+Using `--agent-cmd 'bash -l'` starts a login shell in the target project directory, so you can inspect the repo first and then launch any agent manually.
 
 Common examples:
 
@@ -220,8 +228,8 @@ Common examples:
 # resume existing Codex conversation
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
 
-# start Codex in another project directory
-./scripts/run-operator-once.sh --agent-cmd 'codex --cd /path/to/your/project'
+# start with a shell in the current project, then launch any agent manually
+./scripts/run-operator-once.sh --agent-cmd 'bash -l'
 
 # custom tmux names + mobile browser audio
 ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
@@ -789,7 +797,12 @@ sequenceDiagram
 ## クイックスタート
 
 目的に合わせて起動パスを選んでください。
-開始前に、利用するコーディングエージェントで MCP サーバー設定を行い、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。
+開始前に、利用するコーディングエージェントで MCP サーバー設定を行い（[MCPクライアント設定](#mcpクライアント設定) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。
+モバイルUIをリモート利用する場合は、先に Tailscale Serve を起動しておくと便利です。
+
+```bash
+tailscale serve --bg 8765
+```
 
 ### Path A: Face + MCP（最小構成）
 
@@ -821,9 +834,12 @@ sequenceDiagram
 - tmux セッション `agent` を作成または再利用（`--session` で変更可）
 - 専用ウィンドウ `operator` を作成（同名があれば `operator-1` のように自動採番、`--window` で変更可）
 - 2ペインへ分割:
-  - 0番ペイン: エージェント起動コマンド（既定 `codex`、`--agent-cmd` で変更。別ディレクトリで始めるなら `codex --cd /path/to/project` を指定）
+  - 0番ペイン: エージェント起動コマンド（既定 `codex`、`--agent-cmd` で変更。絶対パスでこのスクリプトを呼んでも、呼び出したシェルのカレントディレクトリで開始）
   - 1番ペイン: 統合スタック起動（既定 `./scripts/run-operator-stack.sh`、`--stack-cmd` で変更）
 - 実際のエージェントペインIDを解決し、`MH_BRIDGE_TMUX_PANE` として統合スタックへ自動注入
+
+別のエージェントを常用するなら、`scripts/run-operator-once.sh` 内の `AGENT_CMD="codex"` を変更して既定値を差し替えられます。
+`--agent-cmd 'bash -l'` を使うと、対象プロジェクトでログインシェルに戻るので、内容を確認してから好きなエージェントを手動で起動できます。
 
 よく使う例:
 
@@ -831,8 +847,8 @@ sequenceDiagram
 # 直前セッションを再開
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
 
-# 別プロジェクトを作業ディレクトリにして起動
-./scripts/run-operator-once.sh --agent-cmd 'codex --cd /path/to/your/project'
+# 今いるプロジェクトでシェルを開き、好きなエージェントを手動起動
+./scripts/run-operator-once.sh --agent-cmd 'bash -l'
 
 # tmux名を変更 + モバイル向けブラウザ音声
 ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
