@@ -33,8 +33,8 @@ A face and operator companion app for coding agents.
 
 - Operator input pipeline:
   - terminal direct prompt, frontend PTT (JA/EN), and frontend text fallback
-  - browser audio -> ASR proxy -> Parakeet ASR -> transcript confirm -> tmux send
-  - key controls (`Esc`, `↑`, `ENTER`, `↓`) and restart/recovery support
+  - browser audio -> ASR proxy -> Parakeet ASR -> append to text fallback -> tmux send
+  - key controls (`Esc`, `↑`, `Select`, `↓`) and restart/recovery support
 - Terminal mirror:
   - read-only tmux tail snapshots
   - 500ms publish interval (change-only)
@@ -419,21 +419,18 @@ You can override with environment variables:
 
 - `Esc` button is always visible and sends Escape key semantics to tmux.
 - `Restart` is shown only for recovery/offline conditions.
-- Arrow key controls are always available as on-screen buttons: `↑`, `ENTER`, `↓`.
+- Arrow key controls are always available as on-screen buttons: `↑`, `Select`, `↓`.
 - The operator panel is intentionally always open in current mobile-focused behavior.
 - `operator-handle` / `close panel` controls are currently hidden in UI.
 - UI mode behavior:
   - `pc`: debug panels remain visible and operator panel is available in the same page.
   - `mobile`: near full-screen translucent operator panel, terminal mirror always visible.
-- `PTT JA` / `PTT EN` records audio, sends backend ASR, then shows transcript confirm actions:
-  - `Send` (submit to tmux)
-  - `Retry` (discard transcript and record again)
-  - `Cancel` (discard transcript only; awaiting request remains active)
+- `PTT JA` / `PTT EN` records audio, sends backend ASR, then appends the transcript to the text fallback input.
 - Text fallback input is always available in operator panel and can be used even when no explicit `operator_prompt` is active.
 - Text fallback row actions:
   - `Send Text`: submit current text input to tmux/Codex.
   - `Clear`: clear only the text field contents.
-  - `Cancel`: blur the text box (mobile keyboard close) when input focus was opened by mistake.
+  - `Hide KB`: blur the text box (mobile keyboard close) without clearing the current draft.
 - `Esc` also blurs text input focus before sending Escape key semantics.
 - Terminal mirror is read-only.
 
@@ -652,8 +649,8 @@ npm run asr-worker:smoke
 
 - オペレーター入力パイプライン:
   - 端末直接入力 / フロントエンドPTT（JA/EN）/ フロントエンドテキスト入力
-  - ブラウザ音声 -> ASRプロキシ -> Parakeet ASR -> 文字起こし確認 -> tmux送信
-  - キー操作（`Esc`, `↑`, `ENTER`, `↓`）と復旧用 `Restart`
+  - ブラウザ音声 -> ASRプロキシ -> Parakeet ASR -> テキスト入力へ追記 -> tmux送信
+  - キー操作（`Esc`, `↑`, `Select`, `↓`）と復旧用 `Restart`
 - ターミナルミラー:
   - tmux末尾出力の読み取り専用スナップショット
   - 500ms 発行（変更があった場合のみ）
@@ -1034,21 +1031,18 @@ Parakeet既定モデル:
 
 - `Esc` ボタンは常時表示で、tmuxへ Escape キーを送信します。
 - `Restart` は復旧/オフライン時のみ表示されます。
-- カーソルキーは常時表示（`↑`, `ENTER`, `↓`）。
+- カーソルキーは常時表示（`↑`, `Select`, `↓`）。
 - 現在のモバイル重視挙動では、operator panel は常時オープンを前提にしています。
 - `operator-handle` / `close panel` は現在UIで非表示です。
 - UIモード:
   - `pc`: デバッグパネルを表示したまま operator panel を利用
   - `mobile`: 半透明のほぼ全画面 operator panel + 常時 terminal mirror
-- `PTT JA` / `PTT EN` は録音 -> ASR -> 文字起こし確認へ進みます:
-  - `Send`（tmuxへ送信）
-  - `Retry`（文字起こし破棄して再録音）
-  - `Cancel`（文字起こしのみ破棄）
+- `PTT JA` / `PTT EN` は録音 -> ASR 後、文字起こし結果をテキストフォールバック入力欄へ追記します。
 - テキストフォールバック入力は、`operator_prompt` が無い状態でも常時利用可能です。
 - テキスト行の操作:
   - `Send Text`（現在文字列を tmux/Codex へ送信）
   - `Clear`（入力欄クリア）
-  - `Cancel`（入力欄を blur してキーボードを閉じる）
+  - `Hide KB`（入力内容を保持したまま、入力欄を blur してキーボードを閉じる）
 - `Esc` は送信前に入力フォーカスを外します。
 - terminal mirror は読み取り専用です。
 
