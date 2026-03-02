@@ -516,7 +516,7 @@ If you already started `./scripts/run-vllm-voxtral.sh` in another terminal, poin
 MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_OPERATOR_REALTIME_ASR_WS_URL=ws://127.0.0.1:8090/v1/realtime MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
 ```
 
-For very short utterances (currently under about `0.25s`), the UI now skips batch fallback and shows a `speech too short to transcribe` warning instead of surfacing an ASR error. Longer realtime-empty utterances still show an explicit warning, and if batch ASR is still available they automatically retry once through the existing `/api/operator/asr` path.
+For very short utterances (currently under about `0.25s`), the UI now skips batch fallback and shows a `speech too short to transcribe` warning instead of surfacing an ASR error. Longer realtime-empty utterances still show an explicit warning, and if batch ASR is still available they automatically retry once through the existing `/api/operator/asr` path. The same batch retry now also runs when the final realtime transcript looks clearly off-script for the selected button (for example Hangul, Cyrillic, or other obviously wrong-script output in `PTT JA` / `PTT EN`).
 
 PTT recording also auto-stops at about `30s` per utterance, then finalizes that segment. Longer dictation should be spoken in multiple segments.
 
@@ -593,6 +593,8 @@ Experimental realtime ASR (disabled by default):
   - When this is used with the default local ASR target and no explicit `MH_OPERATOR_ASR_ENDPOINT_URL`, `run-operator-stack.sh` also disables the local batch ASR proxy so realtime empty-result fallback does not point at a dead `8091` endpoint.
 
 When realtime mode is enabled, `PTT JA` / `PTT EN` streams PCM16 audio chunks over the existing `face-app` websocket and incremental text appears in the existing text fallback input before release. If realtime mode is disabled, unavailable, or the browser lacks the required audio APIs, the existing batch `MediaRecorder -> /api/operator/asr -> asr-worker` flow remains active.
+
+- `PTT EN` treats accented Latin letters such as `á`, `ó`, `ñ`, and `ü` as Latin text, so they do not trigger suspicious-text fallback by themselves.
 
 ### iOS / Tailscale Runbook
 
@@ -1309,7 +1311,7 @@ Parakeet既定モデル:
 MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_OPERATOR_REALTIME_ASR_WS_URL=ws://127.0.0.1:8090/v1/realtime MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
 ```
 
-ごく短い発話（現在は約 `0.25` 秒未満）では、UI は batch fallback を呼ばず、`speech too short to transcribe` の warning を表示します。Realtime 経路が空文字で終わったより長い発話については、UI は明示的に warning を出し、batch ASR が利用可能なら既存の `/api/operator/asr` 経路へ1回だけ自動フォールバックします。
+ごく短い発話（現在は約 `0.25` 秒未満）では、UI は batch fallback を呼ばず、`speech too short to transcribe` の warning を表示します。Realtime 経路が空文字で終わったより長い発話については、UI は明示的に warning を出し、batch ASR が利用可能なら既存の `/api/operator/asr` 経路へ1回だけ自動フォールバックします。さらに、最終的な realtime 文字起こしが選択したボタンに対して明らかに不自然な文字種（`PTT JA` / `PTT EN` でのハングルやキリルなど）だった場合も、同じ batch 再確認を自動で行います。
 
 PTT 録音は1発話あたり約 `30` 秒で自動終了し、その時点でその区間を確定します。より長い口述は複数区間に分けて話してください。
 
@@ -1386,6 +1388,8 @@ ASR関連環境変数:
   - 既定のローカルASR先のまま `MH_OPERATOR_ASR_ENDPOINT_URL` 未指定でこれを使うと、`run-operator-stack.sh` はローカル batch ASR proxy も自動で無効化し、空振りフォールバックが `8091` を叩かないようにします
 
 Realtime ASR 有効時は、`PTT JA` / `PTT EN` が既存の `face-app` WebSocket へPCM16音声チャンクを送り、ボタンを離す前から既存のテキストフォールバック入力欄へ増分文字起こしを表示します。Realtime ASR が無効・未接続・非対応ブラウザの場合は、従来どおり `MediaRecorder -> /api/operator/asr -> asr-worker` のバッチ経路を使います。
+
+- `PTT EN` では `á`、`ó`、`ñ`、`ü` などのアクセント付きラテン文字もラテン文字として扱うため、それだけで怪しい文字列扱いにはなりません。
 
 ### iOS / Tailscale 運用手順
 

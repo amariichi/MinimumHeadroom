@@ -84,6 +84,7 @@ test('operator ASR proxy converts binary upload to JSON request and routes by la
   const body = JSON.parse(result.body);
   assert.equal(body.ok, true);
   assert.equal(body.text, 'hello');
+  assert.equal(body.confidence, 0.91);
 });
 
 test('operator ASR proxy returns 503 when upstream is not configured', async () => {
