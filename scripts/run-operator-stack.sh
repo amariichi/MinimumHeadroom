@@ -12,7 +12,26 @@ cd "$ROOT_DIR"
 : "${ASR_HOST:=127.0.0.1}"
 : "${ASR_PORT:=8091}"
 : "${MH_OPERATOR_ASR_BASE_URL:=http://${ASR_HOST}:${ASR_PORT}}"
+: "${MH_STACK_SKIP_ASR:=0}"
+: "${MH_OPERATOR_REALTIME_ASR_ENABLED:=0}"
+: "${MH_STACK_START_REALTIME_ASR:=0}"
+: "${REALTIME_ASR_HOST:=127.0.0.1}"
+: "${REALTIME_ASR_PORT:=8090}"
+: "${REALTIME_ASR_PATH:=/v1/realtime}"
+: "${MH_OPERATOR_REALTIME_ASR_WS_URL:=ws://${REALTIME_ASR_HOST}:${REALTIME_ASR_PORT}${REALTIME_ASR_PATH}}"
+: "${MH_OPERATOR_REALTIME_ASR_MODEL:=mistralai/Voxtral-Mini-4B-Realtime-2602}"
 : "${MH_STACK_START_MCP:=0}"
+
+DEFAULT_OPERATOR_ASR_BASE_URL="http://${ASR_HOST}:${ASR_PORT}"
+STACK_OPERATOR_ASR_BASE_URL="$MH_OPERATOR_ASR_BASE_URL"
+
+if [[ "${MH_STACK_START_REALTIME_ASR}" == "1" ]]; then
+  MH_OPERATOR_REALTIME_ASR_ENABLED=1
+fi
+
+if [[ "${MH_STACK_SKIP_ASR}" == "1" && -z "${MH_OPERATOR_ASR_ENDPOINT_URL:-}" && "${MH_OPERATOR_ASR_BASE_URL}" == "${DEFAULT_OPERATOR_ASR_BASE_URL}" ]]; then
+  STACK_OPERATOR_ASR_BASE_URL=""
+fi
 
 if [[ -z "${MH_BRIDGE_TMUX_PANE:-}" && -z "${TMUX_PANE:-}" ]]; then
   cat >&2 <<'EOF'
@@ -50,16 +69,39 @@ start_proc() {
 echo "[run-operator-stack] FACE_WS_URL=${FACE_WS_URL}"
 echo "[run-operator-stack] FACE_AUDIO_TARGET=${FACE_AUDIO_TARGET}"
 echo "[run-operator-stack] FACE_UI_MODE=${FACE_UI_MODE}"
-echo "[run-operator-stack] MH_OPERATOR_ASR_BASE_URL=${MH_OPERATOR_ASR_BASE_URL}"
+echo "[run-operator-stack] MH_OPERATOR_ASR_BASE_URL=${STACK_OPERATOR_ASR_BASE_URL:-<disabled>}"
+echo "[run-operator-stack] MH_STACK_SKIP_ASR=${MH_STACK_SKIP_ASR}"
+echo "[run-operator-stack] MH_OPERATOR_REALTIME_ASR_ENABLED=${MH_OPERATOR_REALTIME_ASR_ENABLED}"
+echo "[run-operator-stack] MH_OPERATOR_REALTIME_ASR_WS_URL=${MH_OPERATOR_REALTIME_ASR_WS_URL}"
+echo "[run-operator-stack] MH_STACK_START_REALTIME_ASR=${MH_STACK_START_REALTIME_ASR}"
 echo "[run-operator-stack] MH_STACK_START_MCP=${MH_STACK_START_MCP}"
 
-start_proc "asr-worker" \
-  env ASR_HOST="$ASR_HOST" ASR_PORT="$ASR_PORT" \
-  ./scripts/run-asr-worker.sh
+if [[ "${MH_STACK_SKIP_ASR}" == "1" ]]; then
+  echo "[run-operator-stack] skipping asr-worker startup (MH_STACK_SKIP_ASR=1)."
+else
+  start_proc "asr-worker" \
+    env ASR_HOST="$ASR_HOST" ASR_PORT="$ASR_PORT" \
+    ./scripts/run-asr-worker.sh
+fi
+
+if [[ "${MH_STACK_START_REALTIME_ASR}" == "1" ]]; then
+  start_proc "realtime-asr" \
+    env REALTIME_ASR_HOST="$REALTIME_ASR_HOST" REALTIME_ASR_PORT="$REALTIME_ASR_PORT" \
+    REALTIME_ASR_MODEL="$MH_OPERATOR_REALTIME_ASR_MODEL" \
+    ./scripts/run-vllm-voxtral.sh
+  if [[ "${MH_STACK_SKIP_ASR}" != "1" ]]; then
+    echo "[run-operator-stack] realtime ASR and asr-worker are both active; set MH_STACK_SKIP_ASR=1 or ASR_DEVICE=cpu if VRAM is tight."
+  fi
+else
+  echo "[run-operator-stack] skipping realtime ASR startup (MH_STACK_START_REALTIME_ASR=0)."
+fi
 
 start_proc "face-app" \
   env FACE_WS_HOST="$FACE_WS_HOST" FACE_WS_PORT="$FACE_WS_PORT" FACE_WS_PATH="$FACE_WS_PATH" \
-  FACE_AUDIO_TARGET="$FACE_AUDIO_TARGET" FACE_UI_MODE="$FACE_UI_MODE" MH_OPERATOR_ASR_BASE_URL="$MH_OPERATOR_ASR_BASE_URL" \
+  FACE_AUDIO_TARGET="$FACE_AUDIO_TARGET" FACE_UI_MODE="$FACE_UI_MODE" MH_OPERATOR_ASR_BASE_URL="$STACK_OPERATOR_ASR_BASE_URL" \
+  MH_OPERATOR_REALTIME_ASR_ENABLED="$MH_OPERATOR_REALTIME_ASR_ENABLED" \
+  MH_OPERATOR_REALTIME_ASR_WS_URL="$MH_OPERATOR_REALTIME_ASR_WS_URL" \
+  MH_OPERATOR_REALTIME_ASR_MODEL="$MH_OPERATOR_REALTIME_ASR_MODEL" \
   ./scripts/run-face-app.sh --audio-target "$FACE_AUDIO_TARGET" --ui-mode "$FACE_UI_MODE"
 
 start_proc "operator-bridge" \

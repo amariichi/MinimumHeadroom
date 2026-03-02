@@ -334,9 +334,13 @@ export async function startFaceWebSocketServer(options = {}) {
           try {
             const payload = JSON.parse(text);
             log.info(`[face-app] received ${JSON.stringify(payload)}`);
-            onPayload(payload);
+            const payloadDirective = onPayload(payload);
+            const allowRelay =
+              !payloadDirective ||
+              typeof payloadDirective !== 'object' ||
+              payloadDirective.relay !== false;
 
-            if (relayPayloads) {
+            if (relayPayloads && allowRelay) {
               broadcastPayload(payload, socket);
             }
           } catch (error) {

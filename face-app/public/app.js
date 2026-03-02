@@ -86,8 +86,11 @@ const DRAG_OFFSET_DECAY_PER_SECOND = 6;
 const DRAG_INTENSITY_DECAY_PER_SECOND = 7.5;
 const DRAG_SPEED_FOR_FULL_INTENSITY_PX_PER_SEC = 780;
 const FACE_ROOT_BASE_Y = 0.56;
-const OPERATOR_ASR_MAX_RECORDING_MS = 15_000;
+const OPERATOR_ASR_MAX_RECORDING_MS = 30_000;
 const OPERATOR_MIN_AUDIO_BLOB_BYTES = 900;
+const OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE = 16_000;
+const OPERATOR_REALTIME_ASR_PROCESSOR_BUFFER_SIZE = 4096;
+const OPERATOR_REALTIME_BATCH_FALLBACK_MIN_SECONDS = 0.25;
 const OPERATOR_UI_MODE_AUTO = 'auto';
 const OPERATOR_UI_MODE_PC = 'pc';
 const OPERATOR_UI_MODE_MOBILE = 'mobile';
@@ -419,6 +422,13 @@ let operatorActivePrompt = null;
 let operatorTerminalSnapshotLines = [];
 let operatorMirrorAutoFollow = true;
 let operatorMirrorInitialScrollDone = false;
+const operatorBatchAsrConfig = {
+  enabled: false
+};
+const operatorRealtimeAsrConfig = {
+  enabled: false,
+  sampleRateHz: OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE
+};
 const operatorMicState = {
   recorder: null,
   stream: null,
@@ -427,7 +437,18 @@ const operatorMicState = {
   pointerArmed: false,
   language: 'en',
   startedAtMs: 0,
-  stopTimer: null
+  stopTimer: null,
+  mode: 'batch',
+  audioContext: null,
+  sourceNode: null,
+  processorNode: null,
+  processorSinkNode: null,
+  realtimeDraftActive: false,
+  realtimeBaseText: '',
+  realtimeSeparator: '',
+  realtimeText: '',
+  realtimePcmChunks: [],
+  realtimePcmBytes: 0
 };
 let operatorConfiguredUiMode = OPERATOR_UI_MODE_AUTO;
 let operatorEffectiveUiMode = OPERATOR_UI_MODE_PC;
@@ -606,6 +627,11 @@ async function loadOperatorUiConfig() {
       if (response.ok) {
         const payload = await response.json();
         mode = normalizeOperatorUiMode(payload?.uiMode);
+        operatorBatchAsrConfig.enabled = payload?.batchAsr?.enabled === true;
+        operatorRealtimeAsrConfig.enabled = payload?.realtimeAsr?.enabled === true;
+        operatorRealtimeAsrConfig.sampleRateHz = Number.isFinite(payload?.realtimeAsr?.sampleRateHz)
+          ? Math.max(8_000, Math.floor(payload.realtimeAsr.sampleRateHz))
+          : OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE;
       }
     } catch {
       // Keep auto mode on fetch failures.
@@ -749,9 +775,269 @@ function appendOperatorTextInput(value, language = 'en') {
   const currentText = operatorTextInputEl.value;
   const separator = resolveOperatorAppendSeparator(currentText, language);
   operatorTextInputEl.value = `${currentText}${separator}${text}`;
-  operatorTextInputEl.scrollLeft = operatorTextInputEl.scrollWidth;
+  syncOperatorTextInputHeight();
   setOperatorStatusLine(`asr appended (${language})`, 'ok');
   return true;
+}
+
+function shouldUseOperatorRealtimeAsr() {
+  const AudioContextCtor = window.AudioContext ?? window.webkitAudioContext;
+  return operatorRealtimeAsrConfig.enabled && typeof AudioContextCtor === 'function' && socket?.readyState === WebSocket.OPEN;
+}
+
+function beginOperatorRealtimeDraft(language = 'en') {
+  if (!operatorTextInputEl) {
+    return;
+  }
+  operatorMicState.realtimeDraftActive = true;
+  operatorMicState.realtimeBaseText = operatorTextInputEl.value;
+  operatorMicState.realtimeSeparator = resolveOperatorAppendSeparator(operatorMicState.realtimeBaseText, language);
+  operatorMicState.realtimeText = '';
+}
+
+function renderOperatorRealtimeDraft() {
+  if (!operatorTextInputEl || !operatorMicState.realtimeDraftActive) {
+    return;
+  }
+  operatorTextInputEl.value = `${operatorMicState.realtimeBaseText}${operatorMicState.realtimeSeparator}${operatorMicState.realtimeText}`;
+  syncOperatorTextInputHeight();
+}
+
+function clearOperatorRealtimeDraft(keepRenderedText = true) {
+  if (!keepRenderedText && operatorTextInputEl) {
+    operatorTextInputEl.value = operatorMicState.realtimeBaseText;
+    syncOperatorTextInputHeight();
+  }
+  operatorMicState.realtimeDraftActive = false;
+  operatorMicState.realtimeBaseText = '';
+  operatorMicState.realtimeSeparator = '';
+  operatorMicState.realtimeText = '';
+}
+
+function cancelPendingOperatorRealtimeAsr(keepRenderedText = true) {
+  if (!operatorMicState.realtimeDraftActive) {
+    return false;
+  }
+  sendOperatorRealtimeAsrPayload('operator_realtime_asr_cancel', {
+    language: operatorMicState.language
+  });
+  clearOperatorRealtimeDraft(keepRenderedText);
+  return true;
+}
+
+function syncOperatorTextInputHeight() {
+  if (!operatorTextInputEl) {
+    return;
+  }
+
+  operatorTextInputEl.style.height = 'auto';
+
+  const computed = window.getComputedStyle(operatorTextInputEl);
+  const lineHeight = Number.parseFloat(computed.lineHeight) || 0;
+  const paddingHeight =
+    (Number.parseFloat(computed.paddingTop) || 0) +
+    (Number.parseFloat(computed.paddingBottom) || 0);
+  const borderHeight =
+    (Number.parseFloat(computed.borderTopWidth) || 0) +
+    (Number.parseFloat(computed.borderBottomWidth) || 0);
+  const minHeight = Math.max(34, lineHeight > 0 ? lineHeight + paddingHeight + borderHeight : 34);
+  const maxHeight =
+    lineHeight > 0
+      ? lineHeight * 3 + paddingHeight + borderHeight
+      : Math.max(minHeight, operatorTextInputEl.scrollHeight);
+  const nextHeight = Math.max(minHeight, Math.min(operatorTextInputEl.scrollHeight, maxHeight));
+
+  operatorTextInputEl.style.height = `${Math.ceil(nextHeight)}px`;
+  operatorTextInputEl.style.overflowY = operatorTextInputEl.scrollHeight > maxHeight + 1 ? 'auto' : 'hidden';
+}
+
+function clearOperatorRealtimeAudioBuffer() {
+  operatorMicState.realtimePcmChunks = [];
+  operatorMicState.realtimePcmBytes = 0;
+}
+
+function applyOperatorRealtimeDelta(value) {
+  if (!operatorMicState.realtimeDraftActive || typeof value !== 'string' || value === '') {
+    return;
+  }
+  operatorMicState.realtimeText += value;
+  renderOperatorRealtimeDraft();
+}
+
+function finalizeOperatorRealtimeDraft(value) {
+  if (!operatorMicState.realtimeDraftActive) {
+    return;
+  }
+  if (typeof value === 'string' && value !== '') {
+    operatorMicState.realtimeText = value;
+    renderOperatorRealtimeDraft();
+  }
+  clearOperatorRealtimeDraft(true);
+}
+
+function encodeBytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function resampleMonoAudio(input, sourceRate, targetRate) {
+  if (sourceRate === targetRate) {
+    return input;
+  }
+  const sampleRateRatio = sourceRate / targetRate;
+  const outputLength = Math.max(1, Math.round(input.length / sampleRateRatio));
+  const output = new Float32Array(outputLength);
+  let sourceIndex = 0;
+  for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
+    const nextSourceIndex = Math.min(input.length, Math.round((outputIndex + 1) * sampleRateRatio));
+    let sum = 0;
+    let count = 0;
+    for (let index = sourceIndex; index < nextSourceIndex; index += 1) {
+      sum += input[index];
+      count += 1;
+    }
+    output[outputIndex] = count > 0 ? sum / count : input[Math.min(sourceIndex, input.length - 1)];
+    sourceIndex = nextSourceIndex;
+  }
+  return output;
+}
+
+function encodeMonoPcm16Bytes(channelData, sourceRate, targetRate) {
+  const resampled = resampleMonoAudio(channelData, sourceRate, targetRate);
+  if (resampled.length < 1) {
+    return null;
+  }
+  const pcmBytes = new Uint8Array(resampled.length * 2);
+  const view = new DataView(pcmBytes.buffer);
+  for (let index = 0; index < resampled.length; index += 1) {
+    const sample = clamp(resampled[index], -1, 1);
+    const scaled = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+    view.setInt16(index * 2, Math.round(scaled), true);
+  }
+  return pcmBytes;
+}
+
+function encodeRealtimeAudioChunk(channelData, sourceRate, targetRate) {
+  const pcmBytes = encodeMonoPcm16Bytes(channelData, sourceRate, targetRate);
+  if (!pcmBytes) {
+    return null;
+  }
+  return {
+    audio: encodeBytesToBase64(pcmBytes),
+    pcmBytes
+  };
+}
+
+function buildWaveBlobFromPcmChunks(chunks, sampleRateHz) {
+  if (!Array.isArray(chunks) || chunks.length === 0) {
+    return null;
+  }
+  const dataLength = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  if (dataLength < 1) {
+    return null;
+  }
+
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  let offset = 44;
+
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  const byteRate = sampleRateHz * 2;
+  view.setUint32(0, 0x52494646, false);
+  view.setUint32(4, 36 + dataLength, true);
+  view.setUint32(8, 0x57415645, false);
+  view.setUint32(12, 0x666d7420, false);
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRateHz, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  view.setUint32(36, 0x64617461, false);
+  view.setUint32(40, dataLength, true);
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+function estimateOperatorRealtimeAudioSeconds(byteLength, sampleRateHz) {
+  if (!Number.isFinite(byteLength) || byteLength <= 0 || !Number.isFinite(sampleRateHz) || sampleRateHz <= 0) {
+    return 0;
+  }
+  return byteLength / (sampleRateHz * 2);
+}
+
+function formatOperatorAsrErrorDetail(detail) {
+  if (typeof detail === 'string' && detail.trim() !== '') {
+    return detail.trim();
+  }
+  if (detail && typeof detail === 'object') {
+    if (typeof detail.detail === 'string' && detail.detail.trim() !== '') {
+      return detail.detail.trim();
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return String(detail);
+    }
+  }
+  return '';
+}
+
+async function attemptOperatorRealtimeBatchFallback(language = 'en') {
+  const audioSeconds = estimateOperatorRealtimeAudioSeconds(
+    operatorMicState.realtimePcmBytes,
+    operatorRealtimeAsrConfig.sampleRateHz
+  );
+  if (audioSeconds > 0 && audioSeconds < OPERATOR_REALTIME_BATCH_FALLBACK_MIN_SECONDS) {
+    clearOperatorRealtimeAudioBuffer();
+    setOperatorStatusLine(`speech too short to transcribe (${language})`, 'warn');
+    return false;
+  }
+
+  const wavBlob = buildWaveBlobFromPcmChunks(operatorMicState.realtimePcmChunks, operatorRealtimeAsrConfig.sampleRateHz);
+  clearOperatorRealtimeAudioBuffer();
+
+  if (!wavBlob) {
+    setOperatorStatusLine(`realtime ASR returned empty text (${language})`, 'warn');
+    return false;
+  }
+
+  if (!operatorBatchAsrConfig.enabled) {
+    setOperatorStatusLine(`realtime ASR returned empty text (${language}); batch fallback unavailable`, 'warn');
+    return false;
+  }
+
+  setOperatorStatusLine(`realtime ASR empty; retrying batch (${language})...`, 'default');
+  try {
+    const transcript = await requestOperatorAsrTranscript(wavBlob, 'audio/wav', language);
+    appendOperatorTextInput(transcript.text, transcript.language);
+    setOperatorStatusLine(`batch fallback ready (${transcript.language})`, 'ok');
+    return true;
+  } catch (error) {
+    setOperatorStatusLine(`realtime ASR empty; batch fallback failed: ${error.message}`, 'warn');
+    return false;
+  }
+}
+
+function sendOperatorRealtimeAsrPayload(type, extra = {}) {
+  return sendSocketPayload({
+    v: 1,
+    type,
+    session_id: resolveOperatorSessionId(),
+    ts: Date.now(),
+    ...extra
+  });
 }
 
 function submitOperatorTextInput() {
@@ -765,7 +1051,10 @@ function submitOperatorTextInput() {
   }
   const sent = sendOperatorResponse('text', text, { submit: true });
   if (sent) {
+    cancelPendingOperatorRealtimeAsr(true);
+    clearOperatorRealtimeAudioBuffer();
     operatorTextInputEl.value = '';
+    syncOperatorTextInputHeight();
     setOperatorStatusLine('text sent', 'ok');
   }
 }
@@ -1353,6 +1642,34 @@ async function playBrowserAudioPayload(payload) {
 }
 
 function releaseOperatorMicCapture() {
+  if (operatorMicState.processorNode) {
+    operatorMicState.processorNode.onaudioprocess = null;
+    try {
+      operatorMicState.processorNode.disconnect();
+    } catch {
+      // Ignore disconnect errors.
+    }
+  }
+  if (operatorMicState.sourceNode) {
+    try {
+      operatorMicState.sourceNode.disconnect();
+    } catch {
+      // Ignore disconnect errors.
+    }
+  }
+  if (operatorMicState.processorSinkNode) {
+    try {
+      operatorMicState.processorSinkNode.disconnect();
+    } catch {
+      // Ignore disconnect errors.
+    }
+  }
+  if (operatorMicState.audioContext) {
+    const audioContext = operatorMicState.audioContext;
+    window.setTimeout(() => {
+      void audioContext.close().catch(() => {});
+    }, 0);
+  }
   if (operatorMicState.recorder && operatorMicState.recorder.state !== 'inactive') {
     try {
       operatorMicState.recorder.stop();
@@ -1370,6 +1687,11 @@ function releaseOperatorMicCapture() {
   operatorMicState.recorder = null;
   operatorMicState.stream = null;
   operatorMicState.chunks = [];
+  operatorMicState.mode = 'batch';
+  operatorMicState.audioContext = null;
+  operatorMicState.sourceNode = null;
+  operatorMicState.processorNode = null;
+  operatorMicState.processorSinkNode = null;
   operatorMicState.recording = false;
   operatorMicState.pointerArmed = false;
 }
@@ -1420,12 +1742,105 @@ async function ensureOperatorMediaRecorder() {
   return recorder;
 }
 
+async function startOperatorRealtimeRecording(language) {
+  const AudioContextCtor = window.AudioContext ?? window.webkitAudioContext;
+  if (typeof AudioContextCtor !== 'function') {
+    return false;
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO_CONSTRAINTS });
+  const audioContext = new AudioContextCtor();
+  await audioContext.resume();
+
+  const sourceNode = audioContext.createMediaStreamSource(stream);
+  const processorNode = audioContext.createScriptProcessor(OPERATOR_REALTIME_ASR_PROCESSOR_BUFFER_SIZE, 1, 1);
+  const processorSinkNode = audioContext.createGain();
+  processorSinkNode.gain.value = 0;
+
+  sourceNode.connect(processorNode);
+  processorNode.connect(processorSinkNode);
+  processorSinkNode.connect(audioContext.destination);
+
+  if (!sendOperatorRealtimeAsrPayload('operator_realtime_asr_start', { language })) {
+    stream.getTracks().forEach((track) => track.stop());
+    processorNode.disconnect();
+    processorSinkNode.disconnect();
+    sourceNode.disconnect();
+    void audioContext.close().catch(() => {});
+    throw new Error('realtime ASR socket unavailable');
+  }
+
+  operatorMicState.mode = 'realtime';
+  operatorMicState.stream = stream;
+  operatorMicState.audioContext = audioContext;
+  operatorMicState.sourceNode = sourceNode;
+  operatorMicState.processorNode = processorNode;
+  operatorMicState.processorSinkNode = processorSinkNode;
+  operatorMicState.language = language === 'ja' ? 'ja' : 'en';
+  operatorMicState.recording = true;
+  operatorMicState.startedAtMs = Date.now();
+  clearOperatorRealtimeAudioBuffer();
+  beginOperatorRealtimeDraft(operatorMicState.language);
+
+  processorNode.onaudioprocess = (event) => {
+    if (!operatorMicState.recording || operatorMicState.mode !== 'realtime') {
+      return;
+    }
+    const chunk = encodeRealtimeAudioChunk(
+      event.inputBuffer.getChannelData(0),
+      event.inputBuffer.sampleRate,
+      operatorRealtimeAsrConfig.sampleRateHz
+    );
+    if (!chunk) {
+      return;
+    }
+    operatorMicState.realtimePcmChunks.push(chunk.pcmBytes);
+    operatorMicState.realtimePcmBytes += chunk.pcmBytes.length;
+    const sent = sendOperatorRealtimeAsrPayload('operator_realtime_asr_chunk', {
+      language: operatorMicState.language,
+      audio: chunk.audio,
+      sample_rate_hz: operatorRealtimeAsrConfig.sampleRateHz
+    });
+    if (!sent) {
+      setOperatorStatusLine('realtime ASR offline', 'warn');
+    }
+  };
+
+  return true;
+}
+
+async function stopOperatorRealtimeRecording() {
+  if (!operatorMicState.recording || operatorMicState.mode !== 'realtime') {
+    return;
+  }
+
+  operatorMicState.recording = false;
+  if (operatorMicState.stopTimer) {
+    clearTimeout(operatorMicState.stopTimer);
+    operatorMicState.stopTimer = null;
+  }
+
+  setOperatorStatusLine('finalizing realtime audio...', 'default');
+  const sent = sendOperatorRealtimeAsrPayload('operator_realtime_asr_stop', {
+    language: operatorMicState.language
+  });
+  if (!sent) {
+    clearOperatorRealtimeDraft(false);
+    setOperatorStatusLine('realtime ASR offline', 'warn');
+  }
+  releaseOperatorMicCapture();
+}
+
 async function startOperatorRecording(language) {
   if (operatorMicState.recording) {
     return;
   }
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+  if (!navigator.mediaDevices?.getUserMedia) {
     setOperatorStatusLine('microphone unavailable (use text input)', 'warn');
+    return;
+  }
+  if (!shouldUseOperatorRealtimeAsr() && typeof MediaRecorder === 'undefined') {
+    setOperatorStatusLine('microphone recorder unavailable (use text input)', 'warn');
     return;
   }
   const activeInputKind = operatorActivePrompt?.input_kind ?? null;
@@ -1437,7 +1852,24 @@ async function startOperatorRecording(language) {
   try {
     hideOperatorKeyboard(false);
     await unlockPlaybackAudio();
+    if (shouldUseOperatorRealtimeAsr()) {
+      await startOperatorRealtimeRecording(language);
+      if (operatorMicState.stopTimer) {
+        clearTimeout(operatorMicState.stopTimer);
+      }
+      operatorMicState.stopTimer = setTimeout(() => {
+        if (!operatorMicState.recording) {
+          return;
+        }
+        stopOperatorRecordingAndTranscribe().catch(() => {
+          // Ignore here. UI path already updates status on errors.
+        });
+      }, OPERATOR_ASR_MAX_RECORDING_MS);
+      setOperatorStatusLine(`recording realtime (${operatorMicState.language})...`, 'ok');
+      return;
+    }
     const recorder = await ensureOperatorMediaRecorder();
+    operatorMicState.mode = 'batch';
     operatorMicState.language = language === 'ja' ? 'ja' : 'en';
     operatorMicState.chunks = [];
     recorder.ondataavailable = (event) => {
@@ -1485,7 +1917,8 @@ async function requestOperatorAsrTranscript(blob, mimeType, language) {
   }
 
   if (!response.ok || !payload || payload.ok === false) {
-    const detail = payload?.detail ? `: ${payload.detail}` : '';
+    const detailText = formatOperatorAsrErrorDetail(payload?.detail);
+    const detail = detailText ? `: ${detailText}` : '';
     throw new Error(`ASR failed (${response.status})${detail}`);
   }
 
@@ -1500,7 +1933,16 @@ async function requestOperatorAsrTranscript(blob, mimeType, language) {
 }
 
 async function stopOperatorRecordingAndTranscribe() {
-  if (!operatorMicState.recording || !operatorMicState.recorder) {
+  if (!operatorMicState.recording) {
+    return;
+  }
+
+  if (operatorMicState.mode === 'realtime') {
+    await stopOperatorRealtimeRecording();
+    return;
+  }
+
+  if (!operatorMicState.recorder) {
     return;
   }
 
@@ -1639,6 +2081,50 @@ function handleSayResult(payload) {
   }
 }
 
+function handleOperatorRealtimeAsrDelta(payload) {
+  const delta = typeof payload.delta === 'string' ? payload.delta : '';
+  if (delta === '') {
+    return;
+  }
+  if (!operatorMicState.realtimeDraftActive) {
+    beginOperatorRealtimeDraft(payload.language === 'ja' ? 'ja' : 'en');
+  }
+  applyOperatorRealtimeDelta(delta);
+  setOperatorStatusLine(`transcribing (${payload.language === 'ja' ? 'ja' : 'en'})...`, 'ok');
+}
+
+function handleOperatorRealtimeAsrDone(payload) {
+  const language = payload.language === 'ja' ? 'ja' : 'en';
+  const text = typeof payload.text === 'string' ? payload.text : '';
+  const hadDraftText = operatorMicState.realtimeDraftActive && operatorMicState.realtimeText.trim() !== '';
+  if (!operatorMicState.realtimeDraftActive) {
+    if (text.trim() !== '') {
+      appendOperatorTextInput(text, language);
+      clearOperatorRealtimeAudioBuffer();
+      setOperatorStatusLine(`realtime ASR ready (${language})`, 'ok');
+      return;
+    }
+    void attemptOperatorRealtimeBatchFallback(language);
+    return;
+  }
+  finalizeOperatorRealtimeDraft(text);
+  if (text.trim() === '' && !hadDraftText) {
+    void attemptOperatorRealtimeBatchFallback(language);
+    return;
+  }
+  clearOperatorRealtimeAudioBuffer();
+  setOperatorStatusLine(`realtime ASR ready (${language})`, 'ok');
+}
+
+function handleOperatorRealtimeAsrError(payload) {
+  const error = typeof payload.error === 'string' ? payload.error : 'realtime_asr_error';
+  if (operatorMicState.realtimeDraftActive) {
+    clearOperatorRealtimeDraft(true);
+  }
+  clearOperatorRealtimeAudioBuffer();
+  setOperatorStatusLine(`realtime ASR error: ${error}`, 'warn');
+}
+
 function handlePayload(payload) {
   if (!payload || typeof payload !== 'object') {
     return;
@@ -1667,6 +2153,12 @@ function handlePayload(payload) {
     handleOperatorStatePayload(payload);
   } else if (payload.type === 'operator_terminal_snapshot') {
     handleOperatorTerminalSnapshot(payload);
+  } else if (payload.type === 'operator_realtime_asr_delta') {
+    handleOperatorRealtimeAsrDelta(payload);
+  } else if (payload.type === 'operator_realtime_asr_done') {
+    handleOperatorRealtimeAsrDone(payload);
+  } else if (payload.type === 'operator_realtime_asr_error') {
+    handleOperatorRealtimeAsrError(payload);
   } else if (payload.type === 'tts_state') {
     handleTtsState(payload);
   } else if (payload.type === 'tts_mouth') {
@@ -2170,7 +2662,10 @@ function installOperatorControls() {
       if (!operatorTextInputEl) {
         return;
       }
+      cancelPendingOperatorRealtimeAsr(true);
+      clearOperatorRealtimeAudioBuffer();
       operatorTextInputEl.value = '';
+      syncOperatorTextInputHeight();
       setOperatorStatusLine('text cleared', 'default');
     });
   }
@@ -2180,6 +2675,10 @@ function installOperatorControls() {
     });
   }
   if (operatorTextInputEl) {
+    syncOperatorTextInputHeight();
+    operatorTextInputEl.addEventListener('input', () => {
+      syncOperatorTextInputHeight();
+    });
     operatorTextInputEl.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') {
         if (event.key === 'Escape') {
@@ -2188,9 +2687,13 @@ function installOperatorControls() {
         }
         return;
       }
+      if (event.shiftKey) {
+        return;
+      }
       event.preventDefault();
       submitOperatorTextInput();
     });
+    window.addEventListener('resize', syncOperatorTextInputHeight);
   }
 
   const keyBindings = [
