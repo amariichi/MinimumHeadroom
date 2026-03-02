@@ -1,0 +1,155 @@
+from __future__ import annotations
+
+import re
+
+
+QWEN3_ASCII_MODES = {'preserve', 'fullwidth', 'kana_alias'}
+QWEN3_STYLES = {'neutral', 'soft', 'narration'}
+QWEN3_LANGUAGES = {'Japanese', 'English'}
+_ASCII_TOKEN_RE = re.compile(r'(?<![A-Za-z0-9])([A-Za-z0-9][A-Za-z0-9./:+_-]{1,7})(?![A-Za-z0-9])')
+_LEADING_WHITESPACE_RE = re.compile(r'^(\s*)')
+_KANA_ALIASES = {
+  'AI': 'エーアイ',
+  'API': 'エーピーアイ',
+  'HTTP': 'エイチティーティーピー',
+  'HTTPS': 'エイチティーティーピーエス',
+  'URL': 'ユーアールエル',
+}
+
+
+def normalize_ascii_mode(raw: str | None) -> str:
+  if raw is None:
+    return 'preserve'
+  normalized = raw.strip().lower()
+  if normalized in QWEN3_ASCII_MODES:
+    return normalized
+  raise ValueError(f'unsupported MH_QWEN_JA_ASCII_MODE: {raw} (expected preserve|fullwidth|kana_alias)')
+
+
+def normalize_style(raw: str | None) -> str:
+  if raw is None:
+    return 'neutral'
+  normalized = raw.strip().lower()
+  if normalized in QWEN3_STYLES:
+    return normalized
+  raise ValueError(f'unsupported MH_QWEN_TTS_STYLE: {raw} (expected neutral|soft|narration)')
+
+
+def normalize_language(raw: str | None) -> str:
+  if raw is None:
+    return 'Japanese'
+  normalized = raw.strip().lower()
+  if normalized in {'ja', 'japanese'}:
+    return 'Japanese'
+  if normalized in {'en', 'english'}:
+    return 'English'
+  raise ValueError(f'unsupported MH_QWEN_TTS_LANGUAGE: {raw} (expected Japanese|English)')
+
+
+def prepare_qwen3_text(text: str, *, ascii_mode: str, language: str) -> str:
+  normalized_language = normalize_language(language)
+  text = _apply_japanese_leadin_filler(text, language=normalized_language)
+  if normalized_language != 'Japanese':
+    return text
+
+  mode = normalize_ascii_mode(ascii_mode)
+  if mode == 'preserve':
+    return text
+
+  def replace(match: re.Match[str]) -> str:
+    token = match.group(1)
+    if not _is_rewritable_ascii_token(token):
+      return token
+    if mode == 'fullwidth':
+      return _to_fullwidth(token)
+    alias = _KANA_ALIASES.get(token.upper())
+    if alias:
+      return alias
+    return token
+
+  return _ASCII_TOKEN_RE.sub(replace, text)
+
+
+def build_qwen3_instruction(style: str, *, language: str) -> str:
+  normalized_language = normalize_language(language)
+  normalized = normalize_style(style)
+  if normalized_language == 'English':
+    if normalized == 'soft':
+      return (
+        'Speak in English with a gentle, calm, approachable voice and clear articulation. '
+        'Avoid sounding gloomy, sleepy, emotionally downcast, or unstable. '
+        'Keep the delivery warm, steady, and easy to understand.'
+      )
+    if normalized == 'narration':
+      return (
+        'Speak in English like a clear explanatory narration. '
+        'Keep a steady pace, stable tone, and easy-to-follow delivery.'
+      )
+    return (
+      'Speak in English with a clear, stable, natural voice. '
+      'Avoid exaggerated emotion and keep the message easy to understand.'
+    )
+
+  if normalized == 'soft':
+    return (
+      '日本語で、やさしく穏やかな口調で、明瞭に読み上げてください。'
+      '暗く沈んだ感じや眠そうな話し方は避け、落ち着いて安定したトーンを保ってください。'
+    )
+  if normalized == 'narration':
+    return '日本語で、説明音声のように、明瞭で聞き取りやすく、一定のテンポで読み上げてください。'
+  return '日本語で、明瞭で安定した口調で、感情を誇張せず自然に読み上げてください。'
+
+
+def _apply_japanese_leadin_filler(text: str, *, language: str) -> str:
+  if language != 'English' or text == '':
+    return text
+
+  first = _first_significant_char(text)
+  if first is None or not _is_cjk_ideograph(first):
+    return text
+
+  leading_match = _LEADING_WHITESPACE_RE.match(text)
+  leading = leading_match.group(1) if leading_match else ''
+  return f'{leading}はい、{text[len(leading):]}'
+
+
+def _is_rewritable_ascii_token(token: str) -> bool:
+  if len(token) < 2 or len(token) > 8:
+    return False
+  if token.upper() != token:
+    return False
+  return any(char.isalnum() for char in token)
+
+
+def _first_significant_char(text: str) -> str | None:
+  for char in text:
+    if char.isspace():
+      continue
+    if char in '「『（([{"\'“‘':
+      continue
+    return char
+  return None
+
+
+def _is_cjk_ideograph(char: str) -> bool:
+  code = ord(char)
+  return (
+    0x3400 <= code <= 0x4DBF
+    or 0x4E00 <= code <= 0x9FFF
+    or 0xF900 <= code <= 0xFAFF
+    or 0x20000 <= code <= 0x2CEAF
+  )
+
+
+def _to_fullwidth(text: str) -> str:
+  rendered: list[str] = []
+  for char in text:
+    code = ord(char)
+    if char == ' ':
+      rendered.append('\u3000')
+      continue
+    if 0x21 <= code <= 0x7E:
+      rendered.append(chr(code + 0xFEE0))
+      continue
+    rendered.append(char)
+  return ''.join(rendered)

@@ -10,9 +10,11 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from .engine import EngineMetadata, TtsEngine
 from .kokoro_engine import KokoroEngine, resolve_model_paths
 from .playback import PlaybackEngine, encode_wav_base64
 from .protocol import ParsedCommand, ProtocolWriter, parse_command
+from .qwen3_engine import Qwen3TtsEngine
 
 
 AUDIO_TARGETS = {'local', 'browser', 'both'}
@@ -42,8 +44,7 @@ class SpeakRequest:
 class WorkerRuntime:
   def __init__(self) -> None:
     self.writer = ProtocolWriter()
-    self.model_paths = resolve_model_paths()
-    self.engine = KokoroEngine(model_paths=self.model_paths, voice='af_heart')
+    self.engine = create_tts_engine()
     self.audio_target = resolve_audio_target(os.environ.get('MH_AUDIO_TARGET'))
     self.browser_audio_enabled = self.audio_target in ('browser', 'both')
     self.playback = PlaybackEngine(allow_local_output=self.audio_target in ('local', 'both'))
@@ -56,14 +57,7 @@ class WorkerRuntime:
     self.shutdown_requested = False
 
   async def run(self) -> None:
-    self.writer.ready(
-      voice='af_heart',
-      engine='kokoro-onnx+misaki',
-      model_path=str(self.model_paths.model_path),
-      voices_path=str(self.model_paths.voices_path),
-      playback_backend=self.playback.backend,
-      audio_target=self.audio_target,
-    )
+    self._emit_ready()
 
     queue: asyncio.Queue[ParsedCommand] = asyncio.Queue()
     reader_task = asyncio.create_task(self._stdin_reader(queue))
@@ -83,6 +77,24 @@ class WorkerRuntime:
           pass
         except Exception:
           pass
+
+  def _emit_ready(self) -> None:
+    metadata = self._metadata
+    self.writer.ready(
+      voice=metadata.voice,
+      engine=metadata.engine,
+      model_path=metadata.model_path,
+      voices_path=metadata.voices_path,
+      playback_backend=self.playback.backend,
+      audio_target=self.audio_target,
+    )
+
+  @property
+  def _metadata(self) -> EngineMetadata:
+    metadata = getattr(self.engine, 'metadata', None)
+    if isinstance(metadata, EngineMetadata):
+      return metadata
+    raise RuntimeError('tts engine did not expose EngineMetadata')
 
   async def _stdin_reader(self, queue: asyncio.Queue[ParsedCommand]) -> None:
     loop = asyncio.get_running_loop()
@@ -488,6 +500,16 @@ class WorkerRuntime:
     self.current_task = None
 
 
+def create_tts_engine() -> TtsEngine:
+  engine_name = (os.environ.get('TTS_ENGINE') or 'kokoro').strip().lower()
+  if engine_name == 'kokoro':
+    model_paths = resolve_model_paths()
+    return KokoroEngine(model_paths=model_paths, voice='af_heart')
+  if engine_name == 'qwen3':
+    return Qwen3TtsEngine()
+  raise RuntimeError(f'unsupported TTS_ENGINE: {engine_name} (expected kokoro|qwen3)')
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description='Minimum Headroom TTS worker')
   parser.add_argument('--smoke', action='store_true', help='Initialize engine and exit')
@@ -505,14 +527,7 @@ async def run_async(argv: list[str]) -> int:
     return 2
 
   if args.smoke:
-    runtime.writer.ready(
-      voice='af_heart',
-      engine='kokoro-onnx+misaki',
-      model_path=str(runtime.model_paths.model_path),
-      voices_path=str(runtime.model_paths.voices_path),
-      playback_backend=runtime.playback.backend,
-      audio_target=runtime.audio_target,
-    )
+    runtime._emit_ready()
     return 0
 
   try:

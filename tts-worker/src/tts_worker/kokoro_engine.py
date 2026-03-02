@@ -10,6 +10,7 @@ from typing import Any, Iterable, Optional, Tuple
 import numpy as np
 
 from .chunking import TextChunk, split_text_chunks
+from .engine import EngineMetadata
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,15 @@ class KokoroEngine:
 
     self._kokoro = Kokoro(str(model_paths.model_path), str(model_paths.voices_path))
     self._ja_g2p = misaki_ja.JAG2P(version='pyopenjtalk')
+
+  @property
+  def metadata(self) -> EngineMetadata:
+    return EngineMetadata(
+      voice=self.voice,
+      engine='kokoro-onnx+misaki',
+      model_path=str(self.model_paths.model_path),
+      voices_path=str(self.model_paths.voices_path),
+    )
 
   def chunk_text(self, text: str) -> list[TextChunk]:
     return split_text_chunks(text)

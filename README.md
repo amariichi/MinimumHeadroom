@@ -58,7 +58,8 @@ A face and operator companion app for coding agents.
   - panel toggle shortcuts (`Esc`, double tap, double click)
 - Looking Glass WebXR support path
 - TTS pipeline:
-  - Kokoro ONNX + Misaki (`af_heart`)
+  - Kokoro ONNX + Misaki (`af_heart`) by default
+  - optional experimental Qwen3-TTS Japanese backend
   - freshness-first speech policy (`interrupt`, TTL, generation invalidation)
   - speech result feedback (`say_result`)
   - selectable output route (`local`, `browser`, `both`)
@@ -216,10 +217,10 @@ In another terminal:
 
 ### Path B: Full Mobile Operator Stack (recommended for first-time overview)
 
-Recommended one-shot startup:
+Recommended one-shot startup (best current experience):
 
 ```bash
-./scripts/run-operator-once.sh
+./scripts/run-operator-once.sh --profile qwen3-realtime
 ```
 
 This script automatically:
@@ -227,27 +228,45 @@ This script automatically:
 - creates or reuses tmux session `agent` (override with `--session`)
 - creates a dedicated window `operator` (auto-suffixed if name exists; override with `--window`)
 - splits two panes in that window:
-  - pane 0: your agent command (default `codex`, override `--agent-cmd`; starts in the shell directory where you invoked this script, even if you call it via an absolute path)
+  - pane 0: your agent command (default `codex`, override `--agent-cmd`; starts in the shell directory where you invoked this script, or the explicit path from `--repo` / `--agent-cwd`)
   - pane 1: integrated operator stack (default `./scripts/run-operator-stack.sh`, override `--stack-cmd`)
 - resolves the real agent pane id and injects it as `MH_BRIDGE_TMUX_PANE` for the stack
 
 If you mainly use a different agent, you can also change the default launcher by editing `AGENT_CMD="codex"` in `scripts/run-operator-once.sh`.
-Using `--agent-cmd 'bash -l'` starts a login shell in the target project directory, so you can inspect the repo first and then launch any agent manually.
+Using `--agent-shell` is shorthand for `--agent-cmd 'bash -l'`, so you can inspect the repo first and then launch any agent manually.
+
+Built-in startup profiles keep common combinations short:
+
+- `default`: Codex + default operator stack (legacy-compatible baseline)
+- `realtime`: default TTS + built-in Voxtral realtime ASR + Parakeet fallback
+- `qwen3`: Qwen3 TTS + default operator stack
+- `qwen3-realtime`: Qwen3 TTS + built-in Voxtral realtime ASR + Parakeet fallback (recommended)
+
+If you want the lighter historical behavior, use `--profile default` or simply omit `--profile`.
 
 Common examples:
 
 ```bash
+# start from another repo with a shell only, then launch any agent manually
+./scripts/run-operator-once.sh --profile qwen3-realtime --repo ~/github/other-project --agent-shell
+
 # resume existing Codex conversation
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
 
-# one-shot startup with built-in Voxtral realtime ASR + Parakeet fallback
-./scripts/run-operator-once.sh --stack-cmd 'MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 ./scripts/run-operator-stack.sh'
+# shorter one-shot startup with built-in Voxtral realtime ASR + Parakeet fallback
+./scripts/run-operator-once.sh --profile realtime
+
+# Qwen3 TTS + Voxtral realtime ASR in one command
+./scripts/run-operator-once.sh --profile qwen3-realtime
 
 # start with a shell in the current project, then launch any agent manually
-./scripts/run-operator-once.sh --agent-cmd 'bash -l'
+./scripts/run-operator-once.sh --agent-shell
 
 # custom tmux names + mobile browser audio
 ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
+
+# fully custom stack command still works for advanced overrides
+./scripts/run-operator-once.sh --stack-cmd 'TTS_ENGINE=qwen3 MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 ./scripts/run-operator-stack.sh'
 
 # start and keep current shell (no tmux attach/switch)
 ./scripts/run-operator-once.sh --no-attach
@@ -613,6 +632,37 @@ Reference download instructions are in `assets/kokoro/README.md`.
 
 These large model files are intentionally ignored by git.
 
+Optional experimental Qwen3-TTS setup:
+
+```bash
+./scripts/setup-qwen3-tts.sh
+```
+
+This creates a dedicated local virtualenv at `./.venv-qwen-tts` and installs `qwen-tts` there so the default Kokoro path can stay lightweight.
+If `flash-attn` is not installed, Qwen3-TTS still works on the current path; it simply falls back to the manual PyTorch implementation and may run slower.
+
+To use the optional backend:
+
+```bash
+TTS_ENGINE=qwen3 ./scripts/run-tts-worker.sh --smoke
+TTS_ENGINE=qwen3 ./scripts/run-face-app.sh
+```
+
+Current defaults for the experimental Qwen3 path:
+
+- `MH_QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`
+- `MH_QWEN_TTS_SPEAKER=Serena`
+- `MH_QWEN_TTS_LANGUAGE=English`
+- `MH_QWEN_JA_ASCII_MODE=preserve`
+- `MH_QWEN_TTS_STYLE=neutral`
+- `MH_QWEN_TTS_GAIN=1.50`
+- `MH_QWEN_TTS_SPEED=1.10`
+
+The current experimental default is based on listening tests with mixed Japanese and English text. It keeps one Qwen3 voice across the whole utterance instead of using Kokoro's current ASCII-versus-non-ASCII language split.
+With the current `English` profile, if a speech-only utterance begins with a CJK ideograph (for example a kanji-led Japanese sentence), the Qwen3 path now prepends `はい、` internally for audio generation only. This helps stabilize the first word without changing the visible text.
+If the chosen Qwen3 voice sounds too quiet or too strong, adjust `MH_QWEN_TTS_GAIN` (for example `1.0`, `1.25`, or `1.50`). Peaks above unity are scaled back automatically to avoid hard clipping.
+If it still feels slightly slow, adjust `MH_QWEN_TTS_SPEED` (for example `1.0`, `1.10`, or `1.20`). Values above `1.0` speak faster.
+
 ## Speech Gate Config (`config.yaml`)
 
 `face-app` now reads `config.yaml` from repository root at startup (or `FACE_CONFIG_PATH` if set) and applies `speech_gate` values to voice throttling.
@@ -801,7 +851,8 @@ npm run asr-worker:smoke
   - パネル表示切替ショートカット（`Esc`, ダブルタップ, ダブルクリック）
 - Looking Glass WebXR 対応経路
 - TTSパイプライン:
-  - Kokoro ONNX + Misaki (`af_heart`)
+  - 既定は Kokoro ONNX + Misaki (`af_heart`)
+  - 任意で実験的な Qwen3-TTS 日本語 backend
   - 発話鮮度優先ポリシー（`interrupt`, TTL, generation）
   - `say_result` フィードバック
   - 出力先切替（`local`, `browser`, `both`）
@@ -959,10 +1010,10 @@ tailscale serve --bg 8765
 
 ### Path B: フルモバイル Operator Stack（初見ユーザー推奨）
 
-推奨: 1発起動スクリプト
+推奨: 1発起動スクリプト（いまのおすすめ構成）
 
 ```bash
-./scripts/run-operator-once.sh
+./scripts/run-operator-once.sh --profile qwen3-realtime
 ```
 
 このスクリプトは自動で次を行います:
@@ -970,27 +1021,45 @@ tailscale serve --bg 8765
 - tmux セッション `agent` を作成または再利用（`--session` で変更可）
 - 専用ウィンドウ `operator` を作成（同名があれば `operator-1` のように自動採番、`--window` で変更可）
 - 2ペインへ分割:
-  - 0番ペイン: エージェント起動コマンド（既定 `codex`、`--agent-cmd` で変更。絶対パスでこのスクリプトを呼んでも、呼び出したシェルのカレントディレクトリで開始）
+  - 0番ペイン: エージェント起動コマンド（既定 `codex`、`--agent-cmd` で変更。絶対パスでこのスクリプトを呼んでも、呼び出したシェルのカレントディレクトリ、または `--repo` / `--agent-cwd` で指定した場所で開始）
   - 1番ペイン: 統合スタック起動（既定 `./scripts/run-operator-stack.sh`、`--stack-cmd` で変更）
 - 実際のエージェントペインIDを解決し、`MH_BRIDGE_TMUX_PANE` として統合スタックへ自動注入
 
 別のエージェントを常用するなら、`scripts/run-operator-once.sh` 内の `AGENT_CMD="codex"` を変更して既定値を差し替えられます。
-`--agent-cmd 'bash -l'` を使うと、対象プロジェクトでログインシェルに戻るので、内容を確認してから好きなエージェントを手動で起動できます。
+`--agent-shell` は `--agent-cmd 'bash -l'` の短縮なので、対象プロジェクトでログインシェルに戻ってから、内容を確認して好きなエージェントを手動で起動できます。
+
+よく使う起動プロファイル:
+
+- `default`: Codex + 既定の operator stack（従来互換の軽量ベース）
+- `realtime`: 既定TTS + 内蔵 Voxtral realtime ASR + Parakeet fallback
+- `qwen3`: Qwen3 TTS + 既定の operator stack
+- `qwen3-realtime`: Qwen3 TTS + 内蔵 Voxtral realtime ASR + Parakeet fallback（推奨）
+
+従来どおりの軽い起動にしたい場合は、`--profile default` を使うか、`--profile` を省略してください。
 
 よく使う例:
 
 ```bash
+# 別リポジトリを作業対象にし、まずシェルだけ開く
+./scripts/run-operator-once.sh --profile qwen3-realtime --repo ~/github/other-project --agent-shell
+
 # 直前セッションを再開
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
 
-# Voxtral realtime ASR + Parakeet fallback を含めて1発起動
-./scripts/run-operator-once.sh --stack-cmd 'MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 ./scripts/run-operator-stack.sh'
+# Voxtral realtime ASR + Parakeet fallback を短く1発起動
+./scripts/run-operator-once.sh --profile realtime
+
+# Qwen3 TTS + Voxtral realtime ASR を1発起動
+./scripts/run-operator-once.sh --profile qwen3-realtime
 
 # 今いるプロジェクトでシェルを開き、好きなエージェントを手動起動
-./scripts/run-operator-once.sh --agent-cmd 'bash -l'
+./scripts/run-operator-once.sh --agent-shell
 
 # tmux名を変更 + モバイル向けブラウザ音声
 ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
+
+# 高度な上書きが必要なら --stack-cmd もそのまま使える
+./scripts/run-operator-once.sh --stack-cmd 'TTS_ENGINE=qwen3 MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 ./scripts/run-operator-stack.sh'
 
 # 起動のみ行い、現在のシェルを維持（attach/switchしない）
 ./scripts/run-operator-once.sh --no-attach
@@ -1349,6 +1418,37 @@ iPhone/iPad で Tailscale Serve URL を開いて利用します。
 - `voices-v1.0.bin`
 
 ダウンロード手順は `assets/kokoro/README.md` を参照してください。
+
+任意の実験的 Qwen3-TTS セットアップ:
+
+```bash
+./scripts/setup-qwen3-tts.sh
+```
+
+このスクリプトは専用のローカル仮想環境 `./.venv-qwen-tts` を作成し、既定の Kokoro 経路を重くしないまま `qwen-tts` をそこへインストールします。
+`flash-attn` が無くても、この経路ではまず動きます。その場合は手動 PyTorch 実装へフォールバックするため、速度は遅くなる可能性があります。
+
+任意 backend を使うとき:
+
+```bash
+TTS_ENGINE=qwen3 ./scripts/run-tts-worker.sh --smoke
+TTS_ENGINE=qwen3 ./scripts/run-face-app.sh
+```
+
+実験的 Qwen3 経路の現在の既定値:
+
+- `MH_QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`
+- `MH_QWEN_TTS_SPEAKER=Serena`
+- `MH_QWEN_TTS_LANGUAGE=English`
+- `MH_QWEN_JA_ASCII_MODE=preserve`
+- `MH_QWEN_TTS_STYLE=neutral`
+- `MH_QWEN_TTS_GAIN=1.50`
+- `MH_QWEN_TTS_SPEED=1.10`
+
+現在の実験的既定値は、日本語と英語が混ざる実運用の聞き比べ結果を踏まえたものです。Kokoro のような ASCII / 非ASCII の言語分割ではなく、1つの Qwen3 音声で全文を読む前提です。
+現在の `English` プロファイルでは、音声用テキストが CJK 漢字で始まる場合（例: 漢字始まりの日本語文）、Qwen3 経路は音声生成時だけ内部的に `はい、` を前置きします。表示テキスト自体は変わりません。これにより、文頭の読みを安定させやすくしています。
+選んだ Qwen3 話者の声量が小さすぎる、または強すぎると感じる場合は、`MH_QWEN_TTS_GAIN` を調整してください（例: `1.0`, `1.25`, `1.50`）。ピークが 1.0 を超える場合は、ハードクリップを避けるため自動で少し抑えます。
+少し遅く感じる場合は、`MH_QWEN_TTS_SPEED` を調整してください（例: `1.0`, `1.10`, `1.20`）。`1.0` より大きい値は、より速く話します。
 
 ## Speech Gate 設定（`config.yaml`）
 
