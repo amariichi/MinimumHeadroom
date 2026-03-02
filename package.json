@@ -1,12 +1,13 @@
 {
   "name": "minimum-headroom",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "type": "module",
   "scripts": {
     "setup": "./scripts/setup.sh",
     "setup:all": "./scripts/setup.sh --with-realtime-asr",
     "setup:realtime-asr": "./scripts/setup-realtime-asr.sh",
+    "setup:qwen3-tts": "./scripts/setup-qwen3-tts.sh",
     "face-app:start": "node face-app/dist/index.js",
     "operator-bridge:start": "node face-app/dist/operator_bridge.js",
     "mcp-server:start": "node mcp-server/dist/index.js",
@@ -18,7 +19,8 @@
     "asr-worker:smoke": "uv run --project asr-worker python -m asr_worker --smoke",
     "realtime-asr:run": "./scripts/run-vllm-voxtral.sh",
     "mcp-server:run": "./scripts/run-mcp-server.sh",
-    "tts-worker:smoke": "uv run --project tts-worker python -m tts_worker --smoke",
+    "tts-worker:run": "./scripts/run-tts-worker.sh",
+    "tts-worker:smoke": "./scripts/run-tts-worker.sh --smoke",
     "test": "node --test"
   }
 }

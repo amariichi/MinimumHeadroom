@@ -9,10 +9,73 @@ SESSION_NAME="agent"
 WINDOW_BASE="operator"
 AGENT_CMD="codex"
 STACK_CMD="./scripts/run-operator-stack.sh"
+AGENT_CWD="$CALLER_DIR"
 FACE_UI_MODE=""
 FACE_AUDIO_TARGET=""
 ASR_BASE_URL=""
+PROFILE_NAME="default"
 ATTACH_AFTER_START=1
+STACK_CMD_SET=0
+
+list_profiles() {
+  cat <<'EOF'
+Available profiles:
+  default         Codex + default operator stack (legacy-compatible baseline)
+  realtime        Default TTS + built-in Voxtral realtime ASR + Parakeet fallback
+  qwen3           Qwen3 TTS + default operator stack
+  qwen3-realtime  Qwen3 TTS + built-in Voxtral realtime ASR + Parakeet fallback (recommended)
+EOF
+}
+
+apply_profile_defaults() {
+  case "$PROFILE_NAME" in
+    default)
+      ;;
+    realtime)
+      if [[ "$STACK_CMD_SET" -eq 0 ]]; then
+        STACK_CMD="MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 ./scripts/run-operator-stack.sh"
+      fi
+      ;;
+    qwen3)
+      if [[ "$STACK_CMD_SET" -eq 0 ]]; then
+        STACK_CMD="TTS_ENGINE=qwen3 ./scripts/run-operator-stack.sh"
+      fi
+      ;;
+    qwen3-realtime)
+      if [[ "$STACK_CMD_SET" -eq 0 ]]; then
+        STACK_CMD="TTS_ENGINE=qwen3 MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 ./scripts/run-operator-stack.sh"
+      fi
+      ;;
+    *)
+      echo "[run-operator-once] Unknown profile: $PROFILE_NAME" >&2
+      list_profiles >&2
+      exit 2
+      ;;
+  esac
+}
+
+resolve_agent_cwd() {
+  local requested="$1"
+  local resolved="$requested"
+
+  if [[ "$requested" == \~/* ]]; then
+    resolved="${HOME}/${requested#~/}"
+  fi
+
+  if [[ "$resolved" != /* ]]; then
+    resolved="${CALLER_DIR}/${requested}"
+  fi
+
+  if [[ ! -d "$resolved" ]]; then
+    echo "[run-operator-once] agent working directory not found: $requested" >&2
+    exit 2
+  fi
+
+  (
+    cd "$resolved"
+    pwd -P
+  )
+}
 
 usage() {
   cat <<'EOF'
@@ -23,7 +86,12 @@ Start Codex + operator stack in tmux with one command.
 Options:
   --session <name>          tmux session name (default: agent)
   --window <name>           base window name (default: operator)
+  --profile <name>          startup preset (default|realtime|qwen3|qwen3-realtime)
+  --list-profiles           show startup presets and exit
   --agent-cmd <command>     command to run in agent pane (default: codex; starts in the shell directory where this script was invoked)
+  --agent-shell             shorthand for --agent-cmd 'bash -l'
+  --repo <path>             target project directory for the agent pane (resolved from the shell directory where this script was invoked)
+  --agent-cwd <path>        same as --repo
   --stack-cmd <command>     stack launcher command (default: ./scripts/run-operator-stack.sh)
   --ui-mode <auto|pc|mobile>
                             FACE_UI_MODE override for stack launch
@@ -35,6 +103,8 @@ Options:
 
 Examples:
   ./scripts/run-operator-once.sh
+  ./scripts/run-operator-once.sh --profile qwen3-realtime
+  ./scripts/run-operator-once.sh --profile qwen3 --repo ~/github/other-project --agent-shell
   ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
   ./scripts/run-operator-once.sh --agent-cmd 'bash -l'
   ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
@@ -62,14 +132,33 @@ while [[ $# -gt 0 ]]; do
       WINDOW_BASE="$2"
       shift 2
       ;;
+    --profile)
+      require_value "$1" "${2:-}"
+      PROFILE_NAME="$2"
+      shift 2
+      ;;
+    --list-profiles)
+      list_profiles
+      exit 0
+      ;;
     --agent-cmd)
       require_value "$1" "${2:-}"
       AGENT_CMD="$2"
       shift 2
       ;;
+    --agent-shell)
+      AGENT_CMD="bash -l"
+      shift
+      ;;
+    --repo|--agent-cwd)
+      require_value "$1" "${2:-}"
+      AGENT_CWD="$2"
+      shift 2
+      ;;
     --stack-cmd)
       require_value "$1" "${2:-}"
       STACK_CMD="$2"
+      STACK_CMD_SET=1
       shift 2
       ;;
     --ui-mode)
@@ -103,12 +192,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+apply_profile_defaults
+AGENT_CWD="$(resolve_agent_cwd "$AGENT_CWD")"
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "[run-operator-once] tmux is required but not found in PATH." >&2
   exit 2
 fi
 
-if [[ -z "$SESSION_NAME" || -z "$WINDOW_BASE" || -z "$AGENT_CMD" || -z "$STACK_CMD" ]]; then
+if [[ -z "$SESSION_NAME" || -z "$WINDOW_BASE" || -z "$AGENT_CMD" || -z "$STACK_CMD" || -z "$AGENT_CWD" ]]; then
   echo "[run-operator-once] session/window/agent-cmd/stack-cmd must be non-empty." >&2
   exit 2
 fi
@@ -156,7 +248,7 @@ stack_pane="$(tmux display-message -p -t "${SESSION_NAME}:${window_name}.1" '#{p
 tmux select-layout -t "${SESSION_NAME}:${window_name}" even-horizontal >/dev/null 2>&1 || true
 
 # Launch agent command in the first pane.
-printf -v quoted_agent_cwd '%q' "$CALLER_DIR"
+printf -v quoted_agent_cwd '%q' "$AGENT_CWD"
 tmux send-keys -t "$agent_pane" "cd $quoted_agent_cwd" C-m
 tmux send-keys -t "$agent_pane" "$AGENT_CMD" C-m
 
@@ -186,7 +278,8 @@ stack_launch+="$quoted_stack_cmd"
 tmux send-keys -t "$stack_pane" "$stack_launch" C-m
 
 echo "[run-operator-once] session=${SESSION_NAME} window=${window_name}"
-echo "[run-operator-once] agent pane=${agent_pane} cwd=${CALLER_DIR} command=${AGENT_CMD}"
+echo "[run-operator-once] profile=${PROFILE_NAME}"
+echo "[run-operator-once] agent pane=${agent_pane} cwd=${AGENT_CWD} command=${AGENT_CMD}"
 echo "[run-operator-once] stack pane=${stack_pane} command=${STACK_CMD}"
 echo "[run-operator-once] MH_BRIDGE_TMUX_PANE=${agent_pane}"
 

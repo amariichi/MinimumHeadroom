@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { createSayGate } from './say_gate.js';
 
 const DEFAULT_WORKER_COMMAND = {
-  cmd: 'uv',
-  args: ['run', '--project', 'tts-worker', 'python', '-m', 'tts_worker']
+  cmd: './scripts/run-tts-worker.sh',
+  args: []
 };
 
 function toLogger(log) {

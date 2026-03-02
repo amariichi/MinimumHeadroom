@@ -5,13 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 WITH_REALTIME_ASR=0
+WITH_QWEN3_TTS=0
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/setup.sh [--with-realtime-asr]
+Usage: ./scripts/setup.sh [--with-realtime-asr] [--with-qwen3-tts]
 
 Options:
   --with-realtime-asr  Also install the optional vLLM + Voxtral realtime ASR environment.
+  --with-qwen3-tts     Also install the optional dedicated Qwen3-TTS environment.
   -h, --help           Show this help.
 EOF
 }
@@ -20,6 +22,10 @@ while (($# > 0)); do
   case "$1" in
     --with-realtime-asr)
       WITH_REALTIME_ASR=1
+      shift
+      ;;
+    --with-qwen3-tts)
+      WITH_QWEN3_TTS=1
       shift
       ;;
     -h|--help)
@@ -53,6 +59,13 @@ if [[ "$WITH_REALTIME_ASR" == "1" ]]; then
   ./scripts/setup-realtime-asr.sh
 else
   echo "[setup] skipping optional realtime ASR setup (use --with-realtime-asr to include vLLM + Voxtral)"
+fi
+
+if [[ "$WITH_QWEN3_TTS" == "1" ]]; then
+  echo "[setup] installing optional Qwen3-TTS environment"
+  ./scripts/setup-qwen3-tts.sh
+else
+  echo "[setup] skipping optional Qwen3-TTS setup (use --with-qwen3-tts to include Qwen3-TTS)"
 fi
 
 echo "[setup] done"
