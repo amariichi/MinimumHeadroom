@@ -621,7 +621,7 @@ Troubleshooting quick checks:
   - confirm `FACE_UI_MODE=mobile|pc` and reload the page
 
 <a id="en-tts-model-files"></a>
-## TTS Model Files
+## TTS Model Files (Kokoro only)
 
 Place model files in `assets/kokoro/`:
 
@@ -647,6 +647,10 @@ To use the optional backend:
 TTS_ENGINE=qwen3 ./scripts/run-tts-worker.sh --smoke
 TTS_ENGINE=qwen3 ./scripts/run-face-app.sh
 ```
+
+### Qwen3 Speech Behavior
+
+The Qwen3 backend does not use Kokoro's ASCII-versus-non-ASCII language split. It reads the whole utterance through one configured voice and one configured language profile.
 
 Current defaults for the experimental Qwen3 path:
 
@@ -698,14 +702,14 @@ When a new `face.say` arrives during playback:
 - `policy=replace` keeps current playback and queues only the latest pending utterance.
 - `policy=interrupt` (or `priority=3`) stops current playback and starts the new utterance immediately.
 
-## Speech Language Routing
+## Speech Language Routing (Kokoro only)
 
 - ASCII text is spoken as English (`en-us`, speed `1.0`)
 - Non-ASCII text is spoken as Japanese (`j`, speed `1.2`)
 
 ### English Normalization Spec
 
-Applied to all `face.say` text before speech synthesis.
+Applied to all `face.say` text before speech synthesis, regardless of whether the active backend is Kokoro or Qwen3. Only the language-routing rules above are Kokoro-specific.
 
 - `‘` / `’` -> `'`
 - `“` / `”` -> `"`
@@ -719,7 +723,7 @@ Applied to all `face.say` text before speech synthesis.
 - Full-width symbols/letters and Japanese characters are preserved
 - If normalization results in empty text, speech is skipped
 
-This is implemented in the face-app TTS controller (normalization) plus tts-worker chunking/synthesis path (language routing).
+This is implemented in the face-app TTS controller (common normalization) plus the backend-specific tts-worker synthesis path. Kokoro additionally applies the language routing described above.
 
 <a id="en-mcp-client-config"></a>
 ## MCP Client Config
@@ -1410,7 +1414,7 @@ iPhone/iPad で Tailscale Serve URL を開いて利用します。
   - `FACE_UI_MODE=mobile|pc` を確認してページ再読み込み
 
 <a id="ja-tts-model-files"></a>
-## TTS モデルファイル
+## TTS モデルファイル（Kokoroのみ）
 
 モデルを `assets/kokoro/` に配置してください。
 
@@ -1434,6 +1438,10 @@ iPhone/iPad で Tailscale Serve URL を開いて利用します。
 TTS_ENGINE=qwen3 ./scripts/run-tts-worker.sh --smoke
 TTS_ENGINE=qwen3 ./scripts/run-face-app.sh
 ```
+
+### Qwen3 発話挙動
+
+Qwen3 backend は、Kokoro のような ASCII / 非ASCII の言語分割を行いません。1つの voice と 1つの language プロファイルで、発話全体をまとめて読みます。
 
 実験的 Qwen3 経路の現在の既定値:
 
@@ -1485,14 +1493,14 @@ speech_gate:
 - `policy=replace`: 現在発話を継続し、最新1件のみ保留
 - `policy=interrupt`（または `priority=3`）: 現在発話を停止し新規発話を即時開始
 
-## 発話言語ルーティング
+## 発話言語ルーティング（Kokoroのみ）
 
 - ASCIIのみの文字列 -> 英語音声（`en-us`, speed `1.0`）
 - 非ASCIIを含む文字列 -> 日本語音声（`j`, speed `1.2`）
 
 ### 英語正規化仕様
 
-`face.say` テキストに対して発話前に適用されます。
+`face.say` テキストに対して発話前に適用されます。Kokoro / Qwen3 のどちらでも共通ですが、直前の「言語ルーティング」は Kokoro のみです。
 
 - `‘` / `’` -> `'`
 - `“` / `”` -> `"`
@@ -1505,6 +1513,8 @@ speech_gate:
   - `9-to-5 -> 9 to 5`
 - 全角記号/日本語文字は保持
 - 正規化結果が空なら発話スキップ
+
+これは、face-app 側の共通正規化と、tts-worker 側の backend ごとの音声合成で実装されています。Kokoro はこの後に上記の言語ルーティングも行います。
 
 <a id="ja-mcp-client-config"></a>
 ## MCPクライアント設定
