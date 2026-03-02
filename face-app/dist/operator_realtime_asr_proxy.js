@@ -36,6 +36,13 @@ function normalizeSessionId(value) {
   return normalized ?? 'default';
 }
 
+function normalizeGeneration(value, fallback = 0) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
 function normalizeTextPayload(data) {
   if (typeof data === 'string') {
     return data;
@@ -93,6 +100,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
     if (emitError) {
       broadcast(
         createEventPayload('operator_realtime_asr_error', sessionId, context.language, {
+          generation: context.generation,
           error: reason ?? 'realtime_asr_closed'
         })
       );
@@ -107,6 +115,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       log.warn(`[face-app] realtime ASR proxy send failed: ${error.message}`);
       broadcast(
         createEventPayload('operator_realtime_asr_error', context.sessionId, context.language, {
+          generation: context.generation,
           error: 'realtime_asr_send_failed',
           detail: error.message
         })
@@ -148,6 +157,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       context.text += delta;
       broadcast(
         createEventPayload('operator_realtime_asr_delta', context.sessionId, context.language, {
+          generation: context.generation,
           delta,
           text: context.text
         })
@@ -161,6 +171,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       context.doneEmitted = true;
       broadcast(
         createEventPayload('operator_realtime_asr_done', context.sessionId, context.language, {
+          generation: context.generation,
           text
         })
       );
@@ -178,6 +189,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
         'realtime_asr_upstream_error';
       broadcast(
         createEventPayload('operator_realtime_asr_error', context.sessionId, context.language, {
+          generation: context.generation,
           error: errorMessage,
           detail: payload
         })
@@ -196,6 +208,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
         log.warn(`[face-app] realtime ASR proxy decode failed: ${error.message}`);
         broadcast(
           createEventPayload('operator_realtime_asr_error', context.sessionId, context.language, {
+            generation: context.generation,
             error: 'realtime_asr_decode_failed',
             detail: error.message
           })
@@ -216,6 +229,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       if (shouldSynthesizeDone) {
         broadcast(
           createEventPayload('operator_realtime_asr_done', context.sessionId, context.language, {
+            generation: context.generation,
             text: context.text
           })
         );
@@ -224,6 +238,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       if (!context.closing && !context.finalRequested) {
         broadcast(
           createEventPayload('operator_realtime_asr_error', context.sessionId, context.language, {
+            generation: context.generation,
             error: 'realtime_asr_socket_closed'
           })
         );
@@ -231,12 +246,13 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
     });
   }
 
-  function createSession(sessionId, language) {
+  function createSession(sessionId, language, generation) {
     closeSession(sessionId);
     const socket = websocketFactory(endpointUrl);
     const context = {
       sessionId,
       language,
+      generation,
       socket,
       ready: false,
       pendingAudio: [],
@@ -250,12 +266,13 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
     return context;
   }
 
-  function ensureEnabled(sessionId, language) {
+  function ensureEnabled(sessionId, language, generation = 0) {
     if (enabled) {
       return true;
     }
     broadcast(
       createEventPayload('operator_realtime_asr_error', sessionId, language, {
+        generation,
         error: 'realtime_asr_not_configured'
       })
     );
@@ -276,10 +293,11 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
 
       const sessionId = normalizeSessionId(payload.session_id);
       const language = normalizeLanguage(payload.language, 'en');
+      const generation = normalizeGeneration(payload.generation);
 
       if (type === 'operator_realtime_asr_start') {
-        if (ensureEnabled(sessionId, language)) {
-          createSession(sessionId, language);
+        if (ensureEnabled(sessionId, language, generation)) {
+          createSession(sessionId, language, generation);
         }
         return { relay: false };
       }
@@ -289,9 +307,10 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
         if (type === 'operator_realtime_asr_cancel') {
           return { relay: false };
         }
-        ensureEnabled(sessionId, language);
+        ensureEnabled(sessionId, language, generation);
         broadcast(
           createEventPayload('operator_realtime_asr_error', sessionId, language, {
+            generation,
             error: 'realtime_asr_session_missing'
           })
         );
@@ -299,6 +318,9 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       }
 
       if (type === 'operator_realtime_asr_chunk') {
+        if (generation !== context.generation) {
+          return { relay: false };
+        }
         const audio = asNonEmptyString(payload.audio);
         if (!audio) {
           return { relay: false };
@@ -312,12 +334,18 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       }
 
       if (type === 'operator_realtime_asr_stop') {
+        if (generation !== context.generation) {
+          return { relay: false };
+        }
         context.finalRequested = true;
         sendJson(context, { type: 'input_audio_buffer.commit', final: true });
         return { relay: false };
       }
 
       if (type === 'operator_realtime_asr_cancel') {
+        if (generation !== context.generation) {
+          return { relay: false };
+        }
         closeSession(sessionId);
         return { relay: false };
       }

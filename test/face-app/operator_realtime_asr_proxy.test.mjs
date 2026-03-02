@@ -56,6 +56,7 @@ test('operator realtime ASR proxy relays browser chunks into an upstream session
     type: 'operator_realtime_asr_start',
     session_id: 'realtime#test',
     language: 'ja',
+    generation: 2,
     ts: Date.now()
   });
   assert.deepEqual(startDirective, { relay: false });
@@ -67,6 +68,7 @@ test('operator realtime ASR proxy relays browser chunks into an upstream session
     type: 'operator_realtime_asr_chunk',
     session_id: 'realtime#test',
     language: 'ja',
+    generation: 2,
     audio: 'ZmFrZS1hdWRpbw==',
     ts: Date.now()
   });
@@ -107,9 +109,11 @@ test('operator realtime ASR proxy relays browser chunks into an upstream session
 
   assert.equal(broadcasts.length, 2);
   assert.equal(broadcasts[0].type, 'operator_realtime_asr_delta');
+  assert.equal(broadcasts[0].generation, 2);
   assert.equal(broadcasts[0].delta, 'hello ');
   assert.equal(broadcasts[0].text, 'hello ');
   assert.equal(broadcasts[1].type, 'operator_realtime_asr_done');
+  assert.equal(broadcasts[1].generation, 2);
   assert.equal(broadcasts[1].text, 'hello world');
 
   proxy.handlePayload({
@@ -117,6 +121,7 @@ test('operator realtime ASR proxy relays browser chunks into an upstream session
     type: 'operator_realtime_asr_stop',
     session_id: 'realtime#test',
     language: 'ja',
+    generation: 2,
     ts: Date.now()
   });
 
@@ -142,12 +147,14 @@ test('operator realtime ASR proxy reports configuration errors without relaying 
     type: 'operator_realtime_asr_start',
     session_id: 'disabled#test',
     language: 'en',
+    generation: 5,
     ts: Date.now()
   });
 
   assert.deepEqual(directive, { relay: false });
   assert.equal(broadcasts.length, 1);
   assert.equal(broadcasts[0].type, 'operator_realtime_asr_error');
+  assert.equal(broadcasts[0].generation, 5);
   assert.equal(broadcasts[0].error, 'realtime_asr_not_configured');
 });
 
@@ -173,6 +180,7 @@ test('operator realtime ASR proxy synthesizes done when upstream closes after fi
     type: 'operator_realtime_asr_start',
     session_id: 'realtime#close',
     language: 'en',
+    generation: 3,
     ts: Date.now()
   });
 
@@ -194,6 +202,7 @@ test('operator realtime ASR proxy synthesizes done when upstream closes after fi
     type: 'operator_realtime_asr_stop',
     session_id: 'realtime#close',
     language: 'en',
+    generation: 3,
     ts: Date.now()
   });
 
@@ -201,8 +210,10 @@ test('operator realtime ASR proxy synthesizes done when upstream closes after fi
 
   assert.equal(broadcasts.length, 2);
   assert.equal(broadcasts[0].type, 'operator_realtime_asr_delta');
+  assert.equal(broadcasts[0].generation, 3);
   assert.equal(broadcasts[0].text, 'partial text');
   assert.equal(broadcasts[1].type, 'operator_realtime_asr_done');
+  assert.equal(broadcasts[1].generation, 3);
   assert.equal(broadcasts[1].text, 'partial text');
 });
 
@@ -222,9 +233,49 @@ test('operator realtime ASR proxy ignores cancel when no session is active', asy
     type: 'operator_realtime_asr_cancel',
     session_id: 'realtime#missing',
     language: 'en',
+    generation: 1,
     ts: Date.now()
   });
 
   assert.deepEqual(directive, { relay: false });
   assert.equal(broadcasts.length, 0);
+});
+
+test('operator realtime ASR proxy ignores stale generation payloads for an active session', async () => {
+  const sockets = [];
+  const proxy = createOperatorRealtimeAsrProxy({
+    enabled: true,
+    endpointUrl: 'ws://127.0.0.1:8000/v1/realtime',
+    websocketFactory(url) {
+      const socket = new MockSocket(url);
+      sockets.push(socket);
+      return socket;
+    }
+  });
+
+  proxy.handlePayload({
+    v: 1,
+    type: 'operator_realtime_asr_start',
+    session_id: 'realtime#stale',
+    language: 'ja',
+    generation: 4,
+    ts: Date.now()
+  });
+
+  sockets[0].emit('message', {
+    data: JSON.stringify({
+      type: 'session.created'
+    })
+  });
+
+  proxy.handlePayload({
+    v: 1,
+    type: 'operator_realtime_asr_stop',
+    session_id: 'realtime#stale',
+    language: 'ja',
+    generation: 3,
+    ts: Date.now()
+  });
+
+  assert.equal(sockets[0].sent.some((payload) => payload.final === true), false);
 });
