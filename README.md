@@ -20,6 +20,17 @@ A face and operator companion app for coding agents.
 
 `minimum-headroom` combines four things into one runtime: a browser face UI, a mobile-friendly operator panel, a tmux bridge for delivering operator input to your agent terminal, and MCP signaling (`face.event` / `face.say` / `face.ping`) for realtime status voice + expression feedback.
 
+## Contents
+
+- [At a Glance](#en-at-a-glance)
+- [Quick Start](#en-quick-start)
+- [Operator Bridge (Mobile Input)](#en-operator-bridge)
+- [Optional Realtime ASR (vLLM + Voxtral)](#en-realtime-asr)
+- [TTS Model Files](#en-tts-model-files)
+- [MCP Client Config](#en-mcp-client-config)
+- [Japanese](#japanese)
+
+<a id="en-at-a-glance"></a>
 ## At a Glance
 
 - Run your coding agent in tmux, and control/assist it from terminal or mobile browser.
@@ -175,6 +186,7 @@ sequenceDiagram
   - either PortAudio (`libportaudio2`) for `sounddevice`
   - or ALSA `aplay` fallback
 
+<a id="en-quick-start"></a>
 ## Quick Start
 
 Choose one startup path depending on your goal.
@@ -227,6 +239,9 @@ Common examples:
 ```bash
 # resume existing Codex conversation
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
+
+# one-shot startup with built-in Voxtral realtime ASR + Parakeet fallback
+./scripts/run-operator-once.sh --stack-cmd 'MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 ./scripts/run-operator-stack.sh'
 
 # start with a shell in the current project, then launch any agent manually
 ./scripts/run-operator-once.sh --agent-cmd 'bash -l'
@@ -311,6 +326,7 @@ When using iOS Safari, the first tap/click unlocks browser audio. If autoplay is
   - double tap (mobile)
   - double click (desktop)
 
+<a id="en-operator-bridge"></a>
 ## Operator Bridge (Mobile Input)
 
 ### tmux Setup (From Zero)
@@ -369,6 +385,12 @@ uv sync --project tts-worker
 uv sync --project asr-worker --locked
 ```
 
+Optional setup entrypoints:
+
+- `npm run setup` -> base setup only
+- `npm run setup:all` -> base setup plus optional realtime ASR tooling (recommended if you want Voxtral realtime ASR)
+- `npm run setup:realtime-asr` -> install only the optional vLLM + Voxtral realtime ASR environment
+
 Run ASR worker alone:
 
 ```bash
@@ -392,6 +414,92 @@ Parakeet model defaults:
 
 The first run downloads models via Hugging Face cache (`~/.cache/huggingface/hub`).  
 If you already used `../english-trainer`, the same cache is reused; model file copy is usually unnecessary.
+
+<a id="en-realtime-asr"></a>
+### Optional Realtime ASR (vLLM + Voxtral)
+
+Install the optional realtime ASR environment:
+
+```bash
+./scripts/setup-realtime-asr.sh
+```
+
+This creates a dedicated vLLM virtualenv at `./.venv-vllm` and installs a nightly `vllm` build (default backend: `cu130`) plus the audio/tokenizer helper packages needed for Voxtral. If you already ran `npm run setup:all`, you can skip this step.
+
+Run the local vLLM realtime server:
+
+```bash
+./scripts/run-vllm-voxtral.sh
+```
+
+Default runtime behavior:
+
+- bind address: `127.0.0.1:8090`
+- realtime websocket: `ws://127.0.0.1:8090/v1/realtime`
+- model cache: `./.cache/huggingface/`
+- vLLM config cache: `./.cache/vllm/`
+- model: `mistralai/Voxtral-Mini-4B-Realtime-2602`
+- `gpu_memory_utilization`: `0.88` by default to leave more headroom when the desktop or other CUDA processes are active
+
+#### Recommended Startup Modes
+
+1. Parakeet only (lowest VRAM, no realtime)
+
+   Install:
+
+   ```bash
+   npm run setup
+   ```
+
+   Start:
+
+   ```bash
+   MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
+   ```
+
+   Use this on smaller GPUs, or if you only want the classic batch ASR flow.
+
+2. Voxtral realtime + Parakeet fallback (best UX, higher VRAM)
+
+   Install:
+
+   ```bash
+   npm run setup:all
+   ```
+
+   Start:
+
+   ```bash
+   MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
+   ```
+
+   This starts the local vLLM realtime server inside the integrated stack and keeps batch `/api/operator/asr` fallback enabled. On one 32GB Blackwell test host, this combined mode used about `22 GiB` of VRAM.
+
+3. Voxtral realtime only (lower VRAM than hybrid)
+
+   Install:
+
+   ```bash
+   npm run setup:all
+   ```
+
+   Start:
+
+   ```bash
+   MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_STACK_SKIP_ASR=1 MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
+   ```
+
+   This keeps realtime ASR active but disables batch `/api/operator/asr` fallback inside the integrated stack. Use this if VRAM is tight and you can live without the Parakeet fallback path.
+
+If you already started `./scripts/run-vllm-voxtral.sh` in another terminal, point the stack at that existing server instead of starting a second copy:
+
+```bash
+MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_OPERATOR_REALTIME_ASR_WS_URL=ws://127.0.0.1:8090/v1/realtime MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
+```
+
+For very short utterances (currently under about `0.25s`), the UI now skips batch fallback and shows a `speech too short to transcribe` warning instead of surfacing an ASR error. Longer realtime-empty utterances still show an explicit warning, and if batch ASR is still available they automatically retry once through the existing `/api/operator/asr` path.
+
+PTT recording also auto-stops at about `30s` per utterance, then finalizes that segment. Longer dictation should be spoken in multiple segments.
 
 ### Operator Bridge Details
 
@@ -425,7 +533,7 @@ You can override with environment variables:
 - UI mode behavior:
   - `pc`: debug panels remain visible and operator panel is available in the same page.
   - `mobile`: near full-screen translucent operator panel, terminal mirror always visible.
-- `PTT JA` / `PTT EN` records audio, sends backend ASR, then appends the transcript to the text fallback input.
+- `PTT JA` / `PTT EN` records audio, then appends text into the text fallback input. By default this is batch ASR; an experimental realtime mode can stream incremental text while you are still speaking.
 - Text fallback input is always available in operator panel and can be used even when no explicit `operator_prompt` is active.
 - Text fallback row actions:
   - `Send Text`: submit current text input to tmux/Codex.
@@ -454,6 +562,19 @@ ASR-related env vars:
 - `MH_OPERATOR_ASR_TIMEOUT_MS` (default: `20000`)
 - `MH_OPERATOR_ASR_MODEL_JA` / `MH_OPERATOR_ASR_MODEL_EN` (optional upstream model override)
 
+Experimental realtime ASR (disabled by default):
+
+- `MH_OPERATOR_REALTIME_ASR_ENABLED=1` enables the browser websocket streaming path.
+- `MH_OPERATOR_REALTIME_ASR_WS_URL` points `face-app` at a vLLM realtime websocket (default stack example: `ws://127.0.0.1:8090/v1/realtime`).
+- `MH_OPERATOR_REALTIME_ASR_MODEL` overrides the upstream realtime model name (default: `mistralai/Voxtral-Mini-4B-Realtime-2602`).
+- `MH_OPERATOR_REALTIME_ASR_SAMPLE_RATE_HZ` controls the browser-side PCM16 target sample rate (default: `16000`).
+- `MH_STACK_START_REALTIME_ASR=1` starts `./scripts/run-vllm-voxtral.sh` inside `run-operator-stack.sh` and also forces realtime mode on.
+- `REALTIME_ASR_GPU_MEMORY_UTILIZATION` sets vLLM `--gpu-memory-utilization` (default: `0.88`).
+- `MH_STACK_SKIP_ASR=1` skips launching the batch `asr-worker` inside `run-operator-stack.sh` to reduce VRAM use.
+  - When this is used with the default local ASR target and no explicit `MH_OPERATOR_ASR_ENDPOINT_URL`, `run-operator-stack.sh` also disables the local batch ASR proxy so realtime empty-result fallback does not point at a dead `8091` endpoint.
+
+When realtime mode is enabled, `PTT JA` / `PTT EN` streams PCM16 audio chunks over the existing `face-app` websocket and incremental text appears in the existing text fallback input before release. If realtime mode is disabled, unavailable, or the browser lacks the required audio APIs, the existing batch `MediaRecorder -> /api/operator/asr -> asr-worker` flow remains active.
+
 ### iOS / Tailscale Runbook
 
 ```bash
@@ -468,6 +589,10 @@ Troubleshooting quick checks:
 - No PTT transcript:
   - check ASR worker health: `curl -sS http://127.0.0.1:8091/health`
   - check `run-operator-stack.sh` logs for `asr_upstream_not_configured` / timeout
+- Realtime ASR not connecting:
+  - check vLLM server models: `curl -sS http://127.0.0.1:8090/v1/models`
+  - confirm `MH_OPERATOR_REALTIME_ASR_WS_URL=ws://127.0.0.1:8090/v1/realtime`
+  - if vLLM reports low free GPU memory, lower `REALTIME_ASR_GPU_MEMORY_UTILIZATION` (for example `0.85`) or use `MH_STACK_SKIP_ASR=1`
 - Bridge input not reaching agent:
   - verify pane id: `tmux display-message -p '#S:#I.#P'`
   - ensure `MH_BRIDGE_TMUX_PANE` matches the pane running `codex`
@@ -476,6 +601,7 @@ Troubleshooting quick checks:
 - Panel seems missing after custom CSS/UI edits:
   - confirm `FACE_UI_MODE=mobile|pc` and reload the page
 
+<a id="en-tts-model-files"></a>
 ## TTS Model Files
 
 Place model files in `assets/kokoro/`:
@@ -545,6 +671,7 @@ Applied to all `face.say` text before speech synthesis.
 
 This is implemented in the face-app TTS controller (normalization) plus tts-worker chunking/synthesis path (language routing).
 
+<a id="en-mcp-client-config"></a>
 ## MCP Client Config
 
 Do not commit your personal local config files.
@@ -636,6 +763,17 @@ npm run asr-worker:smoke
 - オペレーター入力をエージェント用tmuxペインへ届ける `operator-bridge`
 - MCPシグナリング (`face.event` / `face.say` / `face.ping`) によるリアルタイム状態通知（音声・表情）
 
+## 目次
+
+- [全体像（要点）](#ja-overview)
+- [クイックスタート](#ja-quick-start)
+- [Operator Bridge（モバイル入力）](#ja-operator-bridge)
+- [任意のRealtime ASR（vLLM + Voxtral）](#ja-realtime-asr)
+- [TTS モデルファイル](#ja-tts-model-files)
+- [MCPクライアント設定](#ja-mcp-client-config)
+- [English](#english)
+
+<a id="ja-overview"></a>
 ## 全体像（要点）
 
 - エージェントを tmux で動かし、端末またはモバイルブラウザから補助操作できます。
@@ -791,6 +929,7 @@ sequenceDiagram
   - PortAudio (`libportaudio2`) + `sounddevice`
   - または ALSA `aplay`
 
+<a id="ja-quick-start"></a>
 ## クイックスタート
 
 目的に合わせて起動パスを選んでください。
@@ -843,6 +982,9 @@ tailscale serve --bg 8765
 ```bash
 # 直前セッションを再開
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
+
+# Voxtral realtime ASR + Parakeet fallback を含めて1発起動
+./scripts/run-operator-once.sh --stack-cmd 'MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 ./scripts/run-operator-stack.sh'
 
 # 今いるプロジェクトでシェルを開き、好きなエージェントを手動起動
 ./scripts/run-operator-once.sh --agent-cmd 'bash -l'
@@ -927,6 +1069,7 @@ iOS Safari では初回タップで音声アンロックが必要です。自動
   - ダブルタップ（モバイル）
   - ダブルクリック（デスクトップ）
 
+<a id="ja-operator-bridge"></a>
 ## Operator Bridge（モバイル入力）
 
 ### tmux セットアップ（ゼロから）
@@ -982,6 +1125,12 @@ uv sync --project tts-worker
 uv sync --project asr-worker --locked
 ```
 
+追加のセットアップ導線:
+
+- `npm run setup` -> 基本セットアップのみ
+- `npm run setup:all` -> 基本セットアップ + 任意のRealtime ASR環境（Voxtral realtime ASR を使うなら推奨）
+- `npm run setup:realtime-asr` -> 任意の vLLM + Voxtral Realtime ASR環境のみ導入
+
 ASR worker 単体起動:
 
 ```bash
@@ -1004,6 +1153,92 @@ Parakeet既定モデル:
 - JA: `nvidia/parakeet-tdt_ctc-0.6b-ja`
 
 初回実行時は Hugging Face キャッシュ（`~/.cache/huggingface/hub`）へモデルを取得します。
+
+<a id="ja-realtime-asr"></a>
+### 任意のRealtime ASR（vLLM + Voxtral）
+
+任意のRealtime ASR環境を導入:
+
+```bash
+./scripts/setup-realtime-asr.sh
+```
+
+このスクリプトは専用の vLLM 仮想環境 `./.venv-vllm` を作成し、nightly の `vllm`（既定バックエンド: `cu130`）と、Voxtral で使う補助パッケージを導入します。すでに `npm run setup:all` を実行済みなら、この手順は省略できます。
+
+ローカル vLLM realtime サーバ起動:
+
+```bash
+./scripts/run-vllm-voxtral.sh
+```
+
+既定値:
+
+- バインド: `127.0.0.1:8090`
+- realtime WebSocket: `ws://127.0.0.1:8090/v1/realtime`
+- モデルキャッシュ: `./.cache/huggingface/`
+- vLLM設定キャッシュ: `./.cache/vllm/`
+- モデル: `mistralai/Voxtral-Mini-4B-Realtime-2602`
+- `gpu_memory_utilization`: 既定で `0.88`（デスクトップや他のCUDAプロセスと競合しにくくするため）
+
+#### 推奨起動モード
+
+1. Parakeetのみ（最小VRAM、Realtimeなし）
+
+   導入:
+
+   ```bash
+   npm run setup
+   ```
+
+   起動:
+
+   ```bash
+   MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
+   ```
+
+   GPUが小さい場合や、従来の batch ASR だけで十分な場合はこれが最も簡単です。
+
+2. Voxtral realtime + Parakeet fallback（体験優先、VRAM多め）
+
+   導入:
+
+   ```bash
+   npm run setup:all
+   ```
+
+   起動:
+
+   ```bash
+   MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
+   ```
+
+   この場合、統合スタック内で `./scripts/run-vllm-voxtral.sh` が起動し、batch `/api/operator/asr` フォールバックも維持されます。32GB の Blackwell テスト機では、この構成で約 `22 GiB` の VRAM を使用しました。
+
+3. Voxtral realtimeのみ（ハイブリッドより省VRAM）
+
+   導入:
+
+   ```bash
+   npm run setup:all
+   ```
+
+   起動:
+
+   ```bash
+   MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_STACK_SKIP_ASR=1 MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
+   ```
+
+   Realtime ASR は有効のまま、統合スタック内の batch `/api/operator/asr` フォールバックを停止します。VRAM が厳しい場合はこちらが向いています。
+
+すでに別ターミナルで `./scripts/run-vllm-voxtral.sh` を起動している場合は、2重起動せず既存サーバへ接続します:
+
+```bash
+MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_OPERATOR_REALTIME_ASR_WS_URL=ws://127.0.0.1:8090/v1/realtime MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
+```
+
+ごく短い発話（現在は約 `0.25` 秒未満）では、UI は batch fallback を呼ばず、`speech too short to transcribe` の warning を表示します。Realtime 経路が空文字で終わったより長い発話については、UI は明示的に warning を出し、batch ASR が利用可能なら既存の `/api/operator/asr` 経路へ1回だけ自動フォールバックします。
+
+PTT 録音は1発話あたり約 `30` 秒で自動終了し、その時点でその区間を確定します。より長い口述は複数区間に分けて話してください。
 
 ### Operator Bridge 詳細
 
@@ -1037,7 +1272,7 @@ Parakeet既定モデル:
 - UIモード:
   - `pc`: デバッグパネルを表示したまま operator panel を利用
   - `mobile`: 半透明のほぼ全画面 operator panel + 常時 terminal mirror
-- `PTT JA` / `PTT EN` は録音 -> ASR 後、文字起こし結果をテキストフォールバック入力欄へ追記します。
+- `PTT JA` / `PTT EN` は録音結果をテキストフォールバック入力欄へ追記します。既定はバッチASRで、実験的Realtime ASRを有効化すると、話している途中から増分文字起こしを表示できます。
 - テキストフォールバック入力は、`operator_prompt` が無い状態でも常時利用可能です。
 - テキスト行の操作:
   - `Send Text`（現在文字列を tmux/Codex へ送信）
@@ -1066,6 +1301,19 @@ ASR関連環境変数:
 - `MH_OPERATOR_ASR_TIMEOUT_MS`（既定: `20000`）
 - `MH_OPERATOR_ASR_MODEL_JA` / `MH_OPERATOR_ASR_MODEL_EN`（任意。上流モデル上書き）
 
+実験的Realtime ASR（既定では無効）:
+
+- `MH_OPERATOR_REALTIME_ASR_ENABLED=1` でブラウザWebSocketストリーミング経路を有効化
+- `MH_OPERATOR_REALTIME_ASR_WS_URL` で `face-app` から vLLM realtime WebSocket を指定（統合スタック既定例: `ws://127.0.0.1:8090/v1/realtime`）
+- `MH_OPERATOR_REALTIME_ASR_MODEL` で上流Realtimeモデル名を上書き（既定: `mistralai/Voxtral-Mini-4B-Realtime-2602`）
+- `MH_OPERATOR_REALTIME_ASR_SAMPLE_RATE_HZ` でブラウザ側PCM16の目標サンプルレートを指定（既定: `16000`）
+- `MH_STACK_START_REALTIME_ASR=1` で `run-operator-stack.sh` 内から `./scripts/run-vllm-voxtral.sh` を起動し、Realtime を自動で有効化
+- `REALTIME_ASR_GPU_MEMORY_UTILIZATION` で vLLM の `--gpu-memory-utilization` を指定（既定: `0.88`）
+- `MH_STACK_SKIP_ASR=1` で `run-operator-stack.sh` 内の batch `asr-worker` 起動をスキップし、VRAM消費を減らす
+  - 既定のローカルASR先のまま `MH_OPERATOR_ASR_ENDPOINT_URL` 未指定でこれを使うと、`run-operator-stack.sh` はローカル batch ASR proxy も自動で無効化し、空振りフォールバックが `8091` を叩かないようにします
+
+Realtime ASR 有効時は、`PTT JA` / `PTT EN` が既存の `face-app` WebSocket へPCM16音声チャンクを送り、ボタンを離す前から既存のテキストフォールバック入力欄へ増分文字起こしを表示します。Realtime ASR が無効・未接続・非対応ブラウザの場合は、従来どおり `MediaRecorder -> /api/operator/asr -> asr-worker` のバッチ経路を使います。
+
 ### iOS / Tailscale 運用手順
 
 ```bash
@@ -1080,6 +1328,10 @@ iPhone/iPad で Tailscale Serve URL を開いて利用します。
 - PTT文字起こしが返らない:
   - `curl -sS http://127.0.0.1:8091/health`
   - `run-operator-stack.sh` のログで `asr_upstream_not_configured` / timeout を確認
+- Realtime ASR に接続できない:
+  - `curl -sS http://127.0.0.1:8090/v1/models`
+  - `MH_OPERATOR_REALTIME_ASR_WS_URL=ws://127.0.0.1:8090/v1/realtime` を確認
+  - vLLM が空きVRAM不足を報告する場合は `REALTIME_ASR_GPU_MEMORY_UTILIZATION=0.85` などへ下げるか、`MH_STACK_SKIP_ASR=1` を使う
 - 入力がエージェントに届かない:
   - `tmux display-message -p '#S:#I.#P'`
   - `MH_BRIDGE_TMUX_PANE` が `codex` 実行ペインと一致しているか確認
@@ -1088,6 +1340,7 @@ iPhone/iPad で Tailscale Serve URL を開いて利用します。
 - パネルが見えない（カスタムCSS等の影響）:
   - `FACE_UI_MODE=mobile|pc` を確認してページ再読み込み
 
+<a id="ja-tts-model-files"></a>
 ## TTS モデルファイル
 
 モデルを `assets/kokoro/` に配置してください。
@@ -1153,6 +1406,7 @@ speech_gate:
 - 全角記号/日本語文字は保持
 - 正規化結果が空なら発話スキップ
 
+<a id="ja-mcp-client-config"></a>
 ## MCPクライアント設定
 
 個人用ローカル設定ファイルはリポジトリにコミットしないでください。

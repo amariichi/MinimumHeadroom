@@ -77,11 +77,11 @@ if ((SMOKE_MODE == 1)); then
     ASR_DEVICE="$ASR_DEVICE" \
     ASR_SINGLE_MODEL_CACHE="$ASR_SINGLE_MODEL_CACHE" \
     ASR_PRELOAD_MODELS="$ASR_PRELOAD_MODELS" \
-    uv run --project asr-worker asr-worker --smoke
+    uv run --project asr-worker python -m asr_worker --smoke
 fi
 
 exec env \
   ASR_DEVICE="$ASR_DEVICE" \
   ASR_SINGLE_MODEL_CACHE="$ASR_SINGLE_MODEL_CACHE" \
   ASR_PRELOAD_MODELS="$ASR_PRELOAD_MODELS" \
-  uv run --project asr-worker asr-worker --host "$ASR_HOST" --port "$ASR_PORT"
+  uv run --project asr-worker python -m asr_worker --host "$ASR_HOST" --port "$ASR_PORT"

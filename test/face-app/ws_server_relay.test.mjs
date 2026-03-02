@@ -62,6 +62,10 @@ async function waitForCondition(predicate, timeoutMs = 2000) {
   throw new Error('Condition timeout');
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 test('ws server serves static ui and relays payloads to display clients', async (t) => {
   const currentFile = fileURLToPath(import.meta.url);
   const currentDir = path.dirname(currentFile);
@@ -212,4 +216,67 @@ test('ws server allows custom HTTP API route handling', async (t) => {
   assert.equal(response.status, 200);
   const payload = await response.json();
   assert.deepEqual(payload, { ok: true });
+});
+
+test('ws server can suppress relay for server-only payloads', async (t) => {
+  const received = [];
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    relayPayloads: true,
+    onPayload(payload) {
+      received.push(payload);
+      if (payload.type === 'operator_realtime_asr_chunk') {
+        return { relay: false };
+      }
+      return null;
+    },
+    log: { info: () => {}, error: () => {} }
+  });
+
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const viewer = new WebSocket(server.url);
+  const sender = new WebSocket(server.url);
+
+  t.after(() => {
+    try {
+      viewer.close();
+    } catch {
+      // no-op
+    }
+
+    try {
+      sender.close();
+    } catch {
+      // no-op
+    }
+  });
+
+  await waitForOpen(viewer);
+  await waitForOpen(sender);
+
+  let relayed = false;
+  viewer.addEventListener('message', () => {
+    relayed = true;
+  });
+
+  sender.send(
+    JSON.stringify({
+      v: 1,
+      type: 'operator_realtime_asr_chunk',
+      session_id: 'relay#suppressed',
+      audio: 'ZmFrZQ==',
+      sample_rate_hz: 16000,
+      ts: Date.now()
+    })
+  );
+
+  await delay(120);
+  assert.equal(relayed, false);
+  assert.equal(received.length, 1);
+  assert.equal(received[0].type, 'operator_realtime_asr_chunk');
 });

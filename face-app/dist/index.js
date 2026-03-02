@@ -6,6 +6,7 @@ import { startFaceWebSocketServer } from './ws_server.js';
 import { createTtsController } from './tts_controller.js';
 import { loadFaceAppConfig } from './config_loader.js';
 import { createOperatorAsrProxy } from './operator_asr_proxy.js';
+import { createOperatorRealtimeAsrProxy } from './operator_realtime_asr_proxy.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -65,6 +66,11 @@ const ttsEnabled = (process.env.FACE_TTS_ENABLED ?? '1') !== '0';
 const operatorAsrBaseUrl = process.env.MH_OPERATOR_ASR_BASE_URL ?? 'http://127.0.0.1:8091';
 const operatorAsrEndpointUrl = process.env.MH_OPERATOR_ASR_ENDPOINT_URL ?? '';
 const operatorAsrTimeoutMs = Number.parseInt(process.env.MH_OPERATOR_ASR_TIMEOUT_MS ?? '20000', 10);
+const operatorRealtimeAsrEnabled = (process.env.MH_OPERATOR_REALTIME_ASR_ENABLED ?? '0') === '1';
+const operatorRealtimeAsrEndpointUrl = process.env.MH_OPERATOR_REALTIME_ASR_WS_URL ?? '';
+const operatorRealtimeAsrModel =
+  process.env.MH_OPERATOR_REALTIME_ASR_MODEL ?? 'mistralai/Voxtral-Mini-4B-Realtime-2602';
+const operatorRealtimeAsrSampleRateHz = Number.parseInt(process.env.MH_OPERATOR_REALTIME_ASR_SAMPLE_RATE_HZ ?? '16000', 10);
 const faceConfig = loadFaceAppConfig({ repoRoot, env: process.env, log: console });
 const operatorAsrProxy = createOperatorAsrProxy({
   baseUrl: operatorAsrBaseUrl,
@@ -74,6 +80,7 @@ const operatorAsrProxy = createOperatorAsrProxy({
   requestTimeoutMs: Number.isNaN(operatorAsrTimeoutMs) ? 20_000 : operatorAsrTimeoutMs,
   log: console
 });
+let operatorRealtimeAsrProxy = null;
 
 let ttsController = null;
 
@@ -132,6 +139,11 @@ const server = await startFaceWebSocketServer({
   staticDir,
   relayPayloads: true,
   onPayload(payload) {
+    const realtimeDirective = operatorRealtimeAsrProxy?.handlePayload(payload);
+    if (realtimeDirective) {
+      return realtimeDirective;
+    }
+
     if (!payload || payload.type !== 'say') {
       return;
     }
@@ -160,11 +172,28 @@ const server = await startFaceWebSocketServer({
     if (parsedUrl.pathname === '/api/operator/ui-config') {
       writeJson(response, 200, {
         ok: true,
-        uiMode
+        uiMode,
+        batchAsr: {
+          enabled: operatorAsrProxy?.enabled === true
+        },
+        realtimeAsr: {
+          enabled: operatorRealtimeAsrProxy?.enabled === true,
+          sampleRateHz: Number.isNaN(operatorRealtimeAsrSampleRateHz) ? 16_000 : operatorRealtimeAsrSampleRateHz
+        }
       });
       return true;
     }
     return operatorAsrProxy.handleHttpRequest(request, response);
+  },
+  log: console
+});
+
+operatorRealtimeAsrProxy = createOperatorRealtimeAsrProxy({
+  enabled: operatorRealtimeAsrEnabled,
+  endpointUrl: operatorRealtimeAsrEndpointUrl,
+  model: operatorRealtimeAsrModel,
+  broadcast(payload) {
+    return server.broadcast(payload);
   },
   log: console
 });
@@ -203,6 +232,9 @@ async function shutdown(signal) {
   try {
     if (ttsController) {
       await ttsController.stop();
+    }
+    if (operatorRealtimeAsrProxy) {
+      await operatorRealtimeAsrProxy.closeAll();
     }
     await server.stop();
   } catch (error) {

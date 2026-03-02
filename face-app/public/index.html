@@ -93,15 +93,16 @@
         </div>
 
         <div id="operator-text-card" class="operator-text-card">
-          <input
+          <textarea
             id="operator-text-input"
             class="operator-text-input"
-            type="text"
+            rows="1"
+            wrap="soft"
             autocomplete="off"
             autocapitalize="none"
             spellcheck="false"
             placeholder="Text fallback input"
-          />
+          ></textarea>
           <div class="operator-text-actions">
             <button id="operator-text-send" type="button" class="operator-btn">Send Text</button>
             <button id="operator-text-clear" type="button" class="operator-btn">Clear</button>

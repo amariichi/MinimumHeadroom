@@ -7,11 +7,14 @@ npm-debug.log*
 __pycache__/
 .pytest_cache/
 .venv/
+.venv-vllm/
 tts-worker/.venv/
 asr-worker/.venv/
 
 # Local tool configs and caches
 .codex_/
+.cache/huggingface/
+.cache/vllm/
 .env
 .env.*
 .agent/

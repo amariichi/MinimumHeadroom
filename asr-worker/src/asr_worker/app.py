@@ -136,6 +136,7 @@ def create_app() -> FastAPI:
             "preloadModels": settings.preload_models,
         }
 
+    # Reserved for internal/experimental single-model fast decode; the current operator UI uses /v1/asr/ja and /v1/asr/en.
     @app.post("/v1/asr/fast", response_model=AsrResponse)
     def fast_decode(request: AsrRequest) -> AsrResponse:
         with inference_lock:

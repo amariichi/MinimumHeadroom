@@ -135,6 +135,7 @@ export function createOperatorAsrProxy(options = {}) {
   }
 
   return {
+    enabled: Boolean(endpointUrl || baseUrl),
     async handleHttpRequest(request, response) {
       const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
       if (parsedUrl.pathname !== '/api/operator/asr') {
