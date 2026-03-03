@@ -28,3 +28,6 @@ GEMINI.local.md
 # Large local model assets (downloaded manually)
 assets/kokoro/kokoro-v1.0.onnx
 assets/kokoro/voices-v1.0.bin
+
+# Generated closed-loop reports
+test/tts-asr-loop/latest-*.md

@@ -8,12 +8,58 @@ QWEN3_STYLES = {'neutral', 'soft', 'narration'}
 QWEN3_LANGUAGES = {'Japanese', 'English'}
 _ASCII_TOKEN_RE = re.compile(r'(?<![A-Za-z0-9])([A-Za-z0-9][A-Za-z0-9./:+_-]{1,7})(?![A-Za-z0-9])')
 _LEADING_WHITESPACE_RE = re.compile(r'^(\s*)')
+_MIXED_BOUNDARY_TOKEN_RE = r'([A-Za-z0-9][A-Za-z0-9./:+_-]{0,31})'
+_KANJI_SCRIPT_CLASS = r'㐀-䶿一-龯々〆ヵヶ豈-﫿'
+_ASCII_DIRECT_TO_KANJI_RE = re.compile(rf'{_MIXED_BOUNDARY_TOKEN_RE}(?=[{_KANJI_SCRIPT_CLASS}])')
+_ASCII_CLAUSE_BREAK_TO_KANJI_RE = re.compile(rf'{_MIXED_BOUNDARY_TOKEN_RE}\s*[,;:]\s*(?=[{_KANJI_SCRIPT_CLASS}])')
+_ASCII_SENTENCE_BREAK_TO_KANJI_RE = re.compile(rf'{_MIXED_BOUNDARY_TOKEN_RE}\s*[.!?]\s*(?=[{_KANJI_SCRIPT_CLASS}])')
 _KANA_ALIASES = {
   'AI': 'エーアイ',
   'API': 'エーピーアイ',
   'HTTP': 'エイチティーティーピー',
   'HTTPS': 'エイチティーティーピーエス',
   'URL': 'ユーアールエル',
+}
+_EXACT_SPEECH_ALIASES = {
+  'CI/CD': 'シーアイ・シーディー',
+  'GitHub': 'ギットハブ',
+  'github': 'ギットハブ',
+  'nodejs': 'ノードジェイエス',
+  'Node.js': 'ノードジェイエス',
+  'node.js': 'ノードジェイエス',
+}
+_EXACT_JAPANESE_SPEECH_ALIASES = {
+  '承認申請': 'しょうにんしんせい',
+  '次は': 'つぎは',
+  '次に': 'つぎに',
+}
+_LATIN_LETTER_KANA = {
+  'A': 'エー',
+  'B': 'ビー',
+  'C': 'シー',
+  'D': 'ディー',
+  'E': 'イー',
+  'F': 'エフ',
+  'G': 'ジー',
+  'H': 'エイチ',
+  'I': 'アイ',
+  'J': 'ジェイ',
+  'K': 'ケイ',
+  'L': 'エル',
+  'M': 'エム',
+  'N': 'エヌ',
+  'O': 'オー',
+  'P': 'ピー',
+  'Q': 'キュー',
+  'R': 'アール',
+  'S': 'エス',
+  'T': 'ティー',
+  'U': 'ユー',
+  'V': 'ブイ',
+  'W': 'ダブリュー',
+  'X': 'エックス',
+  'Y': 'ワイ',
+  'Z': 'ゼット',
 }
 
 
@@ -50,7 +96,9 @@ def prepare_qwen3_text(text: str, *, ascii_mode: str, language: str) -> str:
   normalized_language = normalize_language(language)
   text = _apply_japanese_leadin_filler(text, language=normalized_language)
   if normalized_language != 'Japanese':
-    return text
+    text = _stabilize_english_mixed_script_boundaries(text)
+    text = _apply_exact_japanese_speech_aliases(text)
+    return _apply_english_speech_aliases(text)
 
   mode = normalize_ascii_mode(ascii_mode)
   if mode == 'preserve':
@@ -58,13 +106,14 @@ def prepare_qwen3_text(text: str, *, ascii_mode: str, language: str) -> str:
 
   def replace(match: re.Match[str]) -> str:
     token = match.group(1)
+    if mode == 'kana_alias':
+      alias = _render_kana_alias(token)
+      if alias:
+        return alias
     if not _is_rewritable_ascii_token(token):
       return token
     if mode == 'fullwidth':
       return _to_fullwidth(token)
-    alias = _KANA_ALIASES.get(token.upper())
-    if alias:
-      return alias
     return token
 
   return _ASCII_TOKEN_RE.sub(replace, text)
@@ -113,12 +162,64 @@ def _apply_japanese_leadin_filler(text: str, *, language: str) -> str:
   return f'{leading}はい、{text[len(leading):]}'
 
 
+def _apply_english_speech_aliases(text: str) -> str:
+  def replace(match: re.Match[str]) -> str:
+    token = match.group(1)
+    alias = _render_spoken_ascii_alias(token)
+    if alias:
+      return alias
+    return token
+
+  return _ASCII_TOKEN_RE.sub(replace, text)
+
+
+def _apply_exact_japanese_speech_aliases(text: str) -> str:
+  for source, replacement in _EXACT_JAPANESE_SPEECH_ALIASES.items():
+    text = text.replace(source, replacement)
+  return text
+
+
+def _stabilize_english_mixed_script_boundaries(text: str) -> str:
+  text = _ASCII_CLAUSE_BREAK_TO_KANJI_RE.sub(r'\1、', text)
+  text = _ASCII_SENTENCE_BREAK_TO_KANJI_RE.sub(r'\1。', text)
+  return _ASCII_DIRECT_TO_KANJI_RE.sub(r'\1、', text)
+
+
 def _is_rewritable_ascii_token(token: str) -> bool:
   if len(token) < 2 or len(token) > 8:
     return False
   if token.upper() != token:
     return False
   return any(char.isalnum() for char in token)
+
+
+def _render_kana_alias(token: str) -> str | None:
+  return _render_spoken_ascii_alias(token, allow_explicit_aliases=True)
+
+
+def _render_spoken_ascii_alias(token: str, *, allow_explicit_aliases: bool = True) -> str | None:
+  if allow_explicit_aliases:
+    explicit = _EXACT_SPEECH_ALIASES.get(token)
+    if explicit is None:
+      explicit = _EXACT_SPEECH_ALIASES.get(token.lower())
+    if explicit:
+      return explicit
+  if not token.isalpha() or len(token) < 2 or len(token) > 8:
+    return None
+  upper = token.upper()
+  alias = _KANA_ALIASES.get(upper)
+  if alias:
+    return alias
+  if token != upper:
+    return None
+
+  rendered: list[str] = []
+  for char in upper:
+    spoken = _LATIN_LETTER_KANA.get(char)
+    if spoken is None:
+      return None
+    rendered.append(spoken)
+  return ''.join(rendered)
 
 
 def _first_significant_char(text: str) -> str | None:

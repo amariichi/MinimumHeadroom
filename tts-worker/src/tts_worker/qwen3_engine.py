@@ -35,7 +35,7 @@ def load_qwen3_config() -> Qwen3Config:
   device_map = _env_or_default('MH_QWEN_TTS_DEVICE_MAP', 'auto')
   dtype_name = _env_or_default('MH_QWEN_TTS_DTYPE', 'bfloat16')
   gain = _parse_gain(_env_or_default('MH_QWEN_TTS_GAIN', '1.50'))
-  speed = _parse_speed(_env_or_default('MH_QWEN_TTS_SPEED', '1.10'))
+  speed = _parse_speed(_env_or_default('MH_QWEN_TTS_SPEED', '1.0'))
   return Qwen3Config(
     model_id=model_id,
     speaker=speaker,
@@ -71,14 +71,15 @@ class Qwen3TtsEngine:
       ),
     )
 
-  def synthesize_text(self, text: str) -> Tuple[np.ndarray, int]:
+  def synthesize_text(self, text: str, *, voice_override: str | None = None) -> Tuple[np.ndarray, int]:
     model = self._ensure_model()
     prepared = prepare_qwen3_text(text, ascii_mode=self.config.ascii_mode, language=self.config.language)
     instruction = build_qwen3_instruction(self.config.style, language=self.config.language)
+    speaker = voice_override.strip() if isinstance(voice_override, str) and voice_override.strip() != '' else self.config.speaker
     wavs, sample_rate = model.generate_custom_voice(
       text=prepared,
       language=self.config.language,
-      speaker=self.config.speaker,
+      speaker=speaker,
       instruct=instruction,
     )
     audio = _normalize_qwen_audio(wavs)
@@ -176,7 +177,7 @@ def _parse_speed(raw: str) -> float:
   try:
     speed = float(raw)
   except ValueError as error:
-    raise RuntimeError(f'unsupported MH_QWEN_TTS_SPEED: {raw} (expected a float such as 1.0 or 1.10)') from error
+    raise RuntimeError(f'unsupported MH_QWEN_TTS_SPEED: {raw} (expected a float such as 1.0 or 1.1)') from error
   if speed <= 0.5 or speed > 2.0:
     raise RuntimeError(f'unsupported MH_QWEN_TTS_SPEED: {raw} (expected a value between 0.5 and 2.0)')
   return speed

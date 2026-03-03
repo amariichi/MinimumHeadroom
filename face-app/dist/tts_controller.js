@@ -8,6 +8,13 @@ const DEFAULT_WORKER_COMMAND = {
   cmd: './scripts/run-tts-worker.sh',
   args: []
 };
+const DEFAULT_QWEN_BOUNDARY_SPEAKER = 'Ono_Anna';
+const QWEN_ENGINE_NAME = 'qwen3-tts-0.6b-customvoice';
+const KANJI_SCRIPT_CLASS = '㐀-䶿一-龯々〆ヵヶ豈-﫿';
+const QWEN_BOUNDARY_SPEAKER_RE = new RegExp(
+  `(?:[A-Za-z0-9][A-Za-z0-9./:+_-]{0,31})(?:\\s*[.,;:!?]\\s*)?(?=[${KANJI_SCRIPT_CLASS}])`,
+  'u'
+);
 
 function toLogger(log) {
   if (!log) {
@@ -115,6 +122,27 @@ function normalizeRevision(value, fallback) {
     return Math.floor(value);
   }
   return fallback;
+}
+
+function normalizeSpeakerOverride(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function selectQwenSpeakerForText(text, { engine, defaultVoice, boundarySpeaker }) {
+  if (engine !== QWEN_ENGINE_NAME) {
+    return null;
+  }
+  if (!QWEN_BOUNDARY_SPEAKER_RE.test(text)) {
+    return null;
+  }
+  if (boundarySpeaker === null || boundarySpeaker === defaultVoice) {
+    return null;
+  }
+  return boundarySpeaker;
 }
 
 function makeLineJsonParser(onMessage, onParseError) {
@@ -251,9 +279,12 @@ export function createTtsController(options = {}) {
     command: options.workerCommand,
     env: options.workerEnv
   });
+  const qwenBoundarySpeaker = normalizeSpeakerOverride(options.qwenBoundarySpeaker) ?? DEFAULT_QWEN_BOUNDARY_SPEAKER;
 
   let stopped = false;
   let workerReady = false;
+  let workerEngine = 'unknown';
+  let workerVoice = 'af_heart';
   let generation = 0;
   let active = null;
   let activeQueuedAt = null;
@@ -311,6 +342,11 @@ export function createTtsController(options = {}) {
 
     const fallbackMessageId = `${sessionId}:${currentGeneration}`;
     const revision = normalizeRevision(payload?.revision, createdAt);
+    const speaker = selectQwenSpeakerForText(text, {
+      engine: workerEngine,
+      defaultVoice: workerVoice,
+      boundarySpeaker: qwenBoundarySpeaker
+    });
     return {
       generation: currentGeneration,
       sessionId,
@@ -318,6 +354,7 @@ export function createTtsController(options = {}) {
       messageId: normalizeMessageId(payload?.message_id, fallbackMessageId),
       revision,
       text,
+      speaker,
       priority,
       policy,
       ttlMs,
@@ -345,6 +382,7 @@ export function createTtsController(options = {}) {
       emitState(entry.sessionId, entry.utteranceId, 'dropped', {
         reason: 'worker_unavailable',
         generation: entry.generation,
+        voice: entry.speaker ?? workerVoice,
         message_id: entry.messageId,
         revision: entry.revision
       });
@@ -355,6 +393,7 @@ export function createTtsController(options = {}) {
       emitState(entry.sessionId, entry.utteranceId, 'dropped', {
         reason: 'ttl_expired',
         generation: entry.generation,
+        voice: entry.speaker ?? workerVoice,
         message_id: entry.messageId,
         revision: entry.revision
       });
@@ -369,6 +408,7 @@ export function createTtsController(options = {}) {
       session_id: entry.sessionId,
       utterance_id: entry.utteranceId,
       text: entry.text,
+      speaker: entry.speaker,
       priority: entry.priority,
       policy: entry.policy,
       ts: entry.createdAt,
@@ -382,6 +422,7 @@ export function createTtsController(options = {}) {
       emitState(entry.sessionId, entry.utteranceId, 'dropped', {
         reason: 'worker_send_failed',
         generation: entry.generation,
+        voice: entry.speaker ?? workerVoice,
         message_id: entry.messageId,
         revision: entry.revision
       });
@@ -394,6 +435,7 @@ export function createTtsController(options = {}) {
     emitState(entry.sessionId, entry.utteranceId, 'queued', {
       reason,
       generation: entry.generation,
+      voice: entry.speaker ?? workerVoice,
       expires_at: expiresAt,
       message_id: entry.messageId,
       revision: entry.revision
@@ -466,10 +508,12 @@ export function createTtsController(options = {}) {
 
     if (message.type === 'ready') {
       workerReady = true;
+      workerEngine = typeof message.engine === 'string' ? message.engine : 'unknown';
+      workerVoice = typeof message.voice === 'string' ? message.voice : 'af_heart';
       const playbackBackend = typeof message.playback_backend === 'string' ? message.playback_backend : 'unknown';
       emitState('-', null, 'worker_ready', {
-        voice: message.voice ?? 'af_heart',
-        engine: message.engine ?? 'kokoro',
+        voice: workerVoice,
+        engine: workerEngine,
         playback_backend: playbackBackend,
         audio_target: audioTarget
       });

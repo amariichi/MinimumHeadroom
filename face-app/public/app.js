@@ -13,6 +13,8 @@ import {
 import { createDoubleTapTracker, shouldIgnoreToggleTarget } from './gesture_controls.js';
 import { createInitialOperatorUiState, deriveOperatorUiFlags, reduceOperatorUiState } from './operator_ui_state.js';
 import { isDefaultAnsiStyle, parseAnsiRuns } from './operator_ansi.js';
+import { getOperatorRealtimeAsrSuspicion, resolveOperatorRealtimeAsrFinalText, shouldAcceptOperatorBatchFallbackResult } from './operator_asr_text.js';
+import { normalizeOperatorAsrTerms } from './operator_asr_term_normalizer.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -769,7 +771,7 @@ function appendOperatorTextInput(value, language = 'en') {
   if (!operatorTextInputEl || typeof value !== 'string') {
     return false;
   }
-  const text = value.trim();
+  const text = normalizeOperatorAsrTerms(value.trim(), language);
   if (text === '') {
     return false;
   }
@@ -885,7 +887,7 @@ function finalizeOperatorRealtimeDraft(value) {
     return;
   }
   if (typeof value === 'string' && value !== '') {
-    operatorMicState.realtimeText = value;
+    operatorMicState.realtimeText = normalizeOperatorAsrTerms(value, operatorMicState.language);
     renderOperatorRealtimeDraft();
   }
   clearOperatorRealtimeDraft(true);
@@ -1010,175 +1012,9 @@ function formatOperatorAsrErrorDetail(detail) {
   return '';
 }
 
-function isOperatorAsciiDigitCodePoint(codePoint) {
-  return codePoint >= 0x30 && codePoint <= 0x39;
-}
-
-function isOperatorFullwidthDigitCodePoint(codePoint) {
-  return codePoint >= 0xff10 && codePoint <= 0xff19;
-}
-
-function isOperatorAsciiLatinCodePoint(codePoint) {
-  return (codePoint >= 0x41 && codePoint <= 0x5a) || (codePoint >= 0x61 && codePoint <= 0x7a);
-}
-
-function isOperatorFullwidthLatinCodePoint(codePoint) {
-  return (codePoint >= 0xff21 && codePoint <= 0xff3a) || (codePoint >= 0xff41 && codePoint <= 0xff5a);
-}
-
-function isOperatorExtendedLatinCodePoint(codePoint) {
-  return (
-    (codePoint >= 0x00c0 && codePoint <= 0x00d6) ||
-    (codePoint >= 0x00d8 && codePoint <= 0x00f6) ||
-    (codePoint >= 0x00f8 && codePoint <= 0x00ff) ||
-    (codePoint >= 0x0100 && codePoint <= 0x024f) ||
-    (codePoint >= 0x1e00 && codePoint <= 0x1eff)
-  );
-}
-
-function isOperatorLatinCombiningMarkCodePoint(codePoint) {
-  return codePoint >= 0x0300 && codePoint <= 0x036f;
-}
-
-function isOperatorJapaneseCodePoint(codePoint) {
-  return (
-    (codePoint >= 0x3040 && codePoint <= 0x309f) ||
-    (codePoint >= 0x30a0 && codePoint <= 0x30ff) ||
-    (codePoint >= 0x31f0 && codePoint <= 0x31ff) ||
-    (codePoint >= 0xff66 && codePoint <= 0xff9d) ||
-    (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
-    (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-    codePoint === 0x3005 ||
-    codePoint === 0x303b
-  );
-}
-
-function isOperatorHangulCodePoint(codePoint) {
-  return (
-    (codePoint >= 0x1100 && codePoint <= 0x11ff) ||
-    (codePoint >= 0x3130 && codePoint <= 0x318f) ||
-    (codePoint >= 0xa960 && codePoint <= 0xa97f) ||
-    (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
-    (codePoint >= 0xd7b0 && codePoint <= 0xd7ff)
-  );
-}
-
-function isOperatorCyrillicCodePoint(codePoint) {
-  return (
-    (codePoint >= 0x0400 && codePoint <= 0x04ff) ||
-    (codePoint >= 0x0500 && codePoint <= 0x052f) ||
-    (codePoint >= 0x1c80 && codePoint <= 0x1c8f) ||
-    (codePoint >= 0x2de0 && codePoint <= 0x2dff) ||
-    (codePoint >= 0xa640 && codePoint <= 0xa69f)
-  );
-}
-
-function isOperatorIgnorableCodePoint(codePoint) {
-  return (
-    codePoint <= 0x20 ||
-    isOperatorAsciiDigitCodePoint(codePoint) ||
-    isOperatorFullwidthDigitCodePoint(codePoint) ||
-    (codePoint >= 0x21 && codePoint <= 0x2f) ||
-    (codePoint >= 0x3a && codePoint <= 0x40) ||
-    (codePoint >= 0x5b && codePoint <= 0x60) ||
-    (codePoint >= 0x7b && codePoint <= 0x7e) ||
-    (codePoint >= 0x3000 && codePoint <= 0x303f) ||
-    (codePoint >= 0xff01 && codePoint <= 0xff0f) ||
-    (codePoint >= 0xff1a && codePoint <= 0xff20) ||
-    (codePoint >= 0xff3b && codePoint <= 0xff40) ||
-    (codePoint >= 0xff5b && codePoint <= 0xff65)
-  );
-}
-
-function analyzeOperatorRealtimeAsrText(text) {
-  const result = {
-    japaneseCount: 0,
-    latinCount: 0,
-    hangulCount: 0,
-    cyrillicCount: 0,
-    otherCount: 0,
-    significantCount: 0
-  };
-  if (typeof text !== 'string' || text === '') {
-    return result;
-  }
-  for (const symbol of text) {
-    const codePoint = symbol.codePointAt(0);
-    if (!Number.isFinite(codePoint) || isOperatorIgnorableCodePoint(codePoint)) {
-      continue;
-    }
-    if (isOperatorJapaneseCodePoint(codePoint)) {
-      result.japaneseCount += 1;
-      result.significantCount += 1;
-      continue;
-    }
-    if (
-      isOperatorAsciiLatinCodePoint(codePoint) ||
-      isOperatorFullwidthLatinCodePoint(codePoint) ||
-      isOperatorExtendedLatinCodePoint(codePoint)
-    ) {
-      result.latinCount += 1;
-      result.significantCount += 1;
-      continue;
-    }
-    if (isOperatorLatinCombiningMarkCodePoint(codePoint)) {
-      continue;
-    }
-    if (isOperatorHangulCodePoint(codePoint)) {
-      result.hangulCount += 1;
-      result.significantCount += 1;
-      continue;
-    }
-    if (isOperatorCyrillicCodePoint(codePoint)) {
-      result.cyrillicCount += 1;
-      result.significantCount += 1;
-      continue;
-    }
-    if (codePoint > 0x7f) {
-      result.otherCount += 1;
-      result.significantCount += 1;
-    }
-  }
-  return result;
-}
-
-function getOperatorRealtimeAsrSuspicion(text, language = 'en') {
-  if (typeof text !== 'string' || text.trim() === '') {
-    return null;
-  }
-  const analysis = analyzeOperatorRealtimeAsrText(text);
-  if (analysis.hangulCount > 0) {
-    return 'hangul';
-  }
-  if (analysis.cyrillicCount > 0) {
-    return 'cyrillic';
-  }
-  if (analysis.otherCount > 0) {
-    return 'other-script';
-  }
-  if (analysis.significantCount === 1) {
-    if (language === 'ja' && analysis.japaneseCount === 0) {
-      return 'single-non-japanese';
-    }
-    if (language === 'en' && analysis.latinCount === 0) {
-      return 'single-non-english';
-    }
-  }
-  if (language === 'en' && analysis.significantCount > 0 && analysis.latinCount === 0 && analysis.japaneseCount > 0) {
-    return 'non-english';
-  }
-  return null;
-}
-
-function shouldAcceptOperatorBatchFallbackResult(result, language = 'en') {
-  if (!result || typeof result.text !== 'string' || result.text.trim() === '') {
-    return false;
-  }
-  return getOperatorRealtimeAsrSuspicion(result.text, language) === null;
-}
-
 async function attemptOperatorRealtimeBatchFallback(language = 'en', reason = 'empty') {
+  const isSuspicious = reason === 'suspicious';
+  const isError = reason === 'error';
   const audioSeconds = estimateOperatorRealtimeAudioSeconds(
     operatorMicState.realtimePcmBytes,
     operatorRealtimeAsrConfig.sampleRateHz
@@ -1194,7 +1030,11 @@ async function attemptOperatorRealtimeBatchFallback(language = 'en', reason = 'e
 
   if (!wavBlob) {
     setOperatorStatusLine(
-      reason === 'suspicious' ? `realtime ASR rejected suspicious text (${language})` : `realtime ASR returned empty text (${language})`,
+      isSuspicious
+        ? `realtime ASR rejected suspicious text (${language})`
+        : isError
+          ? `realtime ASR failed (${language})`
+          : `realtime ASR returned empty text (${language})`,
       'warn'
     );
     return false;
@@ -1202,16 +1042,22 @@ async function attemptOperatorRealtimeBatchFallback(language = 'en', reason = 'e
 
   if (!operatorBatchAsrConfig.enabled) {
     setOperatorStatusLine(
-      reason === 'suspicious'
+      isSuspicious
         ? `realtime ASR rejected suspicious text (${language}); batch fallback unavailable`
-        : `realtime ASR returned empty text (${language}); batch fallback unavailable`,
+        : isError
+          ? `realtime ASR failed (${language}); batch fallback unavailable`
+          : `realtime ASR returned empty text (${language}); batch fallback unavailable`,
       'warn'
     );
     return false;
   }
 
   setOperatorStatusLine(
-    reason === 'suspicious' ? `realtime ASR looked off; retrying batch (${language})...` : `realtime ASR empty; retrying batch (${language})...`,
+    isSuspicious
+      ? `realtime ASR looked off; retrying batch (${language})...`
+      : isError
+        ? `realtime ASR failed; retrying batch (${language})...`
+        : `realtime ASR empty; retrying batch (${language})...`,
     'default'
   );
   try {
@@ -1225,7 +1071,14 @@ async function attemptOperatorRealtimeBatchFallback(language = 'en', reason = 'e
     setOperatorStatusLine(`batch fallback ready (${transcript.language})`, 'ok');
     return true;
   } catch (error) {
-    setOperatorStatusLine(`realtime ASR empty; batch fallback failed: ${error.message}`, 'warn');
+    setOperatorStatusLine(
+      isSuspicious
+        ? `realtime ASR suspicious; batch fallback failed: ${error.message}`
+        : isError
+          ? `realtime ASR failed; batch fallback failed: ${error.message}`
+          : `realtime ASR empty; batch fallback failed: ${error.message}`,
+      'warn'
+    );
     return false;
   }
 }
@@ -2174,6 +2027,11 @@ async function stopOperatorRecordingAndTranscribe() {
     }
 
     const result = await requestOperatorAsrTranscript(blob, blob.type || recorder.mimeType || 'audio/webm', operatorMicState.language);
+    const suspicion = getOperatorRealtimeAsrSuspicion(result.text, operatorMicState.language);
+    if (suspicion) {
+      setOperatorStatusLine(`asr rejected (${operatorMicState.language}): ${suspicion}`, 'warn');
+      return;
+    }
     appendOperatorTextInput(result.text, result.language);
   } catch (error) {
     setOperatorStatusLine(`asr error: ${error.message}`, 'warn');
@@ -2311,15 +2169,17 @@ function handleOperatorRealtimeAsrDone(payload) {
   }
   const language = payload.language === 'ja' ? 'ja' : 'en';
   const text = typeof payload.text === 'string' ? payload.text : '';
-  const suspicion = getOperatorRealtimeAsrSuspicion(text, language);
   const hadDraftText = operatorMicState.realtimeDraftActive && operatorMicState.realtimeText.trim() !== '';
+  const resolved = resolveOperatorRealtimeAsrFinalText(text, operatorMicState.realtimeText, language);
+  const candidateText = resolved.text;
+  const suspicion = getOperatorRealtimeAsrSuspicion(candidateText, language);
   if (!operatorMicState.realtimeDraftActive) {
-    if (text.trim() !== '') {
+    if (candidateText !== '') {
       if (suspicion) {
         void attemptOperatorRealtimeBatchFallback(language, 'suspicious');
         return;
       }
-      appendOperatorTextInput(text, language);
+      appendOperatorTextInput(candidateText, language);
       clearOperatorRealtimeAudioBuffer();
       setOperatorStatusLine(`realtime ASR ready (${language})`, 'ok');
       return;
@@ -2332,8 +2192,8 @@ function handleOperatorRealtimeAsrDone(payload) {
     void attemptOperatorRealtimeBatchFallback(language, 'suspicious');
     return;
   }
-  finalizeOperatorRealtimeDraft(text);
-  if (text.trim() === '' && !hadDraftText) {
+  finalizeOperatorRealtimeDraft(candidateText);
+  if (candidateText === '' && !hadDraftText) {
     void attemptOperatorRealtimeBatchFallback(language);
     return;
   }
@@ -2346,8 +2206,14 @@ function handleOperatorRealtimeAsrError(payload) {
     return;
   }
   const error = typeof payload.error === 'string' ? payload.error : 'realtime_asr_error';
+  const language = payload.language === 'ja' ? 'ja' : 'en';
+  const hasBufferedAudio = operatorMicState.realtimePcmBytes > 0;
   if (operatorMicState.realtimeDraftActive) {
     clearOperatorRealtimeDraft(true);
+  }
+  if (hasBufferedAudio) {
+    void attemptOperatorRealtimeBatchFallback(language, 'error');
+    return;
   }
   clearOperatorRealtimeAudioBuffer();
   setOperatorStatusLine(`realtime ASR error: ${error}`, 'warn');

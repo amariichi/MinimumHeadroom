@@ -1,0 +1,101 @@
+[
+  {
+    "id": "github_push",
+    "tier": "stable",
+    "language": "ja",
+    "displayText": "GitHubにpushしてください。",
+    "ttsInput": "ギットハブにプッシュしてください。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Spells GitHub and push in spoken Japanese so Qwen3 can pronounce them naturally, then expects ASR normalization to restore canonical spellings."
+  },
+  {
+    "id": "pr_ci_cd",
+    "tier": "stable",
+    "language": "ja",
+    "displayText": "PRを出してCIが通ったらCDします。",
+    "ttsInput": "ピーアールを出してシーアイが通ったらシーディーします。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Exercises acronym normalization while keeping the displayed text in canonical uppercase form."
+  },
+  {
+    "id": "json_yaml",
+    "tier": "stable",
+    "language": "ja",
+    "displayText": "JSONとYAMLを確認します。",
+    "ttsInput": "ジェイエスオーエヌとヤムルを確認します。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Compares spoken acronym aliases against the desired machine-readable spellings."
+  },
+  {
+    "id": "node_api_http",
+    "tier": "stable",
+    "language": "ja",
+    "displayText": "Node.jsでAPIとHTTPを確認します。",
+    "ttsInput": "ノードジェイエスでエーピーアイとエイチティーティーピーを確認します。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Covers mixed-form technical tokens that rely on both Qwen3 speech aliases and ASR-side canonicalization."
+  },
+  {
+    "id": "ssh_cli_json_gpu",
+    "tier": "fragile",
+    "language": "ja",
+    "displayText": "CLIからSSHでJSONとYAMLを見てGPUとCPUを確認します。",
+    "ttsInput": "シーエルアイから、エスエスエイチでジェイエスオーエヌとヤムルを見てジーピーユーとシーピーユーを確認します。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Exercises a dense cluster of acronym-heavy technical terms in one utterance while avoiding an unstable leading-acronym position."
+  },
+  {
+    "id": "cli_ssh_pair",
+    "tier": "stable",
+    "language": "ja",
+    "displayText": "CLIからSSHで入ります。",
+    "ttsInput": "シーエルアイから、エスエスエイチで入ります。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Isolates the CLI and SSH segment from the denser acronym stress case so leading-token drift can be measured separately."
+  },
+  {
+    "id": "gpu_cpu_pair",
+    "tier": "stable",
+    "language": "ja",
+    "displayText": "GPUとCPUを確認します。",
+    "ttsInput": "ジーピーユーとシーピーユーを確認します。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Isolates the GPU and CPU pair from the denser acronym stress case so late-token drift can be measured separately."
+  },
+  {
+    "id": "kanji_led_request",
+    "tier": "fragile",
+    "language": "ja",
+    "displayText": "承認申請をお願いします。",
+    "ttsInput": "承認申請をお願いします。",
+    "allowOptionalHaiPrefix": true,
+    "notes": "Allows an optional leading はい、 because the current English-profile Qwen3 path may inject that filler when the phrase begins with kanji."
+  },
+  {
+    "id": "github_approval_stress",
+    "tier": "fragile",
+    "language": "ja",
+    "displayText": "GitHub承認申請をお願いします。",
+    "ttsInput": "ギットハブ、承認申請をお願いします。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Mixed-script stress case. The spoken comma reduces pronunciation drift, but this remains a human-review-heavy scenario."
+  },
+  {
+    "id": "github_approval_boundary",
+    "tier": "fragile",
+    "language": "ja",
+    "displayText": "GitHub承認申請をお願いします。",
+    "ttsInput": "GitHub.承認申請をお願いします。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Exercises the English-profile boundary rule when an ASCII sentence break is followed immediately by a kanji-led Japanese phrase."
+  },
+  {
+    "id": "nodejs_approval_boundary",
+    "tier": "fragile",
+    "language": "ja",
+    "displayText": "Node.js承認申請をお願いします。",
+    "ttsInput": "Node.js承認申請をお願いします。",
+    "allowOptionalHaiPrefix": false,
+    "notes": "Exercises the English-profile boundary rule when a mixed-form technical token is followed immediately by a kanji-led Japanese phrase."
+  }
+]
