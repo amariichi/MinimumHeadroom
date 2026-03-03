@@ -20,5 +20,5 @@ class TtsEngine(Protocol):
   def metadata(self) -> EngineMetadata:
     ...
 
-  def synthesize_text(self, text: str) -> Tuple[np.ndarray, int]:
+  def synthesize_text(self, text: str, *, voice_override: str | None = None) -> Tuple[np.ndarray, int]:
     ...

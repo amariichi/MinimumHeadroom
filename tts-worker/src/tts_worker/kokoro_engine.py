@@ -86,13 +86,14 @@ class KokoroEngine:
   def chunk_text(self, text: str) -> list[TextChunk]:
     return split_text_chunks(text)
 
-  def synthesize_text(self, text: str) -> Tuple[np.ndarray, int]:
+  def synthesize_text(self, text: str, *, voice_override: str | None = None) -> Tuple[np.ndarray, int]:
     chunks = self.chunk_text(text)
-    return self.synthesize_chunks(chunks)
+    return self.synthesize_chunks(chunks, voice_override=voice_override)
 
-  def synthesize_chunks(self, chunks: Iterable[TextChunk]) -> Tuple[np.ndarray, int]:
+  def synthesize_chunks(self, chunks: Iterable[TextChunk], *, voice_override: str | None = None) -> Tuple[np.ndarray, int]:
     combined: Optional[np.ndarray] = None
     sample_rate: Optional[int] = None
+    active_voice = voice_override.strip() if isinstance(voice_override, str) and voice_override.strip() != '' else self.voice
 
     for chunk in chunks:
       if not chunk.text:
@@ -104,6 +105,7 @@ class KokoroEngine:
 
       audio, chunk_rate = self._kokoro_create(
         source_text,
+        voice=active_voice,
         lang=chunk.lang,
         speed=chunk.speed,
         is_phonemes=chunk.is_phonemes,
@@ -153,11 +155,11 @@ class KokoroEngine:
 
     raise RuntimeError('misaki ja g2p returned empty phoneme output')
 
-  def _kokoro_create(self, text: str, *, lang: str, speed: float, is_phonemes: bool) -> Tuple[np.ndarray, int]:
+  def _kokoro_create(self, text: str, *, voice: str, lang: str, speed: float, is_phonemes: bool) -> Tuple[np.ndarray, int]:
     if hasattr(self._kokoro, 'create'):
       result = self._kokoro.create(
         text,
-        voice=self.voice,
+        voice=voice,
         lang=lang,
         speed=speed,
         is_phonemes=is_phonemes,
@@ -167,7 +169,7 @@ class KokoroEngine:
     if hasattr(self._kokoro, 'generate'):
       result = self._kokoro.generate(
         text,
-        voice=self.voice,
+        voice=voice,
         lang=lang,
         speed=speed,
         is_phonemes=is_phonemes,

@@ -65,6 +65,60 @@ async function speakOnce(payload) {
   return { worker, result };
 }
 
+test('tts controller routes mixed-script boundary utterances to Ono_Anna for qwen workers', async () => {
+  const worker = new FakeWorker();
+  const controller = createTtsController({
+    worker,
+    now: () => 42_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'Serena', engine: 'qwen3-tts-0.6b-customvoice' });
+  const result = await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    text: 'GitHub承認申請をお願いします。',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 10_000,
+    ts: 42_000
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].speaker, 'Ono_Anna');
+});
+
+test('tts controller keeps default qwen speaker for non-boundary utterances', async () => {
+  const worker = new FakeWorker();
+  const controller = createTtsController({
+    worker,
+    now: () => 42_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'Serena', engine: 'qwen3-tts-0.6b-customvoice' });
+  const result = await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    text: 'PRを出してCIが通ったらCDします。',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 10_000,
+    ts: 42_000
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].speaker, null);
+});
+
 test('tts controller interrupt path supersedes current generation', async () => {
   let nowMs = 1_000;
   const worker = new FakeWorker();

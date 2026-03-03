@@ -73,6 +73,7 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
   const endpointUrl = asNonEmptyString(options.endpointUrl);
   const model = asNonEmptyString(options.model);
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => false;
+  const debug = options.debug === true;
   const websocketFactory =
     typeof options.websocketFactory === 'function'
       ? options.websocketFactory
@@ -129,9 +130,32 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
     while (context.pendingAudio.length > 0) {
       const audio = context.pendingAudio.shift();
       if (!sendJson(context, { type: 'input_audio_buffer.append', audio })) {
-        return;
+        return false;
       }
     }
+    return true;
+  }
+
+  function sendFinalCommit(context) {
+    if (!context.ready || context.finalCommitSent) {
+      return false;
+    }
+    if (!sendJson(context, { type: 'input_audio_buffer.commit', final: true })) {
+      return false;
+    }
+    context.finalCommitSent = true;
+    return true;
+  }
+
+  function sendStartCommit(context) {
+    if (!context.ready || context.startCommitSent) {
+      return false;
+    }
+    if (!sendJson(context, { type: 'input_audio_buffer.commit' })) {
+      return false;
+    }
+    context.startCommitSent = true;
+    return true;
   }
 
   function handleUpstreamPayload(context, payload) {
@@ -139,13 +163,27 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       return;
     }
 
+    if (debug) {
+      const payloadType = asNonEmptyString(payload.type) ?? '(missing-type)';
+      log.info(`[face-app] realtime ASR upstream type=${payloadType}`);
+    }
+
     if (payload.type === 'session.created') {
       context.ready = true;
       if (model) {
-        sendJson(context, { type: 'session.update', model });
+        if (!sendJson(context, { type: 'session.update', model })) {
+          return;
+        }
       }
-      sendJson(context, { type: 'input_audio_buffer.commit' });
-      flushPendingAudio(context);
+      if (!sendStartCommit(context)) {
+        return;
+      }
+      if (!flushPendingAudio(context)) {
+        return;
+      }
+      if (context.finalRequested) {
+        sendFinalCommit(context);
+      }
       return;
     }
 
@@ -195,6 +233,11 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
         })
       );
       closeSession(context.sessionId);
+      return;
+    }
+
+    if (debug) {
+      log.info(`[face-app] realtime ASR upstream payload=${JSON.stringify(payload)}`);
     }
   }
 
@@ -258,6 +301,8 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
       pendingAudio: [],
       text: '',
       finalRequested: false,
+      startCommitSent: false,
+      finalCommitSent: false,
       doneEmitted: false,
       closing: false
     };
@@ -326,6 +371,11 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
           return { relay: false };
         }
         if (context.ready) {
+          if (!context.startCommitSent) {
+            if (!sendStartCommit(context)) {
+              return { relay: false };
+            }
+          }
           sendJson(context, { type: 'input_audio_buffer.append', audio });
         } else {
           context.pendingAudio.push(audio);
@@ -338,7 +388,14 @@ export function createOperatorRealtimeAsrProxy(options = {}) {
           return { relay: false };
         }
         context.finalRequested = true;
-        sendJson(context, { type: 'input_audio_buffer.commit', final: true });
+        if (context.doneEmitted) {
+          closeSession(sessionId);
+          return { relay: false };
+        }
+        if (!context.ready) {
+          return { relay: false };
+        }
+        sendFinalCommit(context);
         return { relay: false };
       }
 

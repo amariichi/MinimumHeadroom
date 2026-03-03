@@ -36,6 +36,7 @@ class SpeakRequest:
   session_id: str
   utterance_id: str
   text: str
+  speaker: Optional[str]
   expires_at: int
   message_id: Optional[str]
   revision: Optional[int]
@@ -188,6 +189,9 @@ class WorkerRuntime:
     if not isinstance(text, str) or text.strip() == '':
       raise ValueError('speak.text must be non-empty string')
 
+    speaker_raw = raw.get('speaker')
+    speaker = speaker_raw.strip() if isinstance(speaker_raw, str) and speaker_raw.strip() != '' else None
+
     expires_at = raw.get('expires_at')
     if not isinstance(expires_at, int):
       ttl_ms = raw.get('ttl_ms')
@@ -215,6 +219,7 @@ class WorkerRuntime:
       session_id=session_id,
       utterance_id=utterance_id,
       text=text.strip(),
+      speaker=speaker,
       expires_at=expires_at,
       message_id=message_id,
       revision=revision,
@@ -289,7 +294,7 @@ class WorkerRuntime:
     )
 
     try:
-      audio, sample_rate = await asyncio.to_thread(self.engine.synthesize_text, request.text)
+      audio, sample_rate = await asyncio.to_thread(self.engine.synthesize_text, request.text, voice_override=request.speaker)
     except asyncio.CancelledError:
       self.playback.stop()
       self.writer.event(

@@ -63,6 +63,21 @@ test('operator realtime ASR proxy relays browser chunks into an upstream session
   assert.equal(sockets.length, 1);
   assert.equal(sockets[0].url, 'ws://127.0.0.1:8000/v1/realtime');
 
+  sockets[0].emit('message', {
+    data: JSON.stringify({
+      type: 'session.created'
+    })
+  });
+
+  assert.equal(sockets[0].sent.length, 2);
+  assert.deepEqual(sockets[0].sent[0], {
+    type: 'session.update',
+    model: 'mistralai/Voxtral-Mini-4B-Realtime-2602'
+  });
+  assert.deepEqual(sockets[0].sent[1], {
+    type: 'input_audio_buffer.commit'
+  });
+
   proxy.handlePayload({
     v: 1,
     type: 'operator_realtime_asr_chunk',
@@ -73,22 +88,7 @@ test('operator realtime ASR proxy relays browser chunks into an upstream session
     ts: Date.now()
   });
 
-  assert.equal(sockets[0].sent.length, 0);
-
-  sockets[0].emit('message', {
-    data: JSON.stringify({
-      type: 'session.created'
-    })
-  });
-
   assert.equal(sockets[0].sent.length, 3);
-  assert.deepEqual(sockets[0].sent[0], {
-    type: 'session.update',
-    model: 'mistralai/Voxtral-Mini-4B-Realtime-2602'
-  });
-  assert.deepEqual(sockets[0].sent[1], {
-    type: 'input_audio_buffer.commit'
-  });
   assert.deepEqual(sockets[0].sent[2], {
     type: 'input_audio_buffer.append',
     audio: 'ZmFrZS1hdWRpbw=='
@@ -100,6 +100,20 @@ test('operator realtime ASR proxy relays browser chunks into an upstream session
       delta: 'hello '
     })
   });
+  proxy.handlePayload({
+    v: 1,
+    type: 'operator_realtime_asr_stop',
+    session_id: 'realtime#test',
+    language: 'ja',
+    generation: 2,
+    ts: Date.now()
+  });
+
+  assert.deepEqual(sockets[0].sent[3], {
+    type: 'input_audio_buffer.commit',
+    final: true
+  });
+
   sockets[0].emit('message', {
     data: JSON.stringify({
       type: 'transcription.done',
@@ -115,20 +129,130 @@ test('operator realtime ASR proxy relays browser chunks into an upstream session
   assert.equal(broadcasts[1].type, 'operator_realtime_asr_done');
   assert.equal(broadcasts[1].generation, 2);
   assert.equal(broadcasts[1].text, 'hello world');
+  assert.equal(sockets[0].closed, true);
+});
+
+test('operator realtime ASR proxy defers final commit until session.created when stop arrives early', async () => {
+  const sockets = [];
+  const proxy = createOperatorRealtimeAsrProxy({
+    enabled: true,
+    endpointUrl: 'ws://127.0.0.1:8000/v1/realtime',
+    model: 'mistralai/Voxtral-Mini-4B-Realtime-2602',
+    websocketFactory(url) {
+      const socket = new MockSocket(url);
+      sockets.push(socket);
+      return socket;
+    }
+  });
+
+  proxy.handlePayload({
+    v: 1,
+    type: 'operator_realtime_asr_start',
+    session_id: 'realtime#early-stop',
+    language: 'ja',
+    generation: 7,
+    ts: Date.now()
+  });
+
+  proxy.handlePayload({
+    v: 1,
+    type: 'operator_realtime_asr_chunk',
+    session_id: 'realtime#early-stop',
+    language: 'ja',
+    generation: 7,
+    audio: 'ZmFrZS1hdWRpbw==',
+    ts: Date.now()
+  });
 
   proxy.handlePayload({
     v: 1,
     type: 'operator_realtime_asr_stop',
-    session_id: 'realtime#test',
+    session_id: 'realtime#early-stop',
     language: 'ja',
-    generation: 2,
+    generation: 7,
     ts: Date.now()
   });
 
+  assert.equal(sockets[0].sent.length, 0);
+
+  sockets[0].emit('message', {
+    data: JSON.stringify({
+      type: 'session.created'
+    })
+  });
+
+  assert.equal(sockets[0].sent.length, 4);
+  assert.deepEqual(sockets[0].sent[0], {
+    type: 'session.update',
+    model: 'mistralai/Voxtral-Mini-4B-Realtime-2602'
+  });
+  assert.deepEqual(sockets[0].sent[1], {
+    type: 'input_audio_buffer.commit'
+  });
+  assert.deepEqual(sockets[0].sent[2], {
+    type: 'input_audio_buffer.append',
+    audio: 'ZmFrZS1hdWRpbw=='
+  });
   assert.deepEqual(sockets[0].sent[3], {
     type: 'input_audio_buffer.commit',
     final: true
   });
+  assert.equal(sockets[0].sent.some((payload) => payload.type === 'input_audio_buffer.commit' && payload.final !== true), true);
+});
+
+test('operator realtime ASR proxy closes the session when stop arrives after done', async () => {
+  const broadcasts = [];
+  const sockets = [];
+  const proxy = createOperatorRealtimeAsrProxy({
+    enabled: true,
+    endpointUrl: 'ws://127.0.0.1:8000/v1/realtime',
+    websocketFactory(url) {
+      const socket = new MockSocket(url);
+      sockets.push(socket);
+      return socket;
+    },
+    broadcast(payload) {
+      broadcasts.push(payload);
+      return true;
+    }
+  });
+
+  proxy.handlePayload({
+    v: 1,
+    type: 'operator_realtime_asr_start',
+    session_id: 'realtime#stop-after-done',
+    language: 'en',
+    generation: 9,
+    ts: Date.now()
+  });
+
+  sockets[0].emit('message', {
+    data: JSON.stringify({
+      type: 'session.created'
+    })
+  });
+
+  sockets[0].emit('message', {
+    data: JSON.stringify({
+      type: 'transcription.done',
+      text: 'already finished'
+    })
+  });
+
+  proxy.handlePayload({
+    v: 1,
+    type: 'operator_realtime_asr_stop',
+    session_id: 'realtime#stop-after-done',
+    language: 'en',
+    generation: 9,
+    ts: Date.now()
+  });
+
+  assert.equal(broadcasts.length, 1);
+  assert.equal(broadcasts[0].type, 'operator_realtime_asr_done');
+  assert.equal(broadcasts[0].text, 'already finished');
+  assert.equal(sockets[0].closed, true);
+  assert.equal(sockets[0].sent.some((payload) => payload.final === true), false);
 });
 
 test('operator realtime ASR proxy reports configuration errors without relaying payloads', async () => {

@@ -70,6 +70,7 @@ const operatorRealtimeAsrEnabled = (process.env.MH_OPERATOR_REALTIME_ASR_ENABLED
 const operatorRealtimeAsrEndpointUrl = process.env.MH_OPERATOR_REALTIME_ASR_WS_URL ?? '';
 const operatorRealtimeAsrModel =
   process.env.MH_OPERATOR_REALTIME_ASR_MODEL ?? 'mistralai/Voxtral-Mini-4B-Realtime-2602';
+const operatorRealtimeAsrDebug = (process.env.MH_OPERATOR_REALTIME_ASR_DEBUG ?? '0') === '1';
 const operatorRealtimeAsrSampleRateHz = Number.parseInt(process.env.MH_OPERATOR_REALTIME_ASR_SAMPLE_RATE_HZ ?? '16000', 10);
 const faceConfig = loadFaceAppConfig({ repoRoot, env: process.env, log: console });
 const operatorAsrProxy = createOperatorAsrProxy({
@@ -192,6 +193,7 @@ operatorRealtimeAsrProxy = createOperatorRealtimeAsrProxy({
   enabled: operatorRealtimeAsrEnabled,
   endpointUrl: operatorRealtimeAsrEndpointUrl,
   model: operatorRealtimeAsrModel,
+  debug: operatorRealtimeAsrDebug,
   broadcast(payload) {
     return server.broadcast(payload);
   },
@@ -207,6 +209,7 @@ if (ttsEnabled) {
     },
     defaultTtlMs: faceConfig.tts.defaultTtlMs,
     autoInterruptAfterMs: faceConfig.tts.autoInterruptAfterMs,
+    qwenBoundarySpeaker: process.env.MH_QWEN_TTS_BOUNDARY_SPEAKER ?? 'Ono_Anna',
     gateConfig: faceConfig.speechGate,
     workerCwd: repoRoot,
     workerEnv: {
