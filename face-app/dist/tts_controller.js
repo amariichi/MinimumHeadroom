@@ -17,6 +17,7 @@ const JAPANESE_NUMERIC_CHAIN_RE = new RegExp(
   `([${JAPANESE_NUMERIC_CLASS}]+(?:\\s*[.．・･]\\s*[${JAPANESE_NUMERIC_CLASS}]+)+)`,
   'gu'
 );
+const JAPANESE_SEMVER_RE = /(?<![A-Za-z0-9])[vV](\d+(?:\.\d+){1,2})(?![A-Za-z0-9])/gu;
 const QWEN_BOUNDARY_SPEAKER_RE = new RegExp(
   `(?:[A-Za-z0-9][A-Za-z0-9./:+_-]{0,31})(?:\\s*[.,;:!?]\\s*)?(?=[${KANJI_SCRIPT_CLASS}])`,
   'u'
@@ -113,6 +114,10 @@ function replaceJapaneseDecimalSeparators(text) {
   });
 }
 
+function replaceJapaneseSemverTokens(text) {
+  return text.replace(JAPANESE_SEMVER_RE, (_, version) => `バージョン${version.replaceAll('.', '点')}`);
+}
+
 function normalizeJapaneseTtsText(text) {
   let normalized = text
     .replace(/[‘’]/g, "'")
@@ -126,7 +131,9 @@ function normalizeJapaneseTtsText(text) {
     .replace(/([\p{Script=Latin}])\p{M}+/gu, '$1')
     .normalize('NFC');
 
-  return replaceJapaneseDecimalSeparators(normalized).replace(/[ \t]+/g, ' ').trim();
+  normalized = replaceJapaneseSemverTokens(normalized);
+  normalized = replaceJapaneseDecimalSeparators(normalized);
+  return normalized.replace(/[ \t]+/g, ' ').trim();
 }
 
 function normalizeSpeechText(text) {

@@ -85,6 +85,16 @@ test('tts controller keeps dotted version numbers unchanged in Japanese text', a
   assert.equal(speaks(worker)[0].text, '現在のバージョンは1.2.3です。');
 });
 
+test('tts controller rewrites v-prefixed semver tokens into spoken Japanese', async () => {
+  const { worker, result } = await speakOnce({
+    text: 'v1.1 と v1.7.0 を公開しました。'
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'バージョン1点1 と バージョン1点7点0 を公開しました。');
+});
+
 test('tts controller routes mixed-script boundary utterances to Ono_Anna for qwen workers', async () => {
   const worker = new FakeWorker();
   const controller = createTtsController({
