@@ -78,6 +78,22 @@ class Qwen3TextPreparationTests(unittest.TestCase):
     )
     self.assertEqual(rendered, 'リードミー と リードミー を確認します。')
 
+  def test_english_profile_rewrites_semver_tokens_for_speech(self) -> None:
+    rendered = prepare_qwen3_text(
+      'v1.1 と v1.7.0 を公開しました。',
+      ascii_mode='preserve',
+      language='English',
+    )
+    self.assertEqual(rendered, 'はい、バージョン1点1 と バージョン1点7点0 を公開しました。')
+
+  def test_english_profile_keeps_nonleading_semver_without_extra_leadin(self) -> None:
+    rendered = prepare_qwen3_text(
+      '今回は v1.1 を確認します。',
+      ascii_mode='preserve',
+      language='English',
+    )
+    self.assertEqual(rendered, 'はい、今回は バージョン1点1 を確認します。')
+
   def test_english_profile_keeps_lowercase_shell_words_literal(self) -> None:
     rendered = prepare_qwen3_text(
       'ssh で ci を確認します。',

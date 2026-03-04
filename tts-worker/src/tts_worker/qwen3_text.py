@@ -13,6 +13,7 @@ _KANJI_SCRIPT_CLASS = r'㐀-䶿一-龯々〆ヵヶ豈-﫿'
 _ASCII_DIRECT_TO_KANJI_RE = re.compile(rf'{_MIXED_BOUNDARY_TOKEN_RE}(?=[{_KANJI_SCRIPT_CLASS}])')
 _ASCII_CLAUSE_BREAK_TO_KANJI_RE = re.compile(rf'{_MIXED_BOUNDARY_TOKEN_RE}\s*[,;:]\s*(?=[{_KANJI_SCRIPT_CLASS}])')
 _ASCII_SENTENCE_BREAK_TO_KANJI_RE = re.compile(rf'{_MIXED_BOUNDARY_TOKEN_RE}\s*[.!?]\s*(?=[{_KANJI_SCRIPT_CLASS}])')
+_SEMVER_SPEECH_RE = re.compile(r'(?<![A-Za-z0-9])[vV](\d+(?:\.\d+){1,2})(?![A-Za-z0-9])')
 _KANA_ALIASES = {
   'AI': 'エーアイ',
   'API': 'エーピーアイ',
@@ -104,6 +105,7 @@ def prepare_qwen3_text(text: str, *, ascii_mode: str, language: str) -> str:
     text = _stabilize_english_mixed_script_boundaries(text)
     text = _apply_exact_japanese_speech_aliases(text)
     text = _apply_exact_english_phrase_speech_aliases(text)
+    text = _apply_semver_speech_aliases(text)
     return _apply_english_speech_aliases(text)
 
   mode = normalize_ascii_mode(ascii_mode)
@@ -189,6 +191,17 @@ def _apply_exact_english_phrase_speech_aliases(text: str) -> str:
   for source, replacement in _EXACT_ENGLISH_PHRASE_SPEECH_ALIASES.items():
     text = re.sub(rf'(?<![A-Za-z0-9]){re.escape(source)}(?![A-Za-z0-9])', replacement, text, flags=re.IGNORECASE)
   return text
+
+
+def _apply_semver_speech_aliases(text: str) -> str:
+  def replace(match: re.Match[str]) -> str:
+    rendered = match.group(1).replace('.', '点')
+    spoken = f'バージョン{rendered}'
+    if text[:match.start()].strip() == '':
+      return f'はい、{spoken}'
+    return spoken
+
+  return _SEMVER_SPEECH_RE.sub(replace, text)
 
 
 def _stabilize_english_mixed_script_boundaries(text: str) -> str:
