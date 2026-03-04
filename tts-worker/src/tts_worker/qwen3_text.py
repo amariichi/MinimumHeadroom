@@ -27,6 +27,11 @@ _EXACT_SPEECH_ALIASES = {
   'nodejs': 'ノードジェイエス',
   'Node.js': 'ノードジェイエス',
   'node.js': 'ノードジェイエス',
+  'readme': 'リードミー',
+  'request': 'リクエスト',
+}
+_EXACT_ENGLISH_PHRASE_SPEECH_ALIASES = {
+  'pull request': 'プルリクエスト',
 }
 _EXACT_JAPANESE_SPEECH_ALIASES = {
   '承認申請': 'しょうにんしんせい',
@@ -98,6 +103,7 @@ def prepare_qwen3_text(text: str, *, ascii_mode: str, language: str) -> str:
   if normalized_language != 'Japanese':
     text = _stabilize_english_mixed_script_boundaries(text)
     text = _apply_exact_japanese_speech_aliases(text)
+    text = _apply_exact_english_phrase_speech_aliases(text)
     return _apply_english_speech_aliases(text)
 
   mode = normalize_ascii_mode(ascii_mode)
@@ -176,6 +182,12 @@ def _apply_english_speech_aliases(text: str) -> str:
 def _apply_exact_japanese_speech_aliases(text: str) -> str:
   for source, replacement in _EXACT_JAPANESE_SPEECH_ALIASES.items():
     text = text.replace(source, replacement)
+  return text
+
+
+def _apply_exact_english_phrase_speech_aliases(text: str) -> str:
+  for source, replacement in _EXACT_ENGLISH_PHRASE_SPEECH_ALIASES.items():
+    text = re.sub(rf'(?<![A-Za-z0-9]){re.escape(source)}(?![A-Za-z0-9])', replacement, text, flags=re.IGNORECASE)
   return text
 
 

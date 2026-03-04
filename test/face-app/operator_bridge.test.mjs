@@ -4,9 +4,17 @@ import { createOperatorBridgeRuntime, createTmuxController } from '../../face-ap
 
 function createFakeTmux() {
   const calls = [];
+  let activePane = 'demo:0.0';
   return {
     calls,
-    pane: 'demo:0.0',
+    get pane() {
+      return activePane;
+    },
+    async setPane(nextPane) {
+      activePane = nextPane;
+      calls.push({ kind: 'setPane', pane: nextPane });
+      return activePane;
+    },
     async sendKey(token) {
       calls.push({ kind: 'key', token });
     },
@@ -18,8 +26,8 @@ function createFakeTmux() {
     },
     async captureTail() {
       return {
-        pane: 'demo:0.0',
-        lines: ['line'],
+        pane: activePane,
+        lines: [`line:${activePane}`],
         truncated: false
       };
     }
@@ -32,6 +40,7 @@ function createRuntimeHarness() {
   const runtime = createOperatorBridgeRuntime({
     sessionId: 's1',
     tmuxController: tmux,
+    defaultRecoveryTmuxPane: 'demo:0.0',
     sendPayload(payload) {
       payloads.push(payload);
       return true;
@@ -216,4 +225,29 @@ test('captureTail keeps ANSI escape sequences for terminal color rendering', asy
 
   assert.deepEqual(argsUsed, ['capture-pane', '-t', 'demo:1.0', '-p', '-e', '-S', '-24']);
   assert.deepEqual(snapshot.lines, ['\u001b[38;5;39mcyan\u001b[0m']);
+});
+
+test('operator bridge recover payload restores the default tmux pane and emits a fresh snapshot', async () => {
+  const { runtime, payloads, tmux } = createRuntimeHarness();
+
+  await tmux.setPane('demo:9.9');
+  payloads.length = 0;
+
+  await runtime.handlePayload({
+    v: 1,
+    type: 'operator_bridge_recover_default',
+    session_id: 's1'
+  });
+
+  assert.equal(tmux.pane, 'demo:0.0');
+  assert.equal(tmux.calls.some((entry) => entry.kind === 'setPane' && entry.pane === 'demo:0.0'), true);
+
+  const recoverResult = payloads.find((entry) => entry.type === 'operator_recover_result');
+  assert.ok(recoverResult);
+  assert.equal(recoverResult.ok, true);
+  assert.equal(recoverResult.pane, 'demo:0.0');
+
+  const snapshot = payloads.find((entry) => entry.type === 'operator_terminal_snapshot');
+  assert.ok(snapshot);
+  assert.deepEqual(snapshot.lines, ['line:demo:0.0']);
 });

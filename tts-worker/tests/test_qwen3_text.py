@@ -54,6 +54,30 @@ class Qwen3TextPreparationTests(unittest.TestCase):
     )
     self.assertEqual(rendered, 'シーアイ・シーディーのあとでノードジェイエスとギットハブを確認します。')
 
+  def test_english_profile_rewrites_pull_request_phrase_for_speech(self) -> None:
+    rendered = prepare_qwen3_text(
+      'GitHubでpull requestを見ます。',
+      ascii_mode='preserve',
+      language='English',
+    )
+    self.assertEqual(rendered, 'ギットハブでプルリクエストを見ます。')
+
+  def test_english_profile_rewrites_request_token_for_speech(self) -> None:
+    rendered = prepare_qwen3_text(
+      'requestの発音を確認します。',
+      ascii_mode='preserve',
+      language='English',
+    )
+    self.assertEqual(rendered, 'リクエストの発音を確認します。')
+
+  def test_english_profile_rewrites_readme_token_for_speech(self) -> None:
+    rendered = prepare_qwen3_text(
+      'README と Readme を確認します。',
+      ascii_mode='preserve',
+      language='English',
+    )
+    self.assertEqual(rendered, 'リードミー と リードミー を確認します。')
+
   def test_english_profile_keeps_lowercase_shell_words_literal(self) -> None:
     rendered = prepare_qwen3_text(
       'ssh で ci を確認します。',

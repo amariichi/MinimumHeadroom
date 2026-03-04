@@ -31,6 +31,14 @@ body {
   font-family: 'Avenir Next Condensed', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
 }
 
+body.boot-pending #operator-panel,
+body.boot-pending #operator-esc,
+body.boot-pending #operator-handle {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .stage {
   position: relative;
   width: 100%;
@@ -242,7 +250,7 @@ body {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .panel-hidden {
@@ -289,9 +297,13 @@ body {
 .operator-panel {
   position: absolute;
   z-index: 5;
-  left: 14px;
-  bottom: 14px;
+  right: 14px;
+  top: 58px;
+  left: auto;
+  bottom: auto;
   width: min(430px, calc(100vw - 28px));
+  max-height: calc(100vh - 72px);
+  overflow: auto;
   border-radius: 14px;
   border: 1px solid rgba(118, 226, 255, 0.34);
   background: linear-gradient(160deg, rgba(6, 17, 28, 0.92), rgba(7, 12, 19, 0.9));
@@ -498,6 +510,55 @@ body {
 .operator-mirror-row {
   display: flex;
   justify-content: flex-start;
+  align-items: center;
+  gap: 6px;
+}
+
+.operator-help-toggle.operator-btn {
+  min-width: 34px;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: 0.84rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.operator-keyboard-help {
+  border: 1px solid rgba(118, 226, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(5, 17, 25, 0.82);
+  padding: 8px;
+  display: grid;
+  gap: 5px;
+}
+
+[hidden].operator-keyboard-help {
+  display: none;
+}
+
+.operator-keyboard-help-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-family: 'JetBrains Mono', 'Consolas', 'Roboto Mono', monospace;
+  font-size: 0.64rem;
+  line-height: 1.35;
+  color: #d9efff;
+}
+
+.operator-keyboard-help-row kbd {
+  border: 1px solid rgba(118, 226, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(11, 34, 49, 0.92);
+  padding: 2px 6px;
+  font: inherit;
+  font-weight: 800;
+  color: #f1f8ff;
+}
+
+.operator-keyboard-help-divider {
+  opacity: 0.6;
 }
 
 .operator-mirror {
@@ -709,8 +770,11 @@ body.ui-mode-mobile #operator-esc-inline.operator-btn {
 
   .operator-panel {
     width: min(92vw, 420px);
-    left: 10px;
-    bottom: 10px;
+    right: 10px;
+    top: 52px;
+    left: auto;
+    bottom: auto;
+    max-height: calc(100vh - 64px);
     padding: 8px;
   }
 

@@ -166,8 +166,8 @@ function runProcess(command, args, options = {}) {
 }
 
 export function createTmuxController(options = {}) {
-  const pane = asNonEmptyString(options.pane);
-  if (!pane) {
+  const initialPane = asNonEmptyString(options.pane);
+  if (!initialPane) {
     throw new Error('tmux pane is required');
   }
 
@@ -177,6 +177,7 @@ export function createTmuxController(options = {}) {
   const restartPreKeys = Array.isArray(options.restartPreKeys) ? options.restartPreKeys : [];
   const runCommand = typeof options.runCommand === 'function' ? options.runCommand : runProcess;
   const submitReinforceDelayMs = clampInteger(options.submitReinforceDelayMs, 90, 20, 1000);
+  let activePane = initialPane;
 
   async function runTmux(args, input = null) {
     return runCommand('tmux', args, {
@@ -186,11 +187,11 @@ export function createTmuxController(options = {}) {
   }
 
   async function sendRawKeyToken(token) {
-    await runTmux(['send-keys', '-t', pane, token]);
+    await runTmux(['send-keys', '-t', activePane, token]);
   }
 
   async function sendRawTextLiteral(text) {
-    await runTmux(['send-keys', '-t', pane, '-l', '--', text]);
+    await runTmux(['send-keys', '-t', activePane, '-l', '--', text]);
   }
 
   async function delayMs(ms) {
@@ -200,7 +201,17 @@ export function createTmuxController(options = {}) {
   }
 
   return {
-    pane,
+    get pane() {
+      return activePane;
+    },
+    async setPane(nextPaneValue) {
+      const nextPane = asNonEmptyString(nextPaneValue);
+      if (!nextPane) {
+        throw reasonError('invalid_tmux_pane', 'tmux pane is empty');
+      }
+      activePane = nextPane;
+      return activePane;
+    },
     async sendKey(tokenOrValue) {
       const token = normalizeOperatorKeyToken(tokenOrValue);
       if (!token) {
@@ -241,21 +252,21 @@ export function createTmuxController(options = {}) {
     },
     async captureTail(lines) {
       const lineCount = clampInteger(lines, 200, 1, 2000);
-      const result = await runTmux(['capture-pane', '-t', pane, '-p', '-e', '-S', `-${lineCount}`]);
+      const result = await runTmux(['capture-pane', '-t', activePane, '-p', '-e', '-S', `-${lineCount}`]);
       const normalized = result.stdout.replace(/\r/g, '');
       const split = normalized.split('\n');
       if (split.length > 0 && split[split.length - 1] === '') {
         split.pop();
       }
       return {
-        pane,
+        pane: activePane,
         lines: split,
         truncated: split.length >= lineCount
       };
     },
     async probe() {
       try {
-        await runTmux(['display-message', '-p', '-t', pane, '#{pane_id}']);
+        await runTmux(['display-message', '-p', '-t', activePane, '#{pane_id}']);
         return true;
       } catch (error) {
         log.warn(`[operator-bridge] tmux probe failed: ${error.message}`);
@@ -287,6 +298,7 @@ export function createOperatorBridgeRuntime(options = {}) {
   const mirrorLines = clampInteger(options.mirrorLines, 200, 10, 2000);
   const enforceSpeechBeforePrompt = options.enforceSpeechBeforePrompt !== false;
   const tmuxController = options.tmuxController;
+  const defaultRecoveryTmuxPane = asNonEmptyString(options.defaultRecoveryTmuxPane);
   const sendPayload = typeof options.sendPayload === 'function' ? options.sendPayload : () => false;
 
   if (!tmuxController) {
@@ -367,6 +379,16 @@ export function createOperatorBridgeRuntime(options = {}) {
       stage,
       reason: reason ?? null,
       detail: detail ?? null
+    });
+  }
+
+  function emitRecoverResult(sessionId, ok, reason = null, pane = null) {
+    emit({
+      type: 'operator_recover_result',
+      session_id: normalizeSessionId(sessionId, defaultSessionId),
+      ok: Boolean(ok),
+      reason: reason ?? null,
+      pane: pane ?? null
     });
   }
 
@@ -572,6 +594,45 @@ export function createOperatorBridgeRuntime(options = {}) {
     }
   }
 
+  async function handleRecoverDefault(payload) {
+    const sessionId = normalizeSessionId(payload?.session_id, defaultSessionId);
+    if (sessionId !== defaultSessionId) {
+      return;
+    }
+
+    if (!defaultRecoveryTmuxPane || typeof tmuxController.setPane !== 'function') {
+      updateSessionState(sessionId, {
+        recovery_mode: true,
+        reason: 'recover_not_configured'
+      });
+      emitRecoverResult(sessionId, false, 'recover_not_configured', tmuxController.pane ?? null);
+      emitState(sessionId);
+      return;
+    }
+
+    try {
+      await tmuxController.setPane(defaultRecoveryTmuxPane);
+      terminalSnapshotHashBySession.delete(sessionId);
+      updateSessionState(sessionId, {
+        tmux_online: true,
+        recovery_mode: false,
+        reason: null
+      });
+      emitRecoverResult(sessionId, true, null, tmuxController.pane ?? defaultRecoveryTmuxPane);
+      emitState(sessionId);
+      await publishTerminalSnapshot(sessionId);
+    } catch (error) {
+      const reason = asNonEmptyString(error?.reason) ?? 'recover_failed';
+      updateSessionState(sessionId, {
+        tmux_online: false,
+        recovery_mode: true,
+        reason
+      });
+      emitRecoverResult(sessionId, false, reason, tmuxController.pane ?? null);
+      emitState(sessionId);
+    }
+  }
+
   return {
     async handlePayload(payload) {
       if (!payload || typeof payload !== 'object') {
@@ -585,6 +646,11 @@ export function createOperatorBridgeRuntime(options = {}) {
 
       if (payload.type === 'operator_prompt') {
         await handleOperatorPrompt(payload);
+        return;
+      }
+
+      if (payload.type === 'operator_bridge_recover_default') {
+        await handleRecoverDefault(payload);
         return;
       }
 
@@ -639,6 +705,7 @@ export function startOperatorBridge(options = {}) {
   const runtime = createOperatorBridgeRuntime({
     sessionId,
     tmuxController,
+    defaultRecoveryTmuxPane: options.defaultRecoveryTmuxPane,
     mirrorLines: options.mirrorLines,
     sendPayload(payload) {
       if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -767,6 +834,7 @@ export function loadBridgeOptionsFromEnv(env = process.env) {
     wsUrl: asNonEmptyString(env.MH_BRIDGE_WS_URL) ?? 'ws://127.0.0.1:8765/ws',
     sessionId: normalizeSessionId(env.MH_BRIDGE_SESSION_ID, 'default'),
     tmuxPane,
+    defaultRecoveryTmuxPane: asNonEmptyString(env.MH_BRIDGE_RECOVERY_TMUX_PANE) ?? tmuxPane,
     restartCommand: asNonEmptyString(env.MH_BRIDGE_RESTART_COMMAND) ?? 'codex resume --last',
     restartPreKeys: parseRestartPreKeys(env.MH_BRIDGE_RESTART_PRE_KEYS ?? 'C-u'),
     mirrorLines: clampInteger(env.MH_BRIDGE_MIRROR_LINES, 200, 10, 2000),

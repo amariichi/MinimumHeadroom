@@ -15,6 +15,9 @@ import { createInitialOperatorUiState, deriveOperatorUiFlags, reduceOperatorUiSt
 import { isDefaultAnsiStyle, parseAnsiRuns } from './operator_ansi.js';
 import { getOperatorRealtimeAsrSuspicion, resolveOperatorRealtimeAsrFinalText, shouldAcceptOperatorBatchFallbackResult } from './operator_asr_text.js';
 import { normalizeOperatorAsrTerms } from './operator_asr_term_normalizer.js';
+import { createTapBurstTrigger } from './operator_hidden_recovery.js';
+import { resolveOperatorKeyboardCommandAction, resolveOperatorKeyboardPttLanguage } from './operator_keyboard_ptt.js';
+import { buildOperatorTextInsertion, normalizeOperatorTextSelection } from './operator_text_insert.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -59,6 +62,8 @@ const operatorKeyUpEl = document.getElementById('operator-key-up');
 const operatorKeyDownEl = document.getElementById('operator-key-down');
 const operatorKeyEnterEl = document.getElementById('operator-key-enter');
 const operatorMirrorToggleEl = document.getElementById('operator-mirror-toggle');
+const operatorHelpToggleEl = document.getElementById('operator-help-toggle');
+const operatorKeyboardHelpEl = document.getElementById('operator-keyboard-help');
 const operatorMirrorEl = document.getElementById('operator-mirror');
 
 const LOOKING_GLASS_ENABLED_KEY = 'mh_lg_webxr_enabled';
@@ -93,6 +98,10 @@ const OPERATOR_MIN_AUDIO_BLOB_BYTES = 900;
 const OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE = 16_000;
 const OPERATOR_REALTIME_ASR_PROCESSOR_BUFFER_SIZE = 4096;
 const OPERATOR_REALTIME_BATCH_FALLBACK_MIN_SECONDS = 0.25;
+const OPERATOR_KEYBOARD_MODIFIER_PTT_DELAY_MS = 140;
+const OPERATOR_ESC_RECOVERY_REQUIRED_TAPS = 4;
+const OPERATOR_ESC_RECOVERY_WINDOW_MS = 1_600;
+const OPERATOR_RECOVER_PENDING_TIMEOUT_MS = 3_000;
 const OPERATOR_UI_MODE_AUTO = 'auto';
 const OPERATOR_UI_MODE_PC = 'pc';
 const OPERATOR_UI_MODE_MOBILE = 'mobile';
@@ -424,6 +433,7 @@ let operatorActivePrompt = null;
 let operatorTerminalSnapshotLines = [];
 let operatorMirrorAutoFollow = true;
 let operatorMirrorInitialScrollDone = false;
+let operatorKeyboardHelpOpen = false;
 const operatorBatchAsrConfig = {
   enabled: false
 };
@@ -437,6 +447,9 @@ const operatorMicState = {
   chunks: [],
   recording: false,
   pointerArmed: false,
+  keyboardArmedKey: null,
+  keyboardPendingKey: null,
+  keyboardPendingTimer: null,
   language: 'en',
   startedAtMs: 0,
   stopTimer: null,
@@ -447,7 +460,8 @@ const operatorMicState = {
   processorSinkNode: null,
   realtimeDraftActive: false,
   realtimeBaseText: '',
-  realtimeSeparator: '',
+  realtimeSelectionStart: 0,
+  realtimeSelectionEnd: 0,
   realtimeText: '',
   realtimeGeneration: 0,
   realtimePcmChunks: [],
@@ -455,6 +469,13 @@ const operatorMicState = {
 };
 let operatorConfiguredUiMode = OPERATOR_UI_MODE_AUTO;
 let operatorEffectiveUiMode = OPERATOR_UI_MODE_PC;
+let operatorPanelEnabled = true;
+let operatorRecoverPending = false;
+let operatorRecoverPendingTimer = null;
+const operatorEscRecoveryTracker = createTapBurstTrigger({
+  requiredCount: OPERATOR_ESC_RECOVERY_REQUIRED_TAPS,
+  windowMs: OPERATOR_ESC_RECOVERY_WINDOW_MS
+});
 
 const view = {
   width: 0,
@@ -606,6 +627,12 @@ function detectDefaultOperatorUiMode() {
   return narrowViewport || touchPrimary ? OPERATOR_UI_MODE_MOBILE : OPERATOR_UI_MODE_PC;
 }
 
+function shouldShowOperatorKeyboardHelpToggle() {
+  const finePointer = window.matchMedia?.('(pointer:fine)')?.matches === true;
+  const touchPrimary = Number.isFinite(navigator.maxTouchPoints) && navigator.maxTouchPoints > 0;
+  return finePointer || !touchPrimary;
+}
+
 function applyOperatorUiMode(mode) {
   const configured = normalizeOperatorUiMode(mode) ?? OPERATOR_UI_MODE_AUTO;
   operatorConfiguredUiMode = configured;
@@ -620,27 +647,68 @@ function applyOperatorUiMode(mode) {
 }
 
 async function loadOperatorUiConfig() {
-  let mode = normalizeOperatorUiMode(new URL(window.location.href).searchParams.get('ui'));
-  if (!mode) {
-    try {
-      const response = await fetch('/api/operator/ui-config', {
-        method: 'GET',
-        cache: 'no-store'
-      });
-      if (response.ok) {
-        const payload = await response.json();
-        mode = normalizeOperatorUiMode(payload?.uiMode);
-        operatorBatchAsrConfig.enabled = payload?.batchAsr?.enabled === true;
-        operatorRealtimeAsrConfig.enabled = payload?.realtimeAsr?.enabled === true;
-        operatorRealtimeAsrConfig.sampleRateHz = Number.isFinite(payload?.realtimeAsr?.sampleRateHz)
-          ? Math.max(8_000, Math.floor(payload.realtimeAsr.sampleRateHz))
-          : OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE;
-      }
-    } catch {
-      // Keep auto mode on fetch failures.
+  const queryMode = normalizeOperatorUiMode(new URL(window.location.href).searchParams.get('ui'));
+  let configMode = null;
+  try {
+    const response = await fetch('/api/operator/ui-config', {
+      method: 'GET',
+      cache: 'no-store'
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      configMode = normalizeOperatorUiMode(payload?.uiMode);
+      operatorPanelEnabled = payload?.operatorPanelEnabled !== false;
+      operatorBatchAsrConfig.enabled = payload?.batchAsr?.enabled === true;
+      operatorRealtimeAsrConfig.enabled = payload?.realtimeAsr?.enabled === true;
+      operatorRealtimeAsrConfig.sampleRateHz = Number.isFinite(payload?.realtimeAsr?.sampleRateHz)
+        ? Math.max(8_000, Math.floor(payload.realtimeAsr.sampleRateHz))
+        : OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE;
     }
+  } catch {
+    // Keep defaults on fetch failures.
   }
-  applyOperatorUiMode(mode ?? OPERATOR_UI_MODE_AUTO);
+  applyOperatorUiMode(queryMode ?? configMode ?? OPERATOR_UI_MODE_AUTO);
+}
+
+async function requestOperatorRecoverDefault() {
+  if (operatorRecoverPending) {
+    return false;
+  }
+
+  operatorRecoverPending = true;
+  if (operatorRecoverPendingTimer !== null) {
+    window.clearTimeout(operatorRecoverPendingTimer);
+    operatorRecoverPendingTimer = null;
+  }
+  const query = new URLSearchParams({
+    session_id: resolveOperatorSessionId()
+  });
+
+  try {
+    const response = await fetch(`/api/operator/recover-default?${query.toString()}`, {
+      method: 'POST',
+      cache: 'no-store'
+    });
+    if (!response.ok) {
+      throw new Error(`recover failed (${response.status})`);
+    }
+    operatorRecoverPendingTimer = window.setTimeout(() => {
+      operatorRecoverPending = false;
+      operatorRecoverPendingTimer = null;
+      setOperatorStatusLine('recover timeout', 'warn');
+    }, OPERATOR_RECOVER_PENDING_TIMEOUT_MS);
+    setOperatorAckLine('ack: recovery requested', 'default');
+    setOperatorStatusLine('recovering agent...', 'warn');
+    return true;
+  } catch {
+    operatorRecoverPending = false;
+    if (operatorRecoverPendingTimer !== null) {
+      window.clearTimeout(operatorRecoverPendingTimer);
+      operatorRecoverPendingTimer = null;
+    }
+    setOperatorStatusLine('recover request failed', 'warn');
+    return false;
+  }
 }
 
 function sendSocketPayload(payload) {
@@ -757,16 +825,6 @@ function renderOperatorChoices(payload) {
   }
 }
 
-function resolveOperatorAppendSeparator(currentText, language = 'en') {
-  if (currentText === '' || /\s$/.test(currentText)) {
-    return '';
-  }
-  if (language === 'ja') {
-    return /[A-Za-z0-9]$/.test(currentText) ? ' ' : '';
-  }
-  return ' ';
-}
-
 function appendOperatorTextInput(value, language = 'en') {
   if (!operatorTextInputEl || typeof value !== 'string') {
     return false;
@@ -775,9 +833,19 @@ function appendOperatorTextInput(value, language = 'en') {
   if (text === '') {
     return false;
   }
-  const currentText = operatorTextInputEl.value;
-  const separator = resolveOperatorAppendSeparator(currentText, language);
-  operatorTextInputEl.value = `${currentText}${separator}${text}`;
+  const next = buildOperatorTextInsertion(
+    operatorTextInputEl.value,
+    text,
+    language,
+    operatorTextInputEl.selectionStart,
+    operatorTextInputEl.selectionEnd
+  );
+  operatorTextInputEl.value = next.text;
+  try {
+    operatorTextInputEl.setSelectionRange(next.caretStart, next.caretEnd);
+  } catch {
+    // Ignore selection update errors on unsupported input states.
+  }
   syncOperatorTextInputHeight();
   setOperatorStatusLine(`asr appended (${language})`, 'ok');
   return true;
@@ -792,9 +860,15 @@ function beginOperatorRealtimeDraft(language = 'en') {
   if (!operatorTextInputEl) {
     return;
   }
+  const selection = normalizeOperatorTextSelection(
+    operatorTextInputEl.value,
+    operatorTextInputEl.selectionStart,
+    operatorTextInputEl.selectionEnd
+  );
   operatorMicState.realtimeDraftActive = true;
   operatorMicState.realtimeBaseText = operatorTextInputEl.value;
-  operatorMicState.realtimeSeparator = resolveOperatorAppendSeparator(operatorMicState.realtimeBaseText, language);
+  operatorMicState.realtimeSelectionStart = selection.start;
+  operatorMicState.realtimeSelectionEnd = selection.end;
   operatorMicState.realtimeText = '';
 }
 
@@ -802,18 +876,36 @@ function renderOperatorRealtimeDraft() {
   if (!operatorTextInputEl || !operatorMicState.realtimeDraftActive) {
     return;
   }
-  operatorTextInputEl.value = `${operatorMicState.realtimeBaseText}${operatorMicState.realtimeSeparator}${operatorMicState.realtimeText}`;
+  const next = buildOperatorTextInsertion(
+    operatorMicState.realtimeBaseText,
+    operatorMicState.realtimeText,
+    operatorMicState.language,
+    operatorMicState.realtimeSelectionStart,
+    operatorMicState.realtimeSelectionEnd
+  );
+  operatorTextInputEl.value = next.text;
+  try {
+    operatorTextInputEl.setSelectionRange(next.caretStart, next.caretEnd);
+  } catch {
+    // Ignore selection update errors on unsupported input states.
+  }
   syncOperatorTextInputHeight();
 }
 
 function clearOperatorRealtimeDraft(keepRenderedText = true) {
   if (!keepRenderedText && operatorTextInputEl) {
     operatorTextInputEl.value = operatorMicState.realtimeBaseText;
+    try {
+      operatorTextInputEl.setSelectionRange(operatorMicState.realtimeSelectionStart, operatorMicState.realtimeSelectionEnd);
+    } catch {
+      // Ignore selection update errors on unsupported input states.
+    }
     syncOperatorTextInputHeight();
   }
   operatorMicState.realtimeDraftActive = false;
   operatorMicState.realtimeBaseText = '';
-  operatorMicState.realtimeSeparator = '';
+  operatorMicState.realtimeSelectionStart = 0;
+  operatorMicState.realtimeSelectionEnd = 0;
   operatorMicState.realtimeText = '';
 }
 
@@ -1118,6 +1210,45 @@ function submitOperatorTextInput() {
   }
 }
 
+function clearOperatorTextInput({ focusTextInput = false } = {}) {
+  if (!operatorTextInputEl) {
+    return false;
+  }
+  cancelPendingOperatorRealtimeAsr(true);
+  clearOperatorRealtimeAudioBuffer();
+  operatorTextInputEl.value = '';
+  syncOperatorTextInputHeight();
+  setOperatorStatusLine('text cleared', 'default');
+  if (focusTextInput) {
+    operatorTextInputEl.focus({ preventScroll: true });
+  }
+  return true;
+}
+
+function focusOperatorTextInput() {
+  if (!operatorTextInputEl) {
+    return false;
+  }
+  cancelPendingOperatorRealtimeAsr(true);
+  clearOperatorRealtimeAudioBuffer();
+  operatorTextInputEl.focus({ preventScroll: true });
+  syncOperatorTextInputHeight();
+  setOperatorStatusLine('text input focused', 'default');
+  return true;
+}
+
+function cancelPendingOperatorKeyboardPttStart() {
+  if (operatorMicState.keyboardPendingTimer) {
+    clearTimeout(operatorMicState.keyboardPendingTimer);
+    operatorMicState.keyboardPendingTimer = null;
+  }
+  operatorMicState.keyboardPendingKey = null;
+}
+
+function shouldDelayOperatorKeyboardPttStart(key) {
+  return key === 'Control' || key === 'Alt';
+}
+
 function hideOperatorKeyboard(updateStatus = true) {
   if (!operatorTextInputEl) {
     return;
@@ -1204,6 +1335,16 @@ function scrollOperatorMirrorToBottom() {
   operatorMirrorEl.scrollTop = operatorMirrorEl.scrollHeight;
 }
 
+function scrollOperatorMirrorByPage(direction) {
+  if (!operatorMirrorEl || !Number.isFinite(direction) || direction === 0) {
+    return false;
+  }
+  const pageSize = Math.max(80, Math.floor(operatorMirrorEl.clientHeight * 0.9));
+  operatorMirrorEl.scrollTop += pageSize * direction;
+  handleOperatorMirrorScroll();
+  return true;
+}
+
 function handleOperatorMirrorScroll() {
   operatorMirrorAutoFollow = isOperatorMirrorNearBottom();
 }
@@ -1234,6 +1375,32 @@ function renderOperatorTerminalSnapshot() {
 }
 
 function updateOperatorUi() {
+  if (!operatorPanelEnabled) {
+    if (operatorPanelEl) {
+      operatorPanelEl.classList.add('hidden');
+    }
+    if (operatorEscButtonEl) {
+      operatorEscButtonEl.classList.add('hidden');
+    }
+    if (operatorEscInlineButtonEl) {
+      operatorEscInlineButtonEl.classList.add('hidden');
+    }
+    if (operatorHandleEl) {
+      operatorHandleEl.classList.add('hidden');
+    }
+    if (operatorCloseButtonEl) {
+      operatorCloseButtonEl.classList.add('hidden');
+    }
+    if (operatorHelpToggleEl) {
+      operatorHelpToggleEl.classList.add('hidden');
+      operatorHelpToggleEl.setAttribute('aria-expanded', 'false');
+    }
+    if (operatorKeyboardHelpEl) {
+      operatorKeyboardHelpEl.hidden = true;
+    }
+    return;
+  }
+
   const flags = deriveOperatorUiFlags(operatorUiState);
   const prompt = operatorActivePrompt;
   const awaiting = operatorUiState.awaiting;
@@ -1268,6 +1435,14 @@ function updateOperatorUi() {
   if (operatorMirrorToggleEl) {
     operatorMirrorToggleEl.classList.toggle('hidden', isMobileUi);
     operatorMirrorToggleEl.textContent = flags.showMirror ? 'Hide Terminal' : 'Terminal';
+  }
+  const showKeyboardHelpToggle = shouldShowOperatorKeyboardHelpToggle();
+  if (operatorHelpToggleEl) {
+    operatorHelpToggleEl.classList.toggle('hidden', !showKeyboardHelpToggle);
+    operatorHelpToggleEl.setAttribute('aria-expanded', showKeyboardHelpToggle && operatorKeyboardHelpOpen ? 'true' : 'false');
+  }
+  if (operatorKeyboardHelpEl) {
+    operatorKeyboardHelpEl.hidden = !showKeyboardHelpToggle || !operatorKeyboardHelpOpen;
   }
 
   if (operatorPromptEl) {
@@ -1389,6 +1564,27 @@ function handleOperatorStatePayload(payload) {
   } else if (payload.recovery_mode === true) {
     setOperatorStatusLine(`recovery${payload.reason ? `: ${payload.reason}` : ''}`, 'warn');
   }
+}
+
+function handleOperatorRecoverResult(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return;
+  }
+
+  operatorRecoverPending = false;
+  if (operatorRecoverPendingTimer !== null) {
+    window.clearTimeout(operatorRecoverPendingTimer);
+    operatorRecoverPendingTimer = null;
+  }
+  if (payload.ok === true) {
+    setOperatorAckLine('ack: recovered', 'ok');
+    setOperatorStatusLine(`recovered${payload.pane ? `: ${payload.pane}` : ''}`, 'ok');
+    return;
+  }
+
+  const reason = typeof payload.reason === 'string' && payload.reason !== '' ? payload.reason : 'recover_failed';
+  setOperatorAckLine(`ack: recover failed (${reason})`, 'warn');
+  setOperatorStatusLine(`recover failed: ${reason}`, 'warn');
 }
 
 function handleOperatorTerminalSnapshot(payload) {
@@ -1753,6 +1949,8 @@ function releaseOperatorMicCapture() {
   operatorMicState.processorSinkNode = null;
   operatorMicState.recording = false;
   operatorMicState.pointerArmed = false;
+  operatorMicState.keyboardArmedKey = null;
+  cancelPendingOperatorKeyboardPttStart();
 }
 
 function stopMediaRecorder(recorder, chunks) {
@@ -1808,66 +2006,95 @@ async function startOperatorRealtimeRecording(language) {
   }
 
   const stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO_CONSTRAINTS });
-  const audioContext = new AudioContextCtor();
-  await audioContext.resume();
+  let audioContext = null;
+  let sourceNode = null;
+  let processorNode = null;
+  let processorSinkNode = null;
 
-  const sourceNode = audioContext.createMediaStreamSource(stream);
-  const processorNode = audioContext.createScriptProcessor(OPERATOR_REALTIME_ASR_PROCESSOR_BUFFER_SIZE, 1, 1);
-  const processorSinkNode = audioContext.createGain();
-  processorSinkNode.gain.value = 0;
+  try {
+    audioContext = new AudioContextCtor();
+    await audioContext.resume();
 
-  sourceNode.connect(processorNode);
-  processorNode.connect(processorSinkNode);
-  processorSinkNode.connect(audioContext.destination);
+    sourceNode = audioContext.createMediaStreamSource(stream);
+    processorNode = audioContext.createScriptProcessor(OPERATOR_REALTIME_ASR_PROCESSOR_BUFFER_SIZE, 1, 1);
+    processorSinkNode = audioContext.createGain();
+    processorSinkNode.gain.value = 0;
 
-  const nextRealtimeGeneration = (operatorMicState.realtimeGeneration + 1) % Number.MAX_SAFE_INTEGER;
-  if (!sendOperatorRealtimeAsrPayload('operator_realtime_asr_start', { language, generation: nextRealtimeGeneration })) {
+    sourceNode.connect(processorNode);
+    processorNode.connect(processorSinkNode);
+    processorSinkNode.connect(audioContext.destination);
+
+    const nextRealtimeGeneration = (operatorMicState.realtimeGeneration + 1) % Number.MAX_SAFE_INTEGER;
+    if (!sendOperatorRealtimeAsrPayload('operator_realtime_asr_start', { language, generation: nextRealtimeGeneration })) {
+      throw new Error('realtime ASR socket unavailable');
+    }
+
+    operatorMicState.mode = 'realtime';
+    operatorMicState.stream = stream;
+    operatorMicState.audioContext = audioContext;
+    operatorMicState.sourceNode = sourceNode;
+    operatorMicState.processorNode = processorNode;
+    operatorMicState.processorSinkNode = processorSinkNode;
+    operatorMicState.language = language === 'ja' ? 'ja' : 'en';
+    operatorMicState.recording = true;
+    operatorMicState.startedAtMs = Date.now();
+    operatorMicState.realtimeGeneration = nextRealtimeGeneration;
+    clearOperatorRealtimeAudioBuffer();
+    beginOperatorRealtimeDraft(operatorMicState.language);
+
+    processorNode.onaudioprocess = (event) => {
+      if (!operatorMicState.recording || operatorMicState.mode !== 'realtime') {
+        return;
+      }
+      const chunk = encodeRealtimeAudioChunk(
+        event.inputBuffer.getChannelData(0),
+        event.inputBuffer.sampleRate,
+        operatorRealtimeAsrConfig.sampleRateHz
+      );
+      if (!chunk) {
+        return;
+      }
+      operatorMicState.realtimePcmChunks.push(chunk.pcmBytes);
+      operatorMicState.realtimePcmBytes += chunk.pcmBytes.length;
+      const sent = sendOperatorRealtimeAsrPayload('operator_realtime_asr_chunk', {
+        language: operatorMicState.language,
+        audio: chunk.audio,
+        sample_rate_hz: operatorRealtimeAsrConfig.sampleRateHz
+      });
+      if (!sent) {
+        setOperatorStatusLine('realtime ASR offline', 'warn');
+      }
+    };
+
+    return true;
+  } catch (error) {
     stream.getTracks().forEach((track) => track.stop());
-    processorNode.disconnect();
-    processorSinkNode.disconnect();
-    sourceNode.disconnect();
-    void audioContext.close().catch(() => {});
-    throw new Error('realtime ASR socket unavailable');
+    if (processorNode) {
+      try {
+        processorNode.disconnect();
+      } catch {
+        // Ignore disconnect errors during failed realtime setup.
+      }
+    }
+    if (processorSinkNode) {
+      try {
+        processorSinkNode.disconnect();
+      } catch {
+        // Ignore disconnect errors during failed realtime setup.
+      }
+    }
+    if (sourceNode) {
+      try {
+        sourceNode.disconnect();
+      } catch {
+        // Ignore disconnect errors during failed realtime setup.
+      }
+    }
+    if (audioContext) {
+      void audioContext.close().catch(() => {});
+    }
+    throw error;
   }
-
-  operatorMicState.mode = 'realtime';
-  operatorMicState.stream = stream;
-  operatorMicState.audioContext = audioContext;
-  operatorMicState.sourceNode = sourceNode;
-  operatorMicState.processorNode = processorNode;
-  operatorMicState.processorSinkNode = processorSinkNode;
-  operatorMicState.language = language === 'ja' ? 'ja' : 'en';
-  operatorMicState.recording = true;
-  operatorMicState.startedAtMs = Date.now();
-  operatorMicState.realtimeGeneration = nextRealtimeGeneration;
-  clearOperatorRealtimeAudioBuffer();
-  beginOperatorRealtimeDraft(operatorMicState.language);
-
-  processorNode.onaudioprocess = (event) => {
-    if (!operatorMicState.recording || operatorMicState.mode !== 'realtime') {
-      return;
-    }
-    const chunk = encodeRealtimeAudioChunk(
-      event.inputBuffer.getChannelData(0),
-      event.inputBuffer.sampleRate,
-      operatorRealtimeAsrConfig.sampleRateHz
-    );
-    if (!chunk) {
-      return;
-    }
-    operatorMicState.realtimePcmChunks.push(chunk.pcmBytes);
-    operatorMicState.realtimePcmBytes += chunk.pcmBytes.length;
-    const sent = sendOperatorRealtimeAsrPayload('operator_realtime_asr_chunk', {
-      language: operatorMicState.language,
-      audio: chunk.audio,
-      sample_rate_hz: operatorRealtimeAsrConfig.sampleRateHz
-    });
-    if (!sent) {
-      setOperatorStatusLine('realtime ASR offline', 'warn');
-    }
-  };
-
-  return true;
 }
 
 async function stopOperatorRealtimeRecording() {
@@ -1894,40 +2121,50 @@ async function stopOperatorRealtimeRecording() {
 
 async function startOperatorRecording(language) {
   if (operatorMicState.recording) {
-    return;
+    return false;
   }
   if (!navigator.mediaDevices?.getUserMedia) {
     setOperatorStatusLine('microphone unavailable (use text input)', 'warn');
-    return;
+    return false;
   }
   if (!shouldUseOperatorRealtimeAsr() && typeof MediaRecorder === 'undefined') {
     setOperatorStatusLine('microphone recorder unavailable (use text input)', 'warn');
-    return;
+    return false;
   }
   const activeInputKind = operatorActivePrompt?.input_kind ?? null;
   if (operatorUiState.awaiting && activeInputKind && activeInputKind !== 'text') {
     setOperatorStatusLine('prompt expects choice; use buttons or text input', 'warn');
-    return;
+    return false;
   }
 
   try {
     hideOperatorKeyboard(false);
-    await unlockPlaybackAudio();
+    void unlockPlaybackAudio().catch(() => {
+      setTtsPhase('browser_blocked', 'warn');
+    });
     if (shouldUseOperatorRealtimeAsr()) {
-      await startOperatorRealtimeRecording(language);
-      if (operatorMicState.stopTimer) {
-        clearTimeout(operatorMicState.stopTimer);
-      }
-      operatorMicState.stopTimer = setTimeout(() => {
-        if (!operatorMicState.recording) {
-          return;
+      try {
+        await startOperatorRealtimeRecording(language);
+        if (operatorMicState.stopTimer) {
+          clearTimeout(operatorMicState.stopTimer);
         }
-        stopOperatorRecordingAndTranscribe().catch(() => {
-          // Ignore here. UI path already updates status on errors.
-        });
-      }, OPERATOR_ASR_MAX_RECORDING_MS);
-      setOperatorStatusLine(`recording realtime (${operatorMicState.language})...`, 'ok');
-      return;
+        operatorMicState.stopTimer = setTimeout(() => {
+          if (!operatorMicState.recording) {
+            return;
+          }
+          stopOperatorRecordingAndTranscribe().catch(() => {
+            // Ignore here. UI path already updates status on errors.
+          });
+        }, OPERATOR_ASR_MAX_RECORDING_MS);
+        setOperatorStatusLine(`recording realtime (${operatorMicState.language})...`, 'ok');
+        return true;
+      } catch (error) {
+        if (typeof MediaRecorder === 'undefined') {
+          throw error;
+        }
+        releaseOperatorMicCapture();
+        setOperatorStatusLine(`realtime unavailable; using batch (${language === 'ja' ? 'ja' : 'en'})...`, 'warn');
+      }
     }
     const recorder = await ensureOperatorMediaRecorder();
     operatorMicState.mode = 'batch';
@@ -1953,9 +2190,11 @@ async function startOperatorRecording(language) {
       });
     }, OPERATOR_ASR_MAX_RECORDING_MS);
     setOperatorStatusLine(`recording (${operatorMicState.language})...`, 'ok');
+    return true;
   } catch (error) {
     setOperatorStatusLine(`mic error: ${error.message} (use text input)`, 'warn');
     releaseOperatorMicCapture();
+    return false;
   }
 }
 
@@ -2245,6 +2484,8 @@ function handlePayload(payload) {
     handleOperatorAck(payload);
   } else if (payload.type === 'operator_state') {
     handleOperatorStatePayload(payload);
+  } else if (payload.type === 'operator_recover_result') {
+    handleOperatorRecoverResult(payload);
   } else if (payload.type === 'operator_terminal_snapshot') {
     handleOperatorTerminalSnapshot(payload);
   } else if (payload.type === 'operator_realtime_asr_delta') {
@@ -2677,7 +2918,14 @@ function registerOperatorPttButton(button, language) {
     }
     event.preventDefault();
     operatorMicState.pointerArmed = true;
-    await startOperatorRecording(language);
+    const started = await startOperatorRecording(language);
+    if (!started) {
+      operatorMicState.pointerArmed = false;
+      return;
+    }
+    if (!operatorMicState.pointerArmed) {
+      await stopOperatorRecordingAndTranscribe();
+    }
   });
 
   const stopHandler = async () => {
@@ -2691,6 +2939,147 @@ function registerOperatorPttButton(button, language) {
   button.addEventListener('pointerup', stopHandler);
   button.addEventListener('pointerleave', stopHandler);
   button.addEventListener('pointercancel', stopHandler);
+}
+
+function installOperatorKeyboardPtt() {
+  window.addEventListener('keydown', async (event) => {
+    const language = resolveOperatorKeyboardPttLanguage(event, {
+      isMobileUi: operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE,
+      textInputElement: operatorTextInputEl
+    });
+    if (!language) {
+      return;
+    }
+    if (operatorMicState.pointerArmed || operatorMicState.keyboardArmedKey !== null || operatorMicState.recording) {
+      return;
+    }
+    if (operatorMicState.keyboardPendingKey !== null) {
+      return;
+    }
+
+    event.preventDefault();
+    if (document.activeElement === operatorTextInputEl) {
+      operatorTextInputEl.blur();
+    }
+    if (shouldDelayOperatorKeyboardPttStart(event.key)) {
+      operatorMicState.keyboardPendingKey = event.key;
+      operatorMicState.keyboardPendingTimer = window.setTimeout(async () => {
+        operatorMicState.keyboardPendingTimer = null;
+        if (operatorMicState.keyboardPendingKey !== event.key) {
+          return;
+        }
+        operatorMicState.keyboardPendingKey = null;
+        if (operatorMicState.pointerArmed || operatorMicState.keyboardArmedKey !== null || operatorMicState.recording) {
+          return;
+        }
+        setOperatorStatusLine(`keyboard PTT (${language})...`, 'default');
+        operatorMicState.keyboardArmedKey = event.key;
+        const started = await startOperatorRecording(language);
+        if (!started) {
+          if (operatorMicState.keyboardArmedKey === event.key) {
+            operatorMicState.keyboardArmedKey = null;
+          }
+          return;
+        }
+        if (operatorMicState.keyboardArmedKey !== event.key) {
+          await stopOperatorRecordingAndTranscribe();
+        }
+      }, OPERATOR_KEYBOARD_MODIFIER_PTT_DELAY_MS);
+      return;
+    }
+
+    setOperatorStatusLine(`keyboard PTT (${language})...`, 'default');
+    operatorMicState.keyboardArmedKey = event.key;
+    const started = await startOperatorRecording(language);
+    if (!started) {
+      if (operatorMicState.keyboardArmedKey === event.key) {
+        operatorMicState.keyboardArmedKey = null;
+      }
+      return;
+    }
+    if (operatorMicState.keyboardArmedKey !== event.key) {
+      await stopOperatorRecordingAndTranscribe();
+    }
+  }, true);
+
+  window.addEventListener('keyup', async (event) => {
+    if (operatorMicState.keyboardPendingKey && event.key === operatorMicState.keyboardPendingKey) {
+      event.preventDefault();
+      cancelPendingOperatorKeyboardPttStart();
+      return;
+    }
+    if (!operatorMicState.keyboardArmedKey || event.key !== operatorMicState.keyboardArmedKey) {
+      return;
+    }
+
+    event.preventDefault();
+    operatorMicState.keyboardArmedKey = null;
+    await stopOperatorRecordingAndTranscribe();
+  }, true);
+
+  window.addEventListener('blur', () => {
+    cancelPendingOperatorKeyboardPttStart();
+    if (!operatorMicState.keyboardArmedKey) {
+      return;
+    }
+    operatorMicState.keyboardArmedKey = null;
+    void stopOperatorRecordingAndTranscribe();
+  });
+}
+
+function installOperatorKeyboardCommands() {
+  window.addEventListener('keydown', (event) => {
+    const action = resolveOperatorKeyboardCommandAction(event, {
+      textInputElement: operatorTextInputEl
+    });
+    if (!action) {
+      return;
+    }
+    if (action === 'focus_text_input') {
+      event.preventDefault();
+      cancelPendingOperatorKeyboardPttStart();
+      if (operatorMicState.keyboardArmedKey === 'Control' || operatorMicState.keyboardArmedKey === 'Alt') {
+        operatorMicState.keyboardArmedKey = null;
+        releaseOperatorMicCapture();
+      }
+      focusOperatorTextInput();
+      return;
+    }
+    if (action === 'clear_text') {
+      event.preventDefault();
+      clearOperatorTextInput({ focusTextInput: true });
+      return;
+    }
+    if (action === 'send_text') {
+      event.preventDefault();
+      submitOperatorTextInput();
+      return;
+    }
+    if (action === 'mirror_page_up' || action === 'mirror_page_down') {
+      if (!operatorMirrorEl || operatorMirrorEl.classList.contains('hidden')) {
+        return;
+      }
+      event.preventDefault();
+      scrollOperatorMirrorByPage(action === 'mirror_page_up' ? -1 : 1);
+      return;
+    }
+    if (action === 'select_up' || action === 'select_down') {
+      event.preventDefault();
+      sendOperatorResponse('key', action === 'select_up' ? 'Up' : 'Down', { submit: false });
+      return;
+    }
+    event.preventDefault();
+    sendOperatorResponse('key', 'Enter', { submit: false });
+  }, true);
+}
+
+async function handleOperatorEscButtonClick() {
+  hideOperatorKeyboard();
+  if (operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE && operatorEscRecoveryTracker.recordTap(Date.now())) {
+    await requestOperatorRecoverDefault();
+    return;
+  }
+  sendOperatorResponse('key', 'Esc', { requestId: null, submit: false });
 }
 
 function installOperatorControls() {
@@ -2726,20 +3115,24 @@ function installOperatorControls() {
 
   if (operatorEscButtonEl) {
     operatorEscButtonEl.addEventListener('click', () => {
-      hideOperatorKeyboard();
-      sendOperatorResponse('key', 'Esc', { requestId: null, submit: false });
+      void handleOperatorEscButtonClick();
     });
   }
   if (operatorEscInlineButtonEl) {
     operatorEscInlineButtonEl.addEventListener('click', () => {
-      hideOperatorKeyboard();
-      sendOperatorResponse('key', 'Esc', { requestId: null, submit: false });
+      void handleOperatorEscButtonClick();
     });
   }
 
   if (operatorMirrorToggleEl) {
     operatorMirrorToggleEl.addEventListener('click', () => {
       dispatchOperatorUiAction({ type: 'mirror_toggle' });
+    });
+  }
+  if (operatorHelpToggleEl) {
+    operatorHelpToggleEl.addEventListener('click', () => {
+      operatorKeyboardHelpOpen = !operatorKeyboardHelpOpen;
+      updateOperatorUi();
     });
   }
   if (operatorMirrorEl) {
@@ -2752,15 +3145,11 @@ function installOperatorControls() {
     });
   }
   if (operatorTextClearButtonEl) {
+    operatorTextClearButtonEl.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+    });
     operatorTextClearButtonEl.addEventListener('click', () => {
-      if (!operatorTextInputEl) {
-        return;
-      }
-      cancelPendingOperatorRealtimeAsr(true);
-      clearOperatorRealtimeAudioBuffer();
-      operatorTextInputEl.value = '';
-      syncOperatorTextInputHeight();
-      setOperatorStatusLine('text cleared', 'default');
+      clearOperatorTextInput({ focusTextInput: true });
     });
   }
   if (operatorTextCancelButtonEl) {
@@ -2774,18 +3163,14 @@ function installOperatorControls() {
       syncOperatorTextInputHeight();
     });
     operatorTextInputEl.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          hideOperatorKeyboard();
-        }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        hideOperatorKeyboard();
         return;
       }
-      if (event.shiftKey) {
+      if (event.key === 'Enter') {
         return;
       }
-      event.preventDefault();
-      submitOperatorTextInput();
     });
     window.addEventListener('resize', syncOperatorTextInputHeight);
   }
@@ -2806,6 +3191,8 @@ function installOperatorControls() {
 
   registerOperatorPttButton(operatorPttJaButtonEl, 'ja');
   registerOperatorPttButton(operatorPttEnButtonEl, 'en');
+  installOperatorKeyboardPtt();
+  installOperatorKeyboardCommands();
   updateOperatorUi();
 }
 
@@ -2906,6 +3293,10 @@ function tick(nowMs) {
 
 let resizeObserver;
 
+function markOperatorUiBootReady() {
+  document.body.classList.remove('boot-pending');
+}
+
 async function bootstrap() {
   await loadOperatorUiConfig();
   setMetricValue(renderModeEl, 'monitor', 'default');
@@ -2917,7 +3308,12 @@ async function bootstrap() {
   installGestureShortcuts();
   installAudioUnlockHooks();
   installAudioReplayButton();
-  installOperatorControls();
+  if (operatorPanelEnabled) {
+    installOperatorControls();
+  } else {
+    updateOperatorUi();
+  }
+  markOperatorUiBootReady();
 
   lgApplyButton.addEventListener('click', () => {
     writeLookingGlassEnabled(lgEnabledInput.checked);
@@ -2937,6 +3333,7 @@ async function bootstrap() {
 }
 
 bootstrap().catch((error) => {
+  markOperatorUiBootReady();
   setMetricValue(wsStatusEl, 'boot-error', 'warn');
   setMetricValue(lgStatusEl, 'boot-error', 'warn');
   stateValuesEl.textContent = `bootstrap failed: ${error.message}`;

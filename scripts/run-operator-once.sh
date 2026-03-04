@@ -10,6 +10,7 @@ WINDOW_BASE="operator"
 AGENT_CMD="codex"
 STACK_CMD="./scripts/run-operator-stack.sh"
 AGENT_CWD="$CALLER_DIR"
+BRIDGE_TARGET="agent"
 FACE_UI_MODE=""
 FACE_AUDIO_TARGET=""
 ASR_BASE_URL=""
@@ -92,6 +93,8 @@ Options:
   --agent-shell             shorthand for --agent-cmd 'bash -l'
   --repo <path>             target project directory for the agent pane (resolved from the shell directory where this script was invoked)
   --agent-cwd <path>        same as --repo
+  --bridge-target <agent|stack>
+                           tmux pane mirrored/controlled by operator bridge (default: agent)
   --stack-cmd <command>     stack launcher command (default: ./scripts/run-operator-stack.sh)
   --ui-mode <auto|pc|mobile>
                             FACE_UI_MODE override for stack launch
@@ -155,6 +158,11 @@ while [[ $# -gt 0 ]]; do
       AGENT_CWD="$2"
       shift 2
       ;;
+    --bridge-target)
+      require_value "$1" "${2:-}"
+      BRIDGE_TARGET="$2"
+      shift 2
+      ;;
     --stack-cmd)
       require_value "$1" "${2:-}"
       STACK_CMD="$2"
@@ -215,6 +223,11 @@ if [[ -n "$FACE_AUDIO_TARGET" && ! "$FACE_AUDIO_TARGET" =~ ^(local|browser|both)
   exit 2
 fi
 
+if [[ ! "$BRIDGE_TARGET" =~ ^(agent|stack)$ ]]; then
+  echo "[run-operator-once] --bridge-target must be one of: agent, stack" >&2
+  exit 2
+fi
+
 next_window_name() {
   local session_name="$1"
   local base_name="$2"
@@ -247,6 +260,11 @@ tmux split-window -d -h -t "$agent_pane"
 stack_pane="$(tmux display-message -p -t "${SESSION_NAME}:${window_name}.1" '#{pane_id}')"
 tmux select-layout -t "${SESSION_NAME}:${window_name}" even-horizontal >/dev/null 2>&1 || true
 
+bridge_pane="$stack_pane"
+if [[ "$BRIDGE_TARGET" == "agent" ]]; then
+  bridge_pane="$agent_pane"
+fi
+
 # Launch agent command in the first pane.
 printf -v quoted_agent_cwd '%q' "$AGENT_CWD"
 tmux send-keys -t "$agent_pane" "cd $quoted_agent_cwd" C-m
@@ -261,7 +279,8 @@ append_env() {
   printf -v quoted '%q' "$value"
   stack_launch+=" ${key}=${quoted}"
 }
-append_env "MH_BRIDGE_TMUX_PANE" "$agent_pane"
+append_env "MH_BRIDGE_TMUX_PANE" "$bridge_pane"
+append_env "MH_BRIDGE_RECOVERY_TMUX_PANE" "$agent_pane"
 if [[ -n "$FACE_UI_MODE" ]]; then
   append_env "FACE_UI_MODE" "$FACE_UI_MODE"
 fi
@@ -281,7 +300,7 @@ echo "[run-operator-once] session=${SESSION_NAME} window=${window_name}"
 echo "[run-operator-once] profile=${PROFILE_NAME}"
 echo "[run-operator-once] agent pane=${agent_pane} cwd=${AGENT_CWD} command=${AGENT_CMD}"
 echo "[run-operator-once] stack pane=${stack_pane} command=${STACK_CMD}"
-echo "[run-operator-once] MH_BRIDGE_TMUX_PANE=${agent_pane}"
+echo "[run-operator-once] MH_BRIDGE_TMUX_PANE=${bridge_pane} (${BRIDGE_TARGET})"
 
 if [[ "$ATTACH_AFTER_START" -eq 0 ]]; then
   echo "[run-operator-once] attach skipped (--no-attach)."
