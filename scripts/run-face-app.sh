@@ -76,4 +76,4 @@ case "${UI_MODE,,}" in
     ;;
 esac
 
-exec env FACE_AUDIO_TARGET="$AUDIO_TARGET" FACE_UI_MODE="$UI_MODE" node face-app/dist/index.js
+exec env FACE_AUDIO_TARGET="$AUDIO_TARGET" FACE_UI_MODE="$UI_MODE" FACE_OPERATOR_PANEL_ENABLED="${FACE_OPERATOR_PANEL_ENABLED:-0}" node face-app/dist/index.js

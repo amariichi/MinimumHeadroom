@@ -65,6 +65,26 @@ async function speakOnce(payload) {
   return { worker, result };
 }
 
+test('tts controller rewrites Japanese decimal separators into spoken 点', async () => {
+  const { worker, result } = await speakOnce({
+    text: '外の温度計は一・八度です。'
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, '外の温度計は一点八度です。');
+});
+
+test('tts controller keeps dotted version numbers unchanged in Japanese text', async () => {
+  const { worker, result } = await speakOnce({
+    text: '現在のバージョンは1.2.3です。'
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, '現在のバージョンは1.2.3です。');
+});
+
 test('tts controller routes mixed-script boundary utterances to Ono_Anna for qwen workers', async () => {
   const worker = new FakeWorker();
   const controller = createTtsController({
@@ -549,13 +569,13 @@ test('tts controller normalizes punctuation and latin diacritics without languag
   assert.equal(speaks(worker)[0].text, "That's fine cafe");
 });
 
-test('tts controller maps japanese punctuation to spaces inside regular text', async () => {
+test('tts controller keeps japanese punctuation inside regular text', async () => {
   const { worker } = await speakOnce({
     text: 'こんにちは。ありがとう、助かる・本当に'
   });
 
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, 'こんにちは ありがとう 助かる 本当に');
+  assert.equal(speaks(worker)[0].text, 'こんにちは。ありがとう、助かる・本当に');
 });
 
 test('tts controller drops punctuation-only utterance after normalization', async () => {

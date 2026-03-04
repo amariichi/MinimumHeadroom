@@ -11,6 +11,12 @@ const DEFAULT_WORKER_COMMAND = {
 const DEFAULT_QWEN_BOUNDARY_SPEAKER = 'Ono_Anna';
 const QWEN_ENGINE_NAME = 'qwen3-tts-0.6b-customvoice';
 const KANJI_SCRIPT_CLASS = '㐀-䶿一-龯々〆ヵヶ豈-﫿';
+const JAPANESE_SCRIPT_RE = new RegExp(`[\\p{Script=Hiragana}\\p{Script=Katakana}${KANJI_SCRIPT_CLASS}]`, 'u');
+const JAPANESE_NUMERIC_CLASS = '0-9０-９〇零一二三四五六七八九十百千万億兆';
+const JAPANESE_NUMERIC_CHAIN_RE = new RegExp(
+  `([${JAPANESE_NUMERIC_CLASS}]+(?:\\s*[.．・･]\\s*[${JAPANESE_NUMERIC_CLASS}]+)+)`,
+  'gu'
+);
 const QWEN_BOUNDARY_SPEAKER_RE = new RegExp(
   `(?:[A-Za-z0-9][A-Za-z0-9./:+_-]{0,31})(?:\\s*[.,;:!?]\\s*)?(?=[${KANJI_SCRIPT_CLASS}])`,
   'u'
@@ -97,7 +103,36 @@ function normalizeEnglishTtsText(text) {
   return normalized.replace(/\s+/g, ' ').trim();
 }
 
+function replaceJapaneseDecimalSeparators(text) {
+  return text.replace(JAPANESE_NUMERIC_CHAIN_RE, (segment) => {
+    const separators = segment.match(/[.．・･]/gu) ?? [];
+    if (separators.length !== 1) {
+      return segment;
+    }
+    return segment.replace(/\s*[.．・･]\s*/u, '点');
+  });
+}
+
+function normalizeJapaneseTtsText(text) {
+  let normalized = text
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s*…\s*/g, '、')
+    .replace(/\s*\.{3,}\s*/g, '、')
+    .replace(/[\u00A0\u202F]/g, ' ');
+
+  normalized = normalized
+    .normalize('NFD')
+    .replace(/([\p{Script=Latin}])\p{M}+/gu, '$1')
+    .normalize('NFC');
+
+  return replaceJapaneseDecimalSeparators(normalized).replace(/[ \t]+/g, ' ').trim();
+}
+
 function normalizeSpeechText(text) {
+  if (JAPANESE_SCRIPT_RE.test(text)) {
+    return normalizeJapaneseTtsText(text);
+  }
   return normalizeEnglishTtsText(text);
 }
 

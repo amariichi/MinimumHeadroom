@@ -57,6 +57,8 @@ if (!uiMode) {
   process.exit(2);
 }
 console.info(`[face-app] ui mode=${uiMode}`);
+const operatorPanelEnabled = (process.env.FACE_OPERATOR_PANEL_ENABLED ?? '1') !== '0';
+console.info(`[face-app] operator panel=${operatorPanelEnabled ? 'enabled' : 'disabled'}`);
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -170,10 +172,34 @@ const server = await startFaceWebSocketServer({
   },
   onHttpRequest(request, response) {
     const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (parsedUrl.pathname === '/api/operator/recover-default') {
+      if (request.method !== 'POST') {
+        writeJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed'
+        });
+        return true;
+      }
+      const sessionId = typeof parsedUrl.searchParams.get('session_id') === 'string' && parsedUrl.searchParams.get('session_id').trim() !== ''
+        ? parsedUrl.searchParams.get('session_id').trim()
+        : 'default';
+      server.broadcast({
+        v: 1,
+        type: 'operator_bridge_recover_default',
+        session_id: sessionId,
+        ts: Date.now()
+      });
+      writeJson(response, 200, {
+        ok: true,
+        session_id: sessionId
+      });
+      return true;
+    }
     if (parsedUrl.pathname === '/api/operator/ui-config') {
       writeJson(response, 200, {
         ok: true,
         uiMode,
+        operatorPanelEnabled,
         batchAsr: {
           enabled: operatorAsrProxy?.enabled === true
         },

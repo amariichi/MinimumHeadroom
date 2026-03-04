@@ -6,7 +6,7 @@
     <title>Minimum Headroom Face</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
+  <body class="boot-pending">
     <main class="stage" id="stage">
       <canvas id="face-canvas" aria-label="Minimum Headroom face canvas"></canvas>
 
@@ -69,17 +69,37 @@
         <ol id="event-log" class="event-log"></ol>
       </section>
 
-      <button id="operator-esc" class="operator-esc" type="button">Esc</button>
+      <button id="operator-esc" class="operator-esc hidden" type="button">Esc</button>
 
-      <section id="operator-panel" class="operator-panel" aria-live="polite">
+      <section id="operator-panel" class="operator-panel hidden" aria-live="polite">
         <header class="operator-header">
           <h2 id="operator-title" class="operator-title">Operator</h2>
           <div class="operator-header-actions">
             <button id="operator-esc-inline" type="button" class="operator-btn">Esc</button>
+            <button
+              id="operator-help-toggle"
+              type="button"
+              class="operator-btn operator-help-toggle hidden"
+              aria-controls="operator-keyboard-help"
+              aria-expanded="false"
+              title="Keyboard shortcuts"
+            >?</button>
             <button id="operator-restart" type="button" class="operator-btn">Restart</button>
             <button id="operator-close" type="button" class="operator-btn">Close</button>
           </div>
         </header>
+
+        <div id="operator-keyboard-help" class="operator-keyboard-help" aria-label="Keyboard shortcuts" hidden>
+          <div class="operator-keyboard-help-row"><kbd>Space</kbd><span>PTT JA</span></div>
+          <div class="operator-keyboard-help-row"><kbd>Shift</kbd><span>+</span><kbd>Space</kbd><span>PTT EN</span></div>
+          <div class="operator-keyboard-help-row"><kbd>↑</kbd><span>/</span><kbd>↓</kbd><span>Move choice</span></div>
+          <div class="operator-keyboard-help-row"><kbd>Enter</kbd><span>Select</span></div>
+          <div class="operator-keyboard-help-row"><kbd>Shift</kbd><span>+</span><kbd>Enter</kbd><span>Send text</span></div>
+          <div class="operator-keyboard-help-row"><kbd>Backspace</kbd><span>Clear</span></div>
+          <div class="operator-keyboard-help-row"><kbd>PageUp</kbd><span>/</span><kbd>PageDown</kbd><span>Scroll terminal</span></div>
+          <div class="operator-keyboard-help-row"><kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>Focus text</span></div>
+          <div class="operator-keyboard-help-row"><kbd>Ctrl</kbd><span>PTT JA alt</span><span class="operator-keyboard-help-divider">•</span><kbd>Alt</kbd><span>PTT EN alt</span></div>
+        </div>
 
         <p id="operator-status" class="operator-status">idle</p>
         <p id="operator-prompt" class="operator-prompt">No active prompt.</p>
