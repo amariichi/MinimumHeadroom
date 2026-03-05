@@ -95,6 +95,46 @@ test('tts controller rewrites v-prefixed semver tokens into spoken Japanese', as
   assert.equal(speaks(worker)[0].text, 'バージョン1点1 と バージョン1点7点0 を公開しました。');
 });
 
+test('tts controller prefixes unknown leading ascii token with はい in Japanese route', async () => {
+  const { worker, result } = await speakOnce({
+    text: 'execplanを作成しました。'
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'はい、execplanを作成しました。');
+});
+
+test('tts controller keeps known leading ascii token without extra はい', async () => {
+  const { worker, result } = await speakOnce({
+    text: 'GitHub承認申請をお願いします。'
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'GitHub承認申請をお願いします。');
+});
+
+test('tts controller prefixes leading numeric+japanese token with はい', async () => {
+  const { worker, result } = await speakOnce({
+    text: '23日までに完了します。'
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, 'はい、23日までに完了します。');
+});
+
+test('tts controller does not prefix semver-like dotted number at sentence start', async () => {
+  const { worker, result } = await speakOnce({
+    text: '1.2.3です。'
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, '1.2.3です。');
+});
+
 test('tts controller routes mixed-script boundary utterances to Ono_Anna for qwen workers', async () => {
   const worker = new FakeWorker();
   const controller = createTtsController({

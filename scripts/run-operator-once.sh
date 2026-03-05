@@ -17,6 +17,7 @@ ASR_BASE_URL=""
 PROFILE_NAME="default"
 ATTACH_AFTER_START=1
 STACK_CMD_SET=0
+ALLOW_NEW_WINDOW=0
 
 list_profiles() {
   cat <<'EOF'
@@ -102,6 +103,7 @@ Options:
                             FACE_AUDIO_TARGET override for stack launch
   --asr-base-url <url>      MH_OPERATOR_ASR_BASE_URL override for stack launch
   --no-attach               do not attach/switch tmux client after start
+  --allow-new-window        allow creating <window>-1, <window>-2, ... when the base window already exists
   -h, --help                show this help
 
 Examples:
@@ -188,6 +190,10 @@ while [[ $# -gt 0 ]]; do
       ATTACH_AFTER_START=0
       shift
       ;;
+    --allow-new-window)
+      ALLOW_NEW_WINDOW=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -245,6 +251,21 @@ next_window_name() {
 session_exists=0
 if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   session_exists=1
+fi
+
+window_exists=0
+if [[ "$session_exists" -eq 1 ]] && tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' | grep -Fxq "$WINDOW_BASE"; then
+  window_exists=1
+fi
+
+if [[ "$window_exists" -eq 1 && "$ALLOW_NEW_WINDOW" -ne 1 ]]; then
+  cat >&2 <<EOF
+[run-operator-once] ${SESSION_NAME}:${WINDOW_BASE} already exists.
+[run-operator-once] Use ./scripts/restart-operator-stack-in-place.sh --session ${SESSION_NAME} --window ${WINDOW_BASE} --profile ${PROFILE_NAME}
+[run-operator-once] to restart the existing operator stack in place.
+[run-operator-once] Pass --allow-new-window only if you intentionally want another operator window.
+EOF
+  exit 2
 fi
 
 if [[ "$session_exists" -eq 0 ]]; then
