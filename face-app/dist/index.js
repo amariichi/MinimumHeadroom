@@ -7,6 +7,7 @@ import { createTtsController } from './tts_controller.js';
 import { loadFaceAppConfig } from './config_loader.js';
 import { createOperatorAsrProxy } from './operator_asr_proxy.js';
 import { createOperatorRealtimeAsrProxy } from './operator_realtime_asr_proxy.js';
+import { createAgentRuntimeStateStore } from './agent_runtime_state.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -75,6 +76,14 @@ const operatorRealtimeAsrModel =
 const operatorRealtimeAsrDebug = (process.env.MH_OPERATOR_REALTIME_ASR_DEBUG ?? '0') === '1';
 const operatorRealtimeAsrSampleRateHz = Number.parseInt(process.env.MH_OPERATOR_REALTIME_ASR_SAMPLE_RATE_HZ ?? '16000', 10);
 const faceConfig = loadFaceAppConfig({ repoRoot, env: process.env, log: console });
+const agentStatePath = process.env.MH_AGENT_STATE_PATH ?? '';
+const agentRuntimeState = createAgentRuntimeStateStore({
+  repoRoot,
+  statePath: agentStatePath,
+  hardCap: Number.parseInt(process.env.MH_AGENT_HARD_CAP ?? '8', 10),
+  log: console
+});
+agentRuntimeState.load();
 const operatorAsrProxy = createOperatorAsrProxy({
   baseUrl: operatorAsrBaseUrl,
   endpointUrl: operatorAsrEndpointUrl,
@@ -207,6 +216,23 @@ const server = await startFaceWebSocketServer({
           enabled: operatorRealtimeAsrProxy?.enabled === true,
           sampleRateHz: Number.isNaN(operatorRealtimeAsrSampleRateHz) ? 16_000 : operatorRealtimeAsrSampleRateHz
         }
+      });
+      return true;
+    }
+    if (parsedUrl.pathname === '/api/agents/state') {
+      if (request.method !== 'GET') {
+        writeJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed'
+        });
+        return true;
+      }
+
+      writeJson(response, 200, {
+        ok: true,
+        statePath: agentRuntimeState.statePath,
+        hardCap: agentRuntimeState.hardCap,
+        state: agentRuntimeState.getState()
       });
       return true;
     }
