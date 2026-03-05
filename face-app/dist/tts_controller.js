@@ -18,10 +18,37 @@ const JAPANESE_NUMERIC_CHAIN_RE = new RegExp(
   'gu'
 );
 const JAPANESE_SEMVER_RE = /(?<![A-Za-z0-9])[vV](\d+(?:\.\d+){1,2})(?![A-Za-z0-9])/gu;
+const LEADING_DECORATION_RE = /^(\s*[「『（([{'"“‘]*)/u;
+const LEADING_ASCII_TOKEN_RE = /^([A-Za-z][A-Za-z0-9./:+_-]{0,31})/u;
+const LEADING_NUMERIC_TOKEN_RE = /^([0-9０-９]+(?:[.．・･点][0-9０-９]+)?)(?![0-9０-９.．・･点])/u;
+const LEADING_JAPANESE_RE = new RegExp(`^\\s*[\\p{Script=Hiragana}\\p{Script=Katakana}${KANJI_SCRIPT_CLASS}]`, 'u');
 const QWEN_BOUNDARY_SPEAKER_RE = new RegExp(
   `(?:[A-Za-z0-9][A-Za-z0-9./:+_-]{0,31})(?:\\s*[.,;:!?]\\s*)?(?=[${KANJI_SCRIPT_CLASS}])`,
   'u'
 );
+const KNOWN_LEADING_ASCII_TOKENS = new Set([
+  'ai',
+  'api',
+  'http',
+  'https',
+  'url',
+  'ci/cd',
+  'github',
+  'nodejs',
+  'node.js',
+  'readme',
+  'request',
+  'pull',
+  'pr',
+  'ci',
+  'cd',
+  'ssh',
+  'cli',
+  'json',
+  'yaml',
+  'gpu',
+  'cpu'
+]);
 
 function toLogger(log) {
   if (!log) {
@@ -118,6 +145,49 @@ function replaceJapaneseSemverTokens(text) {
   return text.replace(JAPANESE_SEMVER_RE, (_, version) => `バージョン${version.replaceAll('.', '点')}`);
 }
 
+function isKnownLeadingAsciiToken(token) {
+  return KNOWN_LEADING_ASCII_TOKENS.has(token.toLowerCase());
+}
+
+function applyJapaneseLeadingUnknownAsciiFiller(text) {
+  const leadingMatch = LEADING_DECORATION_RE.exec(text);
+  const leading = leadingMatch?.[1] ?? '';
+  const rest = text.slice(leading.length);
+  const tokenMatch = LEADING_ASCII_TOKEN_RE.exec(rest);
+  if (!tokenMatch) {
+    return text;
+  }
+
+  const token = tokenMatch[1];
+  if (isKnownLeadingAsciiToken(token)) {
+    return text;
+  }
+
+  const trailing = rest.slice(token.length);
+  if (!JAPANESE_SCRIPT_RE.test(trailing)) {
+    return text;
+  }
+
+  return `${leading}はい、${rest}`;
+}
+
+function applyJapaneseLeadingNumericFiller(text) {
+  const leadingMatch = LEADING_DECORATION_RE.exec(text);
+  const leading = leadingMatch?.[1] ?? '';
+  const rest = text.slice(leading.length);
+  const tokenMatch = LEADING_NUMERIC_TOKEN_RE.exec(rest);
+  if (!tokenMatch) {
+    return text;
+  }
+
+  const trailing = rest.slice(tokenMatch[1].length);
+  if (!LEADING_JAPANESE_RE.test(trailing)) {
+    return text;
+  }
+
+  return `${leading}はい、${rest}`;
+}
+
 function normalizeJapaneseTtsText(text) {
   let normalized = text
     .replace(/[‘’]/g, "'")
@@ -133,6 +203,8 @@ function normalizeJapaneseTtsText(text) {
 
   normalized = replaceJapaneseSemverTokens(normalized);
   normalized = replaceJapaneseDecimalSeparators(normalized);
+  normalized = applyJapaneseLeadingNumericFiller(normalized);
+  normalized = applyJapaneseLeadingUnknownAsciiFiller(normalized);
   return normalized.replace(/[ \t]+/g, ' ').trim();
 }
 
