@@ -251,3 +251,25 @@ test('operator bridge recover payload restores the default tmux pane and emits a
   assert.ok(snapshot);
   assert.deepEqual(snapshot.lines, ['line:demo:0.0']);
 });
+
+test('operator bridge set pane payload switches tmux pane and emits result', async () => {
+  const { runtime, payloads, tmux } = createRuntimeHarness();
+  payloads.length = 0;
+
+  await runtime.handlePayload({
+    v: 1,
+    type: 'operator_bridge_set_pane',
+    session_id: 's1',
+    pane: 'demo:7.1',
+    agent_id: 'agent-x'
+  });
+
+  assert.equal(tmux.pane, 'demo:7.1');
+  assert.equal(tmux.calls.some((entry) => entry.kind === 'setPane' && entry.pane === 'demo:7.1'), true);
+
+  const result = payloads.find((entry) => entry.type === 'operator_set_pane_result');
+  assert.ok(result);
+  assert.equal(result.ok, true);
+  assert.equal(result.pane, 'demo:7.1');
+  assert.equal(result.agent_id, 'agent-x');
+});

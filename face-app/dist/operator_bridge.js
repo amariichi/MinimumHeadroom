@@ -392,6 +392,17 @@ export function createOperatorBridgeRuntime(options = {}) {
     });
   }
 
+  function emitSetPaneResult(sessionId, ok, pane, reason = null, agentId = null) {
+    emit({
+      type: 'operator_set_pane_result',
+      session_id: normalizeSessionId(sessionId, defaultSessionId),
+      ok: Boolean(ok),
+      pane: pane ?? null,
+      reason: reason ?? null,
+      agent_id: agentId ?? null
+    });
+  }
+
   function trackSpokenSayResult(payload) {
     if (payload.spoken !== true) {
       return;
@@ -633,6 +644,48 @@ export function createOperatorBridgeRuntime(options = {}) {
     }
   }
 
+  async function handleSetPane(payload) {
+    const sessionId = normalizeSessionId(payload?.session_id, defaultSessionId);
+    if (sessionId !== defaultSessionId) {
+      return;
+    }
+
+    const pane = asNonEmptyString(payload?.pane) ?? asNonEmptyString(payload?.pane_id);
+    const agentId = asNonEmptyString(payload?.agent_id);
+    if (!pane || typeof tmuxController.setPane !== 'function') {
+      updateSessionState(sessionId, {
+        tmux_online: false,
+        recovery_mode: true,
+        reason: 'invalid_tmux_pane'
+      });
+      emitSetPaneResult(sessionId, false, tmuxController.pane ?? null, 'invalid_tmux_pane', agentId);
+      emitState(sessionId);
+      return;
+    }
+
+    try {
+      await tmuxController.setPane(pane);
+      terminalSnapshotHashBySession.delete(sessionId);
+      updateSessionState(sessionId, {
+        tmux_online: true,
+        recovery_mode: false,
+        reason: null
+      });
+      emitSetPaneResult(sessionId, true, pane, null, agentId);
+      emitState(sessionId);
+      await publishTerminalSnapshot(sessionId);
+    } catch (error) {
+      const reason = asNonEmptyString(error?.reason) ?? 'set_pane_failed';
+      updateSessionState(sessionId, {
+        tmux_online: false,
+        recovery_mode: true,
+        reason
+      });
+      emitSetPaneResult(sessionId, false, tmuxController.pane ?? null, reason, agentId);
+      emitState(sessionId);
+    }
+  }
+
   return {
     async handlePayload(payload) {
       if (!payload || typeof payload !== 'object') {
@@ -651,6 +704,11 @@ export function createOperatorBridgeRuntime(options = {}) {
 
       if (payload.type === 'operator_bridge_recover_default') {
         await handleRecoverDefault(payload);
+        return;
+      }
+
+      if (payload.type === 'operator_bridge_set_pane') {
+        await handleSetPane(payload);
         return;
       }
 
