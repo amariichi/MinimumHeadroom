@@ -77,6 +77,7 @@ function normalizeAgent(rawAgent, index, now, hardCap) {
   const ts = nowMs(now);
   const normalized = {
     id: asNonEmptyString(rawAgent?.id) ?? `agent-${index + 1}`,
+    session_id: asNonEmptyString(rawAgent?.session_id),
     status: normalizeStatus(rawAgent?.status),
     slot: asInteger(rawAgent?.slot, null, 0),
     removed_slot: asInteger(rawAgent?.removed_slot, null, 0),
@@ -328,6 +329,7 @@ export function createAgentRuntimeStateStore(options = {}) {
 
     const agent = {
       id,
+      session_id: asNonEmptyString(input.session_id),
       status: normalizedStatus,
       slot: resolvedSlot,
       removed_slot: null,
@@ -515,6 +517,9 @@ export function createAgentRuntimeStateStore(options = {}) {
     const nextPaneId = Object.prototype.hasOwnProperty.call(updates, 'pane_id')
       ? asNonEmptyString(updates.pane_id)
       : undefined;
+    const nextSessionId = Object.prototype.hasOwnProperty.call(updates, 'session_id')
+      ? asNonEmptyString(updates.session_id)
+      : undefined;
     const nextStatusBeforeRemove = Object.prototype.hasOwnProperty.call(updates, 'status_before_remove')
       ? asNonEmptyString(updates.status_before_remove)
       : undefined;
@@ -536,6 +541,10 @@ export function createAgentRuntimeStateStore(options = {}) {
       }
       if (nextPaneId !== undefined && nextPaneId !== agent.pane_id) {
         agent.pane_id = nextPaneId;
+        changed = true;
+      }
+      if (nextSessionId !== undefined && nextSessionId !== agent.session_id) {
+        agent.session_id = nextSessionId;
         changed = true;
       }
       if (nextStatusBeforeRemove !== undefined && nextStatusBeforeRemove !== agent.status_before_remove) {

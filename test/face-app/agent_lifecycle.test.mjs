@@ -79,6 +79,7 @@ function createRuntimeHarness(options = {}) {
   stateStore.load();
 
   const commands = [];
+  const focusCalls = [];
   const runtime = createAgentLifecycleRuntime({
     stateStore,
     repoRoot,
@@ -95,10 +96,13 @@ function createRuntimeHarness(options = {}) {
       }
       return { stdout: '', stderr: '', code: 0 };
     },
+    async onFocus(payload) {
+      focusCalls.push(payload);
+    },
     log: quietLog
   });
 
-  return { repoRoot, stateStore, runtime, commands };
+  return { repoRoot, stateStore, runtime, commands, focusCalls };
 }
 
 test('agent lifecycle runtime adds agent without worktree/tmux orchestration', async () => {
@@ -184,6 +188,30 @@ test('agent lifecycle runtime requires removed/stopped before delete-worktree', 
     () => runtime.dispatchAgentAction('agent-active-delete', 'delete-worktree', {}),
     (error) => error?.code === 'invalid_state'
   );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime focus action emits focus callback and updates message', async () => {
+  const { repoRoot, runtime, focusCalls } = createRuntimeHarness();
+  await runtime.addAgent({
+    id: 'agent-focus',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%91',
+    session_id: 'session-focus'
+  });
+
+  const result = await runtime.dispatchAgentAction('agent-focus', 'focus', {
+    session_id: 'session-focus'
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'focus');
+  assert.equal(result.focus.pane_id, '%91');
+  assert.equal(result.focus.session_id, 'session-focus');
+  assert.equal(focusCalls.length, 1);
+  assert.equal(focusCalls[0].agentId, 'agent-focus');
+  assert.equal(focusCalls[0].paneId, '%91');
 
   cleanup(repoRoot);
 });

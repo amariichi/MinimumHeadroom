@@ -85,6 +85,7 @@ const agentRuntimeState = createAgentRuntimeStateStore({
   log: console
 });
 agentRuntimeState.load();
+let liveServer = null;
 const agentLifecycleRuntime = createAgentLifecycleRuntime({
   stateStore: agentRuntimeState,
   repoRoot,
@@ -94,6 +95,21 @@ const agentLifecycleRuntime = createAgentLifecycleRuntime({
   tmuxEnabled: (process.env.MH_AGENT_TMUX_ENABLED ?? '1') === '1',
   worktreeEnabled: (process.env.MH_AGENT_WORKTREE_ENABLED ?? '1') === '1',
   allowExternalDelete: (process.env.MH_AGENT_ALLOW_EXTERNAL_DELETE ?? '0') === '1',
+  async onFocus({ agentId, paneId, sessionId }) {
+    if (!liveServer || typeof liveServer.broadcast !== 'function') {
+      const error = new Error('face server is unavailable for focus handoff');
+      error.code = 'invalid_state';
+      throw error;
+    }
+    liveServer.broadcast({
+      v: 1,
+      type: 'operator_bridge_set_pane',
+      session_id: sessionId,
+      pane: paneId,
+      agent_id: agentId,
+      ts: Date.now()
+    });
+  },
   log: console
 });
 const agentLifecycleApi = createAgentLifecycleApi({
@@ -241,6 +257,7 @@ const server = await startFaceWebSocketServer({
   },
   log: console
 });
+liveServer = server;
 
 operatorRealtimeAsrProxy = createOperatorRealtimeAsrProxy({
   enabled: operatorRealtimeAsrEnabled,

@@ -247,6 +247,7 @@ export function createAgentLifecycleRuntime(options = {}) {
   const worktreeEnabled = normalizeBoolean(options.worktreeEnabled, true);
   const allowExternalDelete = normalizeBoolean(options.allowExternalDelete, false);
   const allowExternalWorktreeAdd = normalizeBoolean(options.allowExternalWorktreeAdd, false);
+  const onFocus = typeof options.onFocus === 'function' ? options.onFocus : null;
 
   function listAgents(optionsInput = {}) {
     return stateStore.listAgents(optionsInput);
@@ -363,6 +364,7 @@ export function createAgentLifecycleRuntime(options = {}) {
 
   async function addAgent(input = {}) {
     const agentId = asNonEmptyString(input.id) ?? randomUUID();
+    const sessionId = asNonEmptyString(input.session_id) ?? agentId;
     const sourceRepoPath = resolveRepoPath(input.source_repo_path);
     const worktreePath = resolveWorktreePath(input.worktree_path, agentId);
     const branch = resolveBranchName(agentId, input.branch);
@@ -412,6 +414,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     try {
       const result = stateStore.addAgent({
         id: agentId,
+        session_id: sessionId,
         status: 'active',
         slot,
         source_repo_path: sourceRepoPath,
@@ -477,6 +480,34 @@ export function createAgentLifecycleRuntime(options = {}) {
       ...result,
       orchestration: {
         pane_killed: paneKilled
+      }
+    };
+  }
+
+  async function focusAgent(agentId, input = {}) {
+    const agent = getAgentStateOrThrow(agentId);
+    const paneId = asNonEmptyString(agent.pane_id);
+    if (!paneId) {
+      throw createLifecycleError('invalid_state', 'focus requires pane_id');
+    }
+    const sessionId = asNonEmptyString(input.session_id) ?? 'default';
+
+    if (onFocus) {
+      await onFocus({
+        agentId: agent.id,
+        paneId,
+        sessionId
+      });
+    }
+
+    const message = asNonEmptyString(input.message) ?? 'focused in operator';
+    const patched = stateStore.setAgentMessage(agent.id, message, 'status');
+    return {
+      ...patched,
+      action: 'focus',
+      focus: {
+        pane_id: paneId,
+        session_id: sessionId
       }
     };
   }
@@ -553,6 +584,8 @@ export function createAgentLifecycleRuntime(options = {}) {
         return stateStore.removeAgent(agentId);
       case 'restore':
         return stateStore.restoreAgent(agentId);
+      case 'focus':
+        return focusAgent(agentId, input);
       case 'delete-worktree':
       case 'delete_worktree':
         return deleteWorktree(agentId, input);

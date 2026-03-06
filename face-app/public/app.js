@@ -18,6 +18,13 @@ import { normalizeOperatorAsrTerms } from './operator_asr_term_normalizer.js';
 import { createTapBurstTrigger } from './operator_hidden_recovery.js';
 import { resolveOperatorKeyboardCommandAction, resolveOperatorKeyboardPttLanguage } from './operator_keyboard_ptt.js';
 import { buildOperatorTextInsertion, normalizeOperatorTextSelection } from './operator_text_insert.js';
+import {
+  deriveAgentTileTone,
+  deriveDashboardMode,
+  normalizeDashboardAgent,
+  sortDashboardAgents,
+  summarizeAgentTileMessage
+} from './agent_dashboard_state.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -65,6 +72,17 @@ const operatorMirrorToggleEl = document.getElementById('operator-mirror-toggle')
 const operatorHelpToggleEl = document.getElementById('operator-help-toggle');
 const operatorKeyboardHelpEl = document.getElementById('operator-keyboard-help');
 const operatorMirrorEl = document.getElementById('operator-mirror');
+const agentDashboardEl = document.getElementById('agent-dashboard');
+const agentDashboardStatusEl = document.getElementById('agent-dashboard-status');
+const agentDashboardGridEl = document.getElementById('agent-dashboard-grid');
+const agentDashboardRefreshButtonEl = document.getElementById('agent-dashboard-refresh');
+const agentDashboardAddToggleButtonEl = document.getElementById('agent-dashboard-add-toggle');
+const agentDashboardAddFormEl = document.getElementById('agent-dashboard-add-form');
+const agentDashboardAddIdEl = document.getElementById('agent-dashboard-id');
+const agentDashboardAddSessionIdEl = document.getElementById('agent-dashboard-session-id');
+const agentDashboardAddRepoPathEl = document.getElementById('agent-dashboard-repo-path');
+const agentDashboardAddBranchEl = document.getElementById('agent-dashboard-branch');
+const agentDashboardAddSubmitEl = document.getElementById('agent-dashboard-add-submit');
 
 const LOOKING_GLASS_ENABLED_KEY = 'mh_lg_webxr_enabled';
 const HEAD_LIMITS = {
@@ -109,6 +127,9 @@ const OPERATOR_UI_MODES = new Set([OPERATOR_UI_MODE_AUTO, OPERATOR_UI_MODE_PC, O
 const OPERATOR_MIRROR_DEFAULT_FG_CSS_VAR = 'var(--operator-mirror-fg)';
 const OPERATOR_MIRROR_DEFAULT_BG_CSS_VAR = 'var(--operator-mirror-bg-solid)';
 const OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX = 24;
+const AGENT_DASHBOARD_POLL_INTERVAL_MS = 2_400;
+const AGENT_TILE_MESSAGE_TTL_MS = 11_000;
+const AGENT_TILE_SPEAKING_TTL_MS = 6_000;
 const MIC_AUDIO_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -472,6 +493,17 @@ let operatorEffectiveUiMode = OPERATOR_UI_MODE_PC;
 let operatorPanelEnabled = true;
 let operatorRecoverPending = false;
 let operatorRecoverPendingTimer = null;
+let agentDashboardPollTimer = null;
+let agentDashboardLoadInFlight = null;
+let agentDashboardAddFormOpen = false;
+let agentDashboardAddPending = false;
+let agentDashboardState = {
+  mode: 'single',
+  selectedAgentId: null,
+  agents: [],
+  loaded: false
+};
+const agentTransientStateById = new Map();
 const operatorEscRecoveryTracker = createTapBurstTrigger({
   requiredCount: OPERATOR_ESC_RECOVERY_REQUIRED_TAPS,
   windowMs: OPERATOR_ESC_RECOVERY_WINDOW_MS
@@ -633,6 +665,463 @@ function shouldShowOperatorKeyboardHelpToggle() {
   return finePointer || !touchPrimary;
 }
 
+function truncateAgentText(value, maxLength = 84) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function setAgentDashboardStatus(text, tone = 'default') {
+  if (!agentDashboardStatusEl) {
+    return;
+  }
+  agentDashboardStatusEl.textContent = text;
+  agentDashboardStatusEl.style.color = toneColor(tone);
+}
+
+function normalizeDashboardAgentList(rawAgents) {
+  if (!Array.isArray(rawAgents)) {
+    return [];
+  }
+  const mapped = rawAgents.map((agent, index) => normalizeDashboardAgent(agent, index));
+  return sortDashboardAgents(mapped);
+}
+
+function getNonRemovedDashboardAgents() {
+  return agentDashboardState.agents.filter((agent) => agent.status !== 'removed');
+}
+
+function ensureSelectedDashboardAgent() {
+  if (agentDashboardState.selectedAgentId) {
+    const existing = agentDashboardState.agents.find((agent) => agent.id === agentDashboardState.selectedAgentId);
+    if (existing) {
+      return;
+    }
+  }
+  const fallback = getNonRemovedDashboardAgents()[0] ?? agentDashboardState.agents[0] ?? null;
+  agentDashboardState.selectedAgentId = fallback?.id ?? null;
+}
+
+function resolveDashboardAgentBySession(sessionId) {
+  if (typeof sessionId !== 'string' || sessionId.trim() === '' || sessionId === '-') {
+    return null;
+  }
+  const normalized = sessionId.trim();
+  return (
+    agentDashboardState.agents.find((agent) => agent.session_id === normalized) ??
+    agentDashboardState.agents.find((agent) => agent.id === normalized) ??
+    null
+  );
+}
+
+function resolveDashboardAgentIdForPayload(payload) {
+  const explicit = typeof payload?.agent_id === 'string' && payload.agent_id.trim() !== '' ? payload.agent_id.trim() : null;
+  if (explicit && agentDashboardState.agents.some((agent) => agent.id === explicit)) {
+    return explicit;
+  }
+  return resolveDashboardAgentBySession(payload?.session_id)?.id ?? null;
+}
+
+function getAgentTransientState(agentId) {
+  const existing = agentTransientStateById.get(agentId);
+  if (existing) {
+    return existing;
+  }
+  const next = {
+    message: null,
+    messageExpiresAt: 0,
+    speakingUntil: 0
+  };
+  agentTransientStateById.set(agentId, next);
+  return next;
+}
+
+function pruneAgentTransientState(nowMs = Date.now()) {
+  for (const [agentId, state] of agentTransientStateById.entries()) {
+    const messageExpired = !state.message || state.messageExpiresAt <= nowMs;
+    const speakingExpired = state.speakingUntil <= nowMs;
+    if (messageExpired && speakingExpired) {
+      agentTransientStateById.delete(agentId);
+    }
+  }
+}
+
+function setAgentTransientMessage(agentId, message, ttlMs = AGENT_TILE_MESSAGE_TTL_MS) {
+  const text = truncateAgentText(message);
+  if (text === '') {
+    return;
+  }
+  const transient = getAgentTransientState(agentId);
+  transient.message = text;
+  transient.messageExpiresAt = Date.now() + Math.max(600, ttlMs);
+}
+
+function markAgentSpeaking(agentId, active) {
+  const transient = getAgentTransientState(agentId);
+  transient.speakingUntil = active ? Date.now() + AGENT_TILE_SPEAKING_TTL_MS : 0;
+}
+
+function summarizeAgentEventMessage(payload) {
+  const name = typeof payload?.name === 'string' ? payload.name.trim() : '';
+  if (!name) {
+    return null;
+  }
+  if (name === 'cmd_started') {
+    const action = truncateAgentText(payload?.meta?.action ?? payload?.meta?.task ?? '');
+    return action ? `running: ${action}` : 'running command';
+  }
+  if (name === 'cmd_succeeded' || name === 'tests_passed') {
+    return 'completed successfully';
+  }
+  if (name === 'cmd_failed' || name === 'tests_failed') {
+    return 'task failed';
+  }
+  if (name === 'retrying') {
+    return 'retrying task';
+  }
+  if (name === 'idle') {
+    return 'idle';
+  }
+  if (name === 'permission_required') {
+    return 'approval required';
+  }
+  return truncateAgentText(name.replaceAll('_', ' '));
+}
+
+function trackAgentTileFromPayload(payload) {
+  const agentId = resolveDashboardAgentIdForPayload(payload);
+  if (!agentId) {
+    return;
+  }
+
+  if (payload.type === 'say') {
+    const text = typeof payload.text === 'string' ? payload.text : '';
+    if (text.trim() !== '') {
+      setAgentTransientMessage(agentId, text);
+      markAgentSpeaking(agentId, true);
+    }
+    return;
+  }
+
+  if (payload.type === 'say_result') {
+    if (payload.spoken === false) {
+      const reason = typeof payload.reason === 'string' && payload.reason.trim() !== '' ? payload.reason.trim() : 'not spoken';
+      setAgentTransientMessage(agentId, `speech skipped: ${reason}`);
+      markAgentSpeaking(agentId, false);
+    }
+    return;
+  }
+
+  if (payload.type === 'event') {
+    const eventMessage = summarizeAgentEventMessage(payload);
+    if (eventMessage) {
+      setAgentTransientMessage(agentId, eventMessage);
+    }
+    return;
+  }
+
+  if (payload.type === 'tts_state') {
+    if (payload.phase === 'play_start') {
+      markAgentSpeaking(agentId, true);
+      return;
+    }
+    if (payload.phase === 'play_stop' || payload.phase === 'dropped' || payload.phase === 'error') {
+      markAgentSpeaking(agentId, false);
+      return;
+    }
+  }
+
+  if (payload.type === 'operator_set_pane_result' && payload.ok === true) {
+    setAgentTransientMessage(agentId, 'focused in operator');
+  }
+}
+
+async function readAgentDashboardState() {
+  const response = await fetch('/api/agents/state', {
+    method: 'GET',
+    cache: 'no-store'
+  });
+  if (!response.ok) {
+    throw new Error(`agent state request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  if (!payload || payload.ok !== true || !Array.isArray(payload?.state?.agents)) {
+    throw new Error('agent state response is invalid');
+  }
+  return normalizeDashboardAgentList(payload.state.agents);
+}
+
+function updateAgentDashboardMode() {
+  agentDashboardState.mode = deriveDashboardMode(agentDashboardState.agents, {
+    isMobileUi: operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE
+  });
+  document.body.classList.toggle('agent-mode-multi', agentDashboardState.mode === 'multi');
+}
+
+function createDashboardActionButton(agent, label, action, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'operator-btn';
+  button.textContent = label;
+  button.dataset.agentId = agent.id;
+  button.dataset.agentAction = action;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+async function runAgentDashboardAction(agent, action) {
+  const path = action === 'add' ? '/api/agents/add' : `/api/agents/${encodeURIComponent(agent.id)}/${action}`;
+  const body = action === 'focus' ? { session_id: resolveOperatorSessionId() } : {};
+  const response = await fetch(path, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      'content-type': 'application/json; charset=utf-8'
+    },
+    body: JSON.stringify(body)
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || payload?.ok !== true) {
+    const detail = payload?.detail ? `: ${payload.detail}` : '';
+    throw new Error(`${action} failed (${response.status})${detail}`);
+  }
+  return payload;
+}
+
+function renderAgentDashboard() {
+  if (!agentDashboardEl || !agentDashboardGridEl || !agentDashboardAddFormEl) {
+    return;
+  }
+
+  updateAgentDashboardMode();
+  const showDashboard = agentDashboardState.mode === 'multi' && operatorPanelEnabled;
+  agentDashboardEl.classList.toggle('hidden', !showDashboard);
+  if (!showDashboard) {
+    return;
+  }
+
+  pruneAgentTransientState(Date.now());
+  ensureSelectedDashboardAgent();
+  agentDashboardAddFormEl.classList.toggle('hidden', !agentDashboardAddFormOpen);
+  if (agentDashboardAddSubmitEl) {
+    agentDashboardAddSubmitEl.disabled = agentDashboardAddPending;
+  }
+  if (agentDashboardAddToggleButtonEl) {
+    agentDashboardAddToggleButtonEl.textContent = agentDashboardAddFormOpen ? 'Hide Add' : '+Agent';
+  }
+
+  agentDashboardGridEl.innerHTML = '';
+  for (const agent of agentDashboardState.agents) {
+    const transient = agentTransientStateById.get(agent.id) ?? null;
+    const nowMs = Date.now();
+    const speaking = Boolean(transient && transient.speakingUntil > nowMs);
+    const transientMessage = transient && transient.messageExpiresAt > nowMs ? transient.message : null;
+    const tile = document.createElement('article');
+    tile.className = 'agent-tile';
+    if (agent.id === agentDashboardState.selectedAgentId) {
+      tile.classList.add('is-selected');
+    }
+    tile.dataset.tone = deriveAgentTileTone(agent, { speaking });
+    tile.addEventListener('click', () => {
+      if (agentDashboardState.selectedAgentId !== agent.id) {
+        agentDashboardState.selectedAgentId = agent.id;
+        renderAgentDashboard();
+      }
+    });
+
+    const header = document.createElement('header');
+    header.className = 'agent-tile-header';
+    const idEl = document.createElement('span');
+    idEl.className = 'agent-tile-id';
+    idEl.textContent = agent.id;
+    const statusEl = document.createElement('span');
+    statusEl.className = 'agent-tile-status';
+    statusEl.textContent = agent.status;
+    header.append(idEl, statusEl);
+
+    const sessionEl = document.createElement('div');
+    sessionEl.className = 'agent-tile-session';
+    sessionEl.textContent = `session: ${agent.session_id ?? '-'}`;
+
+    const messageEl = document.createElement('p');
+    messageEl.className = 'agent-tile-message';
+    messageEl.textContent = summarizeAgentTileMessage(agent, transientMessage);
+
+    const actions = document.createElement('div');
+    actions.className = 'agent-tile-actions';
+
+    const withAction = (label, action) =>
+      createDashboardActionButton(agent, label, action, async (event) => {
+        event.stopPropagation();
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+          await runAgentDashboardAction(agent, action);
+          setAgentDashboardStatus(`${agent.id}: ${action} ok`, 'ok');
+          await refreshAgentDashboardState({ silentStatus: true });
+        } catch (error) {
+          setAgentDashboardStatus(`${agent.id}: ${error.message}`, 'warn');
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+    if (agent.pane_id && agent.status !== 'removed') {
+      actions.appendChild(withAction('Focus', 'focus'));
+    }
+    if (agent.status === 'active') {
+      actions.appendChild(withAction('Pause', 'pause'));
+      actions.appendChild(withAction('Stop', 'stop'));
+      actions.appendChild(withAction('Remove', 'remove'));
+    } else if (agent.status === 'paused') {
+      actions.appendChild(withAction('Resume', 'resume'));
+      actions.appendChild(withAction('Stop', 'stop'));
+      actions.appendChild(withAction('Remove', 'remove'));
+    } else if (agent.status === 'parked') {
+      actions.appendChild(withAction('Stop', 'stop'));
+      actions.appendChild(withAction('Remove', 'remove'));
+    } else if (agent.status === 'stopped') {
+      actions.appendChild(withAction('Remove', 'remove'));
+      actions.appendChild(withAction('Delete WT', 'delete-worktree'));
+    } else if (agent.status === 'removed') {
+      actions.appendChild(withAction('Restore', 'restore'));
+      actions.appendChild(withAction('Delete WT', 'delete-worktree'));
+    }
+
+    tile.append(header, sessionEl, messageEl, actions);
+    agentDashboardGridEl.appendChild(tile);
+  }
+}
+
+async function refreshAgentDashboardState(options = {}) {
+  if (agentDashboardLoadInFlight) {
+    return agentDashboardLoadInFlight;
+  }
+  const silentStatus = options.silentStatus === true;
+  agentDashboardLoadInFlight = (async () => {
+    const agents = await readAgentDashboardState();
+    agentDashboardState.agents = agents;
+    agentDashboardState.loaded = true;
+    ensureSelectedDashboardAgent();
+    renderAgentDashboard();
+    if (!silentStatus) {
+      setAgentDashboardStatus(`${getNonRemovedDashboardAgents().length} agents`, 'ok');
+    }
+  })()
+    .catch((error) => {
+      if (!silentStatus) {
+        setAgentDashboardStatus(`agent state error: ${error.message}`, 'warn');
+      }
+    })
+    .finally(() => {
+      agentDashboardLoadInFlight = null;
+    });
+  return agentDashboardLoadInFlight;
+}
+
+function scheduleAgentDashboardPoll(delayMs = AGENT_DASHBOARD_POLL_INTERVAL_MS) {
+  if (agentDashboardPollTimer !== null) {
+    clearTimeout(agentDashboardPollTimer);
+  }
+  agentDashboardPollTimer = window.setTimeout(() => {
+    agentDashboardPollTimer = null;
+    void refreshAgentDashboardState({ silentStatus: true }).finally(() => {
+      scheduleAgentDashboardPoll(AGENT_DASHBOARD_POLL_INTERVAL_MS);
+    });
+  }, Math.max(600, delayMs));
+}
+
+function installAgentDashboardControls() {
+  if (!agentDashboardEl || !agentDashboardAddFormEl) {
+    return;
+  }
+
+  if (agentDashboardRefreshButtonEl) {
+    agentDashboardRefreshButtonEl.addEventListener('click', () => {
+      void refreshAgentDashboardState({ silentStatus: false });
+    });
+  }
+  if (agentDashboardAddToggleButtonEl) {
+    agentDashboardAddToggleButtonEl.addEventListener('click', () => {
+      agentDashboardAddFormOpen = !agentDashboardAddFormOpen;
+      renderAgentDashboard();
+    });
+  }
+  agentDashboardAddFormEl.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (agentDashboardAddPending) {
+      return;
+    }
+    agentDashboardAddPending = true;
+    renderAgentDashboard();
+    try {
+      const payload = {
+        create_worktree: true,
+        create_tmux: true
+      };
+      const id = typeof agentDashboardAddIdEl?.value === 'string' ? agentDashboardAddIdEl.value.trim() : '';
+      const sessionId =
+        typeof agentDashboardAddSessionIdEl?.value === 'string' ? agentDashboardAddSessionIdEl.value.trim() : '';
+      const sourceRepoPath =
+        typeof agentDashboardAddRepoPathEl?.value === 'string' ? agentDashboardAddRepoPathEl.value.trim() : '';
+      const branch = typeof agentDashboardAddBranchEl?.value === 'string' ? agentDashboardAddBranchEl.value.trim() : '';
+      if (id) {
+        payload.id = id;
+      }
+      if (sessionId) {
+        payload.session_id = sessionId;
+      } else if (id) {
+        payload.session_id = id;
+      }
+      if (sourceRepoPath) {
+        payload.source_repo_path = sourceRepoPath;
+      }
+      if (branch) {
+        payload.branch = branch;
+      }
+
+      const response = await fetch('/api/agents/add', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          'content-type': 'application/json; charset=utf-8'
+        },
+        body: JSON.stringify(payload)
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || json?.ok !== true) {
+        const detail = json?.detail ? `: ${json.detail}` : '';
+        throw new Error(`add failed (${response.status})${detail}`);
+      }
+      if (agentDashboardAddIdEl) {
+        agentDashboardAddIdEl.value = '';
+      }
+      if (agentDashboardAddSessionIdEl) {
+        agentDashboardAddSessionIdEl.value = '';
+      }
+      if (agentDashboardAddRepoPathEl) {
+        agentDashboardAddRepoPathEl.value = '';
+      }
+      if (agentDashboardAddBranchEl) {
+        agentDashboardAddBranchEl.value = '';
+      }
+      agentDashboardAddFormOpen = false;
+      setAgentDashboardStatus('agent created', 'ok');
+      await refreshAgentDashboardState({ silentStatus: true });
+    } catch (error) {
+      setAgentDashboardStatus(error.message, 'warn');
+    } finally {
+      agentDashboardAddPending = false;
+      renderAgentDashboard();
+    }
+  });
+}
+
 function applyOperatorUiMode(mode) {
   const configured = normalizeOperatorUiMode(mode) ?? OPERATOR_UI_MODE_AUTO;
   operatorConfiguredUiMode = configured;
@@ -644,6 +1133,7 @@ function applyOperatorUiMode(mode) {
   if (operatorTitleEl) {
     operatorTitleEl.textContent = operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE ? 'MINIMUM HEADROOM OPERATOR' : 'Operator';
   }
+  renderAgentDashboard();
 }
 
 async function loadOperatorUiConfig() {
@@ -2469,6 +2959,7 @@ function handlePayload(payload) {
   }
 
   appendEvent(payload);
+  trackAgentTileFromPayload(payload);
 
   if (payload.type === 'event') {
     faceState = applyEventToFaceState(faceState, payload, Date.now());
@@ -2486,6 +2977,13 @@ function handlePayload(payload) {
     handleOperatorStatePayload(payload);
   } else if (payload.type === 'operator_recover_result') {
     handleOperatorRecoverResult(payload);
+  } else if (payload.type === 'operator_set_pane_result') {
+    if (payload.ok === true) {
+      setOperatorStatusLine(`pane switched${payload.pane ? `: ${payload.pane}` : ''}`, 'ok');
+      setOperatorAckLine('ack: pane switched', 'ok');
+    } else {
+      setOperatorStatusLine(`pane switch failed${payload.reason ? `: ${payload.reason}` : ''}`, 'warn');
+    }
   } else if (payload.type === 'operator_terminal_snapshot') {
     handleOperatorTerminalSnapshot(payload);
   } else if (payload.type === 'operator_realtime_asr_delta') {
@@ -2501,6 +2999,7 @@ function handlePayload(payload) {
   } else if (payload.type === 'tts_audio') {
     handleTtsAudio(payload);
   }
+  renderAgentDashboard();
 }
 
 function connectWebSocket() {
@@ -3313,6 +3812,9 @@ async function bootstrap() {
   } else {
     updateOperatorUi();
   }
+  installAgentDashboardControls();
+  await refreshAgentDashboardState({ silentStatus: false });
+  scheduleAgentDashboardPoll(AGENT_DASHBOARD_POLL_INTERVAL_MS);
   markOperatorUiBootReady();
 
   lgApplyButton.addEventListener('click', () => {
@@ -3355,6 +3857,10 @@ window.addEventListener('beforeunload', () => {
   if (reconnectTimer !== null) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
+  }
+  if (agentDashboardPollTimer !== null) {
+    clearTimeout(agentDashboardPollTimer);
+    agentDashboardPollTimer = null;
   }
 
   if (socket && socket.readyState === WebSocket.OPEN) {

@@ -69,6 +69,37 @@
         <ol id="event-log" class="event-log"></ol>
       </section>
 
+      <section id="agent-dashboard" class="agent-dashboard hidden" aria-live="polite">
+        <header class="agent-dashboard-header">
+          <h2 class="agent-dashboard-title">Agents</h2>
+          <div class="agent-dashboard-actions">
+            <button id="agent-dashboard-refresh" type="button" class="operator-btn">Refresh</button>
+            <button id="agent-dashboard-add-toggle" type="button" class="operator-btn">+Agent</button>
+          </div>
+        </header>
+        <p id="agent-dashboard-status" class="agent-dashboard-status">loading...</p>
+        <form id="agent-dashboard-add-form" class="agent-dashboard-add hidden">
+          <label class="agent-dashboard-field">
+            <span>ID</span>
+            <input id="agent-dashboard-id" type="text" autocomplete="off" placeholder="optional" />
+          </label>
+          <label class="agent-dashboard-field">
+            <span>Session</span>
+            <input id="agent-dashboard-session-id" type="text" autocomplete="off" placeholder="default: agent id" />
+          </label>
+          <label class="agent-dashboard-field">
+            <span>Repo Path</span>
+            <input id="agent-dashboard-repo-path" type="text" autocomplete="off" placeholder="optional" />
+          </label>
+          <label class="agent-dashboard-field">
+            <span>Branch</span>
+            <input id="agent-dashboard-branch" type="text" autocomplete="off" placeholder="optional" />
+          </label>
+          <button id="agent-dashboard-add-submit" type="submit" class="operator-btn">Create</button>
+        </form>
+        <div id="agent-dashboard-grid" class="agent-dashboard-grid"></div>
+      </section>
+
       <button id="operator-esc" class="operator-esc hidden" type="button">Esc</button>
 
       <section id="operator-panel" class="operator-panel hidden" aria-live="polite">
