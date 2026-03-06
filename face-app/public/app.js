@@ -25,6 +25,7 @@ import {
   sortDashboardAgents,
   summarizeAgentTileMessage
 } from './agent_dashboard_state.js';
+import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -879,32 +880,6 @@ function createDashboardActionButton(agent, label, action, onClick) {
   return button;
 }
 
-function listAgentLifecycleActions(agent) {
-  const actions = [];
-  if (agent.pane_id && agent.status !== 'removed') {
-    actions.push({ label: 'Focus', action: 'focus' });
-  }
-  if (agent.status === 'active') {
-    actions.push({ label: 'Pause', action: 'pause' });
-    actions.push({ label: 'Stop', action: 'stop' });
-    actions.push({ label: 'Remove', action: 'remove' });
-  } else if (agent.status === 'paused') {
-    actions.push({ label: 'Resume', action: 'resume' });
-    actions.push({ label: 'Stop', action: 'stop' });
-    actions.push({ label: 'Remove', action: 'remove' });
-  } else if (agent.status === 'parked') {
-    actions.push({ label: 'Stop', action: 'stop' });
-    actions.push({ label: 'Remove', action: 'remove' });
-  } else if (agent.status === 'stopped') {
-    actions.push({ label: 'Remove', action: 'remove' });
-    actions.push({ label: 'Delete WT', action: 'delete-worktree' });
-  } else if (agent.status === 'removed') {
-    actions.push({ label: 'Restore', action: 'restore' });
-    actions.push({ label: 'Delete WT', action: 'delete-worktree' });
-  }
-  return actions;
-}
-
 async function runAgentDashboardAction(agent, action) {
   const path = action === 'add' ? '/api/agents/add' : `/api/agents/${encodeURIComponent(agent.id)}/${action}`;
   const body = action === 'focus' ? { session_id: resolveOperatorSessionId() } : {};
@@ -1023,9 +998,10 @@ function renderOperatorMobileAgentList() {
   if (!operatorAgentListEl || !operatorAgentListItemsEl) {
     return;
   }
-  const isMobileUi = operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE;
-  const activeAgents = getNonRemovedDashboardAgents();
-  const shouldShow = isMobileUi && operatorPanelEnabled && activeAgents.length > 1;
+  const shouldShow = shouldShowMobileAgentList(agentDashboardState.agents, {
+    isMobileUi: operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE,
+    operatorPanelEnabled
+  });
   operatorAgentListEl.classList.toggle('hidden', !shouldShow);
   if (!shouldShow) {
     return;
