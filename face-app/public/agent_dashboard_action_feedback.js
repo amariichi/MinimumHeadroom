@@ -66,6 +66,14 @@ export function summarizeAgentActionSuccess(agentId, action, payload, options = 
     };
   }
 
+  if (actionName === 'restore' && result?.restore?.pane_available === false) {
+    return {
+      statusTone: 'warn',
+      statusText: truncateText(`${id}: restore partial (pane unavailable)`, statusMax),
+      tileMessage: 'restored; pane unavailable'
+    };
+  }
+
   if (actionName === 'delete-worktree' && noop) {
     return {
       statusTone: 'ok',

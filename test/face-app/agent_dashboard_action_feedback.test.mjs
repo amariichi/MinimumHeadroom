@@ -55,6 +55,21 @@ test('summarizeAgentActionSuccess handles focus and delete-worktree noop', () =>
   assert.equal(deleteNoop.tileMessage, 'worktree already absent');
 });
 
+test('summarizeAgentActionSuccess warns for restore partial pane availability', () => {
+  const feedback = summarizeAgentActionSuccess('agent-a', 'restore', {
+    ok: true,
+    result: {
+      noop: false,
+      restore: {
+        pane_available: false
+      }
+    }
+  });
+  assert.equal(feedback.statusTone, 'warn');
+  assert.equal(feedback.statusText, 'agent-a: restore partial (pane unavailable)');
+  assert.equal(feedback.tileMessage, 'restored; pane unavailable');
+});
+
 test('summarizeAgentActionFailure prefers error.detail', () => {
   const error = new Error('delete-worktree failed (409): should not be shown');
   error.detail = 'delete-worktree requires removed/stopped status (current=active)';
