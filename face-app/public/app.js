@@ -19,6 +19,12 @@ import { createTapBurstTrigger } from './operator_hidden_recovery.js';
 import { resolveOperatorKeyboardCommandAction, resolveOperatorKeyboardPttLanguage } from './operator_keyboard_ptt.js';
 import { buildOperatorTextInsertion, normalizeOperatorTextSelection } from './operator_text_insert.js';
 import {
+  BROWSER_AUDIO_MAX_CHANNELS_DEFAULT,
+  clampBrowserAudioMaxChannels,
+  selectBrowserAudioChannelIndex,
+  shouldStopBrowserAudioChannel
+} from './browser_audio_policy.js';
+import {
   deriveAgentTileTone,
   deriveDashboardMode,
   normalizeDashboardAgent,
@@ -130,9 +136,6 @@ const OPERATOR_UI_MODES = new Set([OPERATOR_UI_MODE_AUTO, OPERATOR_UI_MODE_PC, O
 const OPERATOR_MIRROR_DEFAULT_FG_CSS_VAR = 'var(--operator-mirror-fg)';
 const OPERATOR_MIRROR_DEFAULT_BG_CSS_VAR = 'var(--operator-mirror-bg-solid)';
 const OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX = 24;
-const BROWSER_AUDIO_MAX_CHANNELS_DEFAULT = 4;
-const BROWSER_AUDIO_MAX_CHANNELS_MIN = 1;
-const BROWSER_AUDIO_MAX_CHANNELS_MAX = 8;
 const AGENT_DASHBOARD_POLL_INTERVAL_MS = 2_400;
 const AGENT_TILE_MESSAGE_TTL_MS = 11_000;
 const AGENT_TILE_SPEAKING_TTL_MS = 6_000;
@@ -1204,11 +1207,7 @@ async function loadOperatorUiConfig() {
         ? Math.max(8_000, Math.floor(payload.realtimeAsr.sampleRateHz))
         : OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE;
       browserAudioMaxChannels = Number.isFinite(payload?.browserAudio?.maxChannels)
-        ? clamp(
-            Math.floor(payload.browserAudio.maxChannels),
-            BROWSER_AUDIO_MAX_CHANNELS_MIN,
-            BROWSER_AUDIO_MAX_CHANNELS_MAX
-          )
+        ? clampBrowserAudioMaxChannels(payload.browserAudio.maxChannels)
         : BROWSER_AUDIO_MAX_CHANNELS_DEFAULT;
     }
   } catch {
@@ -2277,37 +2276,15 @@ function pauseAndResetBrowserAudioChannel(channel) {
 
 function reserveBrowserAudioChannel(sessionId) {
   const mixer = ensureBrowserAudioMixer();
-
-  for (const channel of mixer.channels) {
-    if (channel.active && channel.sessionId === sessionId) {
-      return channel;
-    }
-  }
-
-  for (const channel of mixer.channels) {
-    if (!channel.active) {
-      return channel;
-    }
-  }
-
-  const cappedCount = clamp(
-    Math.floor(browserAudioMaxChannels),
-    BROWSER_AUDIO_MAX_CHANNELS_MIN,
-    BROWSER_AUDIO_MAX_CHANNELS_MAX
+  const nextIndex = selectBrowserAudioChannelIndex(
+    mixer.channels,
+    sessionId,
+    clampBrowserAudioMaxChannels(browserAudioMaxChannels)
   );
-  if (mixer.channels.length < cappedCount) {
-    const created = createBrowserAudioChannel();
-    mixer.channels.push(created);
-    return created;
+  while (mixer.channels.length <= nextIndex) {
+    mixer.channels.push(createBrowserAudioChannel());
   }
-
-  let fallback = mixer.channels[0] ?? null;
-  for (const channel of mixer.channels) {
-    if (!fallback || channel.startedAt < fallback.startedAt) {
-      fallback = channel;
-    }
-  }
-  return fallback;
+  return mixer.channels[nextIndex];
 }
 
 function withTimeout(promise, timeoutMs) {
@@ -2448,15 +2425,8 @@ function stopActiveBrowserAudio(generation = null, sessionId = null) {
   if (!browserAudioMixer) {
     return;
   }
-  const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : null;
   for (const channel of browserAudioMixer.channels) {
-    if (!channel.active) {
-      continue;
-    }
-    if (Number.isInteger(generation) && (!Number.isInteger(channel.generation) || generation !== channel.generation)) {
-      continue;
-    }
-    if (resolvedSessionId && channel.sessionId !== resolvedSessionId) {
+    if (!shouldStopBrowserAudioChannel(channel, { generation, sessionId })) {
       continue;
     }
     pauseAndResetBrowserAudioChannel(channel);
@@ -2936,6 +2906,7 @@ function handleTtsState(payload) {
   const phase = typeof payload.phase === 'string' ? payload.phase : '-';
   const audioTarget = typeof payload.audio_target === 'string' ? payload.audio_target : 'local';
   const reason = typeof payload.reason === 'string' ? payload.reason : null;
+  const sessionId = resolvePayloadSessionId(payload);
 
   if (phase === 'worker_ready') {
     if (payload.playback_backend === 'silent' && audioTarget === 'local') {
@@ -2966,7 +2937,7 @@ function handleTtsState(payload) {
 
   if (phase === 'play_stop') {
     if (reason === 'interrupted') {
-      stopActiveBrowserAudio(payload.generation);
+      stopActiveBrowserAudio(payload.generation, sessionId);
     }
     setTtsStatus('ready', 'ok');
     setTtsPhase(phase, 'default');
@@ -2976,7 +2947,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'interrupt_requested') {
-    stopActiveBrowserAudio(payload.generation);
+    stopActiveBrowserAudio(payload.generation, sessionId);
     setTtsStatus('busy', 'default');
     setTtsPhase(`${phase}:${reason ?? '-'}`, 'default');
     return;
@@ -2989,7 +2960,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'dropped') {
-    stopActiveBrowserAudio(payload.generation);
+    stopActiveBrowserAudio(payload.generation, sessionId);
     setTtsPhase(`dropped:${payload.reason ?? '-'}`, 'warn');
     if (!speechActive) {
       setTtsStatus('ready', 'default');
@@ -2998,7 +2969,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'error') {
-    stopActiveBrowserAudio(payload.generation);
+    stopActiveBrowserAudio(payload.generation, sessionId);
     setTtsStatus('error', 'warn');
     setTtsPhase(`error:${payload.reason ?? '-'}`, 'warn');
     speechActive = false;
