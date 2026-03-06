@@ -74,10 +74,25 @@ function parseActionPath(pathname) {
   if (!match) {
     return null;
   }
+  let decodedAgentId = null;
+  try {
+    decodedAgentId = decodeURIComponent(match[1]);
+  } catch (error) {
+    throw createLifecycleError('invalid_request', 'agent id path segment is invalid', error);
+  }
   return {
-    agentId: decodeURIComponent(match[1]),
+    agentId: decodedAgentId,
     action: match[2]
   };
+}
+
+function isPathInsideRoot(targetPath, rootPath) {
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedRoot = path.resolve(rootPath);
+  if (resolvedTarget === resolvedRoot) {
+    return true;
+  }
+  return resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`);
 }
 
 function statusCodeFromError(error) {
@@ -94,7 +109,13 @@ function statusCodeFromError(error) {
     case 'invalid_transition':
       return 409;
     case 'external_delete_forbidden':
+    case 'external_worktree_forbidden':
       return 403;
+    case 'command_timeout':
+      return 504;
+    case 'command_failed':
+    case 'command_spawn_failed':
+      return 502;
     default:
       return 500;
   }
@@ -225,6 +246,7 @@ export function createAgentLifecycleRuntime(options = {}) {
   const tmuxEnabled = normalizeBoolean(options.tmuxEnabled, true);
   const worktreeEnabled = normalizeBoolean(options.worktreeEnabled, true);
   const allowExternalDelete = normalizeBoolean(options.allowExternalDelete, false);
+  const allowExternalWorktreeAdd = normalizeBoolean(options.allowExternalWorktreeAdd, false);
 
   function listAgents(optionsInput = {}) {
     return stateStore.listAgents(optionsInput);
@@ -327,6 +349,18 @@ export function createAgentLifecycleRuntime(options = {}) {
     return resolveDefaultWorktreePath(agentId);
   }
 
+  function assertManagedWorktreePath(worktreePath, errorCode) {
+    if (allowExternalWorktreeAdd) {
+      return;
+    }
+    if (!isPathInsideRoot(worktreePath, worktreesRoot)) {
+      throw createLifecycleError(
+        errorCode,
+        `worktree path outside managed root: ${path.resolve(worktreePath)}`
+      );
+    }
+  }
+
   async function addAgent(input = {}) {
     const agentId = asNonEmptyString(input.id) ?? randomUUID();
     const sourceRepoPath = resolveRepoPath(input.source_repo_path);
@@ -336,6 +370,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     const createWorktree = normalizeBoolean(input.create_worktree, true);
     const createTmux = normalizeBoolean(input.create_tmux, true);
     const agentCommand = asNonEmptyString(input.agent_cmd) ?? defaultAgentCommand;
+    let runCwd = worktreePath;
 
     let worktreeCreated = false;
     let paneCreated = false;
@@ -345,15 +380,29 @@ export function createAgentLifecycleRuntime(options = {}) {
       if (!worktreeEnabled) {
         throw createLifecycleError('invalid_state', 'worktree orchestration is disabled');
       }
+      assertManagedWorktreePath(worktreePath, 'external_worktree_forbidden');
+      if (!fs.existsSync(sourceRepoPath)) {
+        throw createLifecycleError('invalid_request', `source repo path does not exist: ${sourceRepoPath}`);
+      }
+      await runGit(sourceRepoPath, ['rev-parse', '--is-inside-work-tree']);
+      if (fs.existsSync(worktreePath)) {
+        throw createLifecycleError('invalid_state', `worktree path already exists: ${worktreePath}`);
+      }
       fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
       await runGit(sourceRepoPath, ['worktree', 'add', '-b', branch, worktreePath]);
       worktreeCreated = true;
+      runCwd = worktreePath;
+    } else if (!fs.existsSync(worktreePath)) {
+      if (asNonEmptyString(input.worktree_path)) {
+        throw createLifecycleError('invalid_request', `worktree path does not exist: ${worktreePath}`);
+      }
+      runCwd = sourceRepoPath;
     }
 
     if (createTmux) {
       const pane = await startTmuxAgentPane({
         agentId,
-        cwd: worktreePath,
+        cwd: runCwd,
         command: agentCommand
       });
       paneCreated = true;
@@ -366,7 +415,7 @@ export function createAgentLifecycleRuntime(options = {}) {
         status: 'active',
         slot,
         source_repo_path: sourceRepoPath,
-        worktree_path: worktreePath,
+        worktree_path: runCwd,
         branch,
         pane_id: paneId,
         last_message: 'agent created',
@@ -402,20 +451,28 @@ export function createAgentLifecycleRuntime(options = {}) {
     const agent = getAgentStateOrThrow(agentId);
     const killPane = normalizeBoolean(input.kill_pane, true);
     let paneKilled = false;
+    const result = stateStore.stopAgent(agent.id);
 
-    if (killPane && tmuxEnabled && asNonEmptyString(agent.pane_id)) {
+    if (!result.noop && killPane && tmuxEnabled && asNonEmptyString(agent.pane_id)) {
       try {
         await runTmux(['kill-pane', '-t', agent.pane_id]);
         paneKilled = true;
-        stateStore.updateAgentMetadata(agent.id, {
+        const patched = stateStore.updateAgentMetadata(agent.id, {
           pane_id: null
         });
+        return {
+          ...patched,
+          action: 'stop',
+          noop: false,
+          orchestration: {
+            pane_killed: paneKilled
+          }
+        };
       } catch (error) {
         log.warn(`[agent-lifecycle] stop kill-pane failed (${agent.pane_id}): ${error.message}`);
       }
     }
 
-    const result = stateStore.stopAgent(agent.id);
     return {
       ...result,
       orchestration: {
@@ -428,6 +485,17 @@ export function createAgentLifecycleRuntime(options = {}) {
     const agent = getAgentStateOrThrow(agentId);
     const worktreePath = asNonEmptyString(agent.worktree_path);
     const sourceRepoPath = resolveRepoPath(agent.source_repo_path);
+    const requireStopped = normalizeBoolean(input.require_stopped, true);
+
+    if (requireStopped && agent.status !== 'removed' && agent.status !== 'stopped') {
+      throw createLifecycleError(
+        'invalid_state',
+        `delete-worktree requires removed/stopped status (current=${agent.status})`
+      );
+    }
+    if (asNonEmptyString(agent.pane_id)) {
+      throw createLifecycleError('invalid_state', 'delete-worktree requires pane to be detached first');
+    }
 
     if (!worktreePath) {
       return {
@@ -440,8 +508,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
 
     const resolved = path.resolve(worktreePath);
-    const internalRoot = `${worktreesRoot}${path.sep}`;
-    if (!allowExternalDelete && resolved !== worktreesRoot && !resolved.startsWith(internalRoot)) {
+    if (!allowExternalDelete && !isPathInsideRoot(resolved, worktreesRoot)) {
       throw createLifecycleError(
         'external_delete_forbidden',
         `worktree path outside managed root: ${resolved}`
@@ -487,6 +554,7 @@ export function createAgentLifecycleRuntime(options = {}) {
       case 'restore':
         return stateStore.restoreAgent(agentId);
       case 'delete-worktree':
+      case 'delete_worktree':
         return deleteWorktree(agentId, input);
       default:
         throw createLifecycleError('invalid_request', `unsupported agent action: ${action}`);
@@ -519,6 +587,22 @@ export function createAgentLifecycleApi(options = {}) {
       }
 
       try {
+        if (pathname === '/api/agents') {
+          if (request.method !== 'GET') {
+            writeJson(response, 405, {
+              ok: false,
+              error: 'method_not_allowed'
+            });
+            return true;
+          }
+          const includeRemoved = parsedUrl.searchParams.get('include_removed') === '1';
+          writeJson(response, 200, {
+            ok: true,
+            agents: runtime.listAgents({ includeRemoved })
+          });
+          return true;
+        }
+
         if (pathname === '/api/agents/state') {
           if (request.method !== 'GET') {
             writeJson(response, 405, {
@@ -585,4 +669,3 @@ export function createAgentLifecycleApi(options = {}) {
     }
   };
 }
-

@@ -160,6 +160,7 @@ test('agent lifecycle runtime blocks deleting worktree outside managed root by d
     create_tmux: false,
     worktree_path: externalDir
   });
+  await runtime.dispatchAgentAction('agent-delete', 'remove', {});
 
   await assert.rejects(
     () => runtime.dispatchAgentAction('agent-delete', 'delete-worktree', {}),
@@ -168,6 +169,23 @@ test('agent lifecycle runtime blocks deleting worktree outside managed root by d
 
   cleanup(repoRoot);
   cleanup(externalDir);
+});
+
+test('agent lifecycle runtime requires removed/stopped before delete-worktree', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+
+  await runtime.addAgent({
+    id: 'agent-active-delete',
+    create_worktree: false,
+    create_tmux: false
+  });
+
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-active-delete', 'delete-worktree', {}),
+    (error) => error?.code === 'invalid_state'
+  );
+
+  cleanup(repoRoot);
 });
 
 test('agent lifecycle api serves state and add endpoints', async () => {
@@ -207,6 +225,17 @@ test('agent lifecycle api serves state and add endpoints', async () => {
   const stateAfter = runtime.getState();
   assert.equal(stateAfter.agents.some((agent) => agent.id === 'agent-http'), true);
 
+  const listReq = createRequest({
+    method: 'GET',
+    url: '/api/agents?include_removed=1'
+  });
+  const listRes = createResponseCapture();
+  const listHandled = await api.handleHttpRequest(listReq, listRes);
+  assert.equal(listHandled, true);
+  const listSnapshot = listRes.snapshot();
+  assert.equal(listSnapshot.statusCode, 200);
+  assert.equal(Array.isArray(listSnapshot.body?.agents), true);
+  assert.equal(listSnapshot.body?.agents.some((agent) => agent.id === 'agent-http'), true);
+
   cleanup(repoRoot);
 });
-
