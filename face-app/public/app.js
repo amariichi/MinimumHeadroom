@@ -31,6 +31,7 @@ import {
   sortDashboardAgents,
   summarizeAgentTileMessage
 } from './agent_dashboard_state.js';
+import { applyAgentResultToAgents } from './agent_dashboard_apply_result.js';
 import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
 import { summarizeAgentActionFailure, summarizeAgentActionSuccess } from './agent_dashboard_action_feedback.js';
 import {
@@ -850,6 +851,10 @@ function bindAgentActionButton(button, agent, action, options = {}) {
       if (typeof feedback.tileMessage === 'string' && feedback.tileMessage.trim() !== '') {
         setAgentTransientMessage(agent.id, feedback.tileMessage);
       }
+      if (payload?.result?.agent && typeof payload.result.agent === 'object') {
+        agentDashboardState.agents = applyAgentResultToAgents(agentDashboardState.agents, payload.result.agent);
+        renderAgentDashboard();
+      }
       await refreshAgentDashboardState({ silentStatus: true });
     } catch (error) {
       const feedback = summarizeAgentActionFailure(agent.id, action, error);
@@ -1092,6 +1097,9 @@ function installAgentDashboardControls() {
         const detail = json?.detail ? `: ${json.detail}` : '';
         throw new Error(`add failed (${response.status})${detail}`);
       }
+      if (json?.result?.agent && typeof json.result.agent === 'object') {
+        agentDashboardState.agents = applyAgentResultToAgents(agentDashboardState.agents, json.result.agent);
+      }
       if (agentDashboardAddIdEl) {
         agentDashboardAddIdEl.value = '';
       }
@@ -1106,6 +1114,7 @@ function installAgentDashboardControls() {
       }
       agentDashboardAddFormOpen = false;
       setAgentDashboardStatus('agent created', 'ok');
+      renderAgentDashboard();
       await refreshAgentDashboardState({ silentStatus: true });
     } catch (error) {
       setAgentDashboardStatus(error.message, 'warn');
