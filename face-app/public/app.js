@@ -31,7 +31,7 @@ import {
   sortDashboardAgents,
   summarizeAgentTileMessage
 } from './agent_dashboard_state.js';
-import { applyAgentResultToAgents } from './agent_dashboard_apply_result.js';
+import { resolveAgentsFromActionResult } from './agent_dashboard_apply_result.js';
 import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
 import { summarizeAgentActionFailure, summarizeAgentActionSuccess } from './agent_dashboard_action_feedback.js';
 import {
@@ -851,8 +851,9 @@ function bindAgentActionButton(button, agent, action, options = {}) {
       if (typeof feedback.tileMessage === 'string' && feedback.tileMessage.trim() !== '') {
         setAgentTransientMessage(agent.id, feedback.tileMessage);
       }
-      if (payload?.result?.agent && typeof payload.result.agent === 'object') {
-        agentDashboardState.agents = applyAgentResultToAgents(agentDashboardState.agents, payload.result.agent);
+      const nextAgents = resolveAgentsFromActionResult(agentDashboardState.agents, payload?.result);
+      if (nextAgents.length !== agentDashboardState.agents.length || nextAgents !== agentDashboardState.agents) {
+        agentDashboardState.agents = nextAgents;
         renderAgentDashboard();
       }
       await refreshAgentDashboardState({ silentStatus: true });
@@ -1097,9 +1098,7 @@ function installAgentDashboardControls() {
         const detail = json?.detail ? `: ${json.detail}` : '';
         throw new Error(`add failed (${response.status})${detail}`);
       }
-      if (json?.result?.agent && typeof json.result.agent === 'object') {
-        agentDashboardState.agents = applyAgentResultToAgents(agentDashboardState.agents, json.result.agent);
-      }
+      agentDashboardState.agents = resolveAgentsFromActionResult(agentDashboardState.agents, json?.result);
       if (agentDashboardAddIdEl) {
         agentDashboardAddIdEl.value = '';
       }

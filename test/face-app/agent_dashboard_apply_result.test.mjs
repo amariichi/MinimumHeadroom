@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyAgentResultToAgents } from '../../face-app/public/agent_dashboard_apply_result.js';
+import {
+  applyAgentResultToAgents,
+  normalizeResultStateAgents,
+  resolveAgentsFromActionResult
+} from '../../face-app/public/agent_dashboard_apply_result.js';
 
 test('applyAgentResultToAgents updates an existing agent in place by id', () => {
   const before = [
@@ -37,4 +41,36 @@ test('applyAgentResultToAgents keeps original list when result agent is invalid'
   const before = [{ id: 'a', status: 'active', slot: 0, session_id: 's-a' }];
   const next = applyAgentResultToAgents(before, null);
   assert.deepEqual(next, before);
+});
+
+test('normalizeResultStateAgents maps and sorts state agents', () => {
+  const next = normalizeResultStateAgents([
+    { id: 'b', status: 'removed', slot: null, session_id: 's-b' },
+    { id: 'a', status: 'active', slot: 0, session_id: 's-a' }
+  ]);
+  assert.equal(next.length, 2);
+  assert.equal(next[0].id, 'a');
+  assert.equal(next[1].id, 'b');
+  assert.equal(next[1].status, 'removed');
+});
+
+test('resolveAgentsFromActionResult prefers result.state.agents over result.agent', () => {
+  const before = [
+    { id: 'a', status: 'active', slot: 0, session_id: 's-a' },
+    { id: 'b', status: 'paused', slot: 1, session_id: 's-b' }
+  ];
+  const next = resolveAgentsFromActionResult(before, {
+    agent: { id: 'b', status: 'active', slot: 1, session_id: 's-b' },
+    state: {
+      agents: [{ id: 'z', status: 'active', slot: 0, session_id: 's-z' }]
+    }
+  });
+  assert.equal(next.length, 1);
+  assert.equal(next[0].id, 'z');
+});
+
+test('resolveAgentsFromActionResult returns original reference when no applicable data exists', () => {
+  const before = [{ id: 'a', status: 'active', slot: 0, session_id: 's-a' }];
+  const next = resolveAgentsFromActionResult(before, {});
+  assert.equal(next, before);
 });
