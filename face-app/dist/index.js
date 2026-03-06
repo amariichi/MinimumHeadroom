@@ -8,6 +8,7 @@ import { loadFaceAppConfig } from './config_loader.js';
 import { createOperatorAsrProxy } from './operator_asr_proxy.js';
 import { createOperatorRealtimeAsrProxy } from './operator_realtime_asr_proxy.js';
 import { createAgentRuntimeStateStore } from './agent_runtime_state.js';
+import { createAgentLifecycleApi, createAgentLifecycleRuntime } from './agent_lifecycle.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -84,6 +85,20 @@ const agentRuntimeState = createAgentRuntimeStateStore({
   log: console
 });
 agentRuntimeState.load();
+const agentLifecycleRuntime = createAgentLifecycleRuntime({
+  stateStore: agentRuntimeState,
+  repoRoot,
+  worktreesRoot: process.env.MH_AGENT_WORKTREES_ROOT ?? '',
+  tmuxSession: process.env.MH_AGENT_TMUX_SESSION ?? 'agent',
+  defaultAgentCommand: process.env.MH_AGENT_DEFAULT_CMD ?? 'codex',
+  tmuxEnabled: (process.env.MH_AGENT_TMUX_ENABLED ?? '1') === '1',
+  worktreeEnabled: (process.env.MH_AGENT_WORKTREE_ENABLED ?? '1') === '1',
+  allowExternalDelete: (process.env.MH_AGENT_ALLOW_EXTERNAL_DELETE ?? '0') === '1',
+  log: console
+});
+const agentLifecycleApi = createAgentLifecycleApi({
+  runtime: agentLifecycleRuntime
+});
 const operatorAsrProxy = createOperatorAsrProxy({
   baseUrl: operatorAsrBaseUrl,
   endpointUrl: operatorAsrEndpointUrl,
@@ -179,8 +194,11 @@ const server = await startFaceWebSocketServer({
         server.broadcast(toSayResultPayload(sayPayload, { accepted: false, spoken: false }, 'controller_error'));
       });
   },
-  onHttpRequest(request, response) {
+  async onHttpRequest(request, response) {
     const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (await agentLifecycleApi.handleHttpRequest(request, response)) {
+      return true;
+    }
     if (parsedUrl.pathname === '/api/operator/recover-default') {
       if (request.method !== 'POST') {
         writeJson(response, 405, {
@@ -216,23 +234,6 @@ const server = await startFaceWebSocketServer({
           enabled: operatorRealtimeAsrProxy?.enabled === true,
           sampleRateHz: Number.isNaN(operatorRealtimeAsrSampleRateHz) ? 16_000 : operatorRealtimeAsrSampleRateHz
         }
-      });
-      return true;
-    }
-    if (parsedUrl.pathname === '/api/agents/state') {
-      if (request.method !== 'GET') {
-        writeJson(response, 405, {
-          ok: false,
-          error: 'method_not_allowed'
-        });
-        return true;
-      }
-
-      writeJson(response, 200, {
-        ok: true,
-        statePath: agentRuntimeState.statePath,
-        hardCap: agentRuntimeState.hardCap,
-        state: agentRuntimeState.getState()
       });
       return true;
     }

@@ -295,6 +295,16 @@ export function createAgentRuntimeStateStore(options = {}) {
     return clone(listed);
   }
 
+  function getAgent(agentId) {
+    ensureLoaded();
+    const id = asNonEmptyString(agentId);
+    if (!id) {
+      return null;
+    }
+    const found = findAgentById(state, id);
+    return found ? clone(found) : null;
+  }
+
   function addAgent(input = {}) {
     ensureLoaded();
     if (countActiveOrParkedAgents(state.agents) >= hardCap) {
@@ -492,11 +502,57 @@ export function createAgentRuntimeStateStore(options = {}) {
     });
   }
 
+  function updateAgentMetadata(agentId, updates = {}) {
+    const nextSourceRepoPath = Object.prototype.hasOwnProperty.call(updates, 'source_repo_path')
+      ? asNonEmptyString(updates.source_repo_path)
+      : undefined;
+    const nextWorktreePath = Object.prototype.hasOwnProperty.call(updates, 'worktree_path')
+      ? asNonEmptyString(updates.worktree_path)
+      : undefined;
+    const nextBranch = Object.prototype.hasOwnProperty.call(updates, 'branch')
+      ? asNonEmptyString(updates.branch)
+      : undefined;
+    const nextPaneId = Object.prototype.hasOwnProperty.call(updates, 'pane_id')
+      ? asNonEmptyString(updates.pane_id)
+      : undefined;
+    const nextStatusBeforeRemove = Object.prototype.hasOwnProperty.call(updates, 'status_before_remove')
+      ? asNonEmptyString(updates.status_before_remove)
+      : undefined;
+
+    return transitionAgent(agentId, 'update_metadata', (agent) => {
+      let changed = false;
+
+      if (nextSourceRepoPath !== undefined && nextSourceRepoPath !== agent.source_repo_path) {
+        agent.source_repo_path = nextSourceRepoPath;
+        changed = true;
+      }
+      if (nextWorktreePath !== undefined && nextWorktreePath !== agent.worktree_path) {
+        agent.worktree_path = nextWorktreePath;
+        changed = true;
+      }
+      if (nextBranch !== undefined && nextBranch !== agent.branch) {
+        agent.branch = nextBranch;
+        changed = true;
+      }
+      if (nextPaneId !== undefined && nextPaneId !== agent.pane_id) {
+        agent.pane_id = nextPaneId;
+        changed = true;
+      }
+      if (nextStatusBeforeRemove !== undefined && nextStatusBeforeRemove !== agent.status_before_remove) {
+        agent.status_before_remove = nextStatusBeforeRemove;
+        changed = true;
+      }
+
+      return { noop: !changed };
+    });
+  }
+
   return {
     hardCap,
     statePath,
     load,
     getState,
+    getAgent,
     listAgents,
     addAgent,
     pauseAgent,
@@ -505,7 +561,7 @@ export function createAgentRuntimeStateStore(options = {}) {
     stopAgent,
     removeAgent,
     restoreAgent,
-    setAgentMessage
+    setAgentMessage,
+    updateAgentMetadata
   };
 }
-
