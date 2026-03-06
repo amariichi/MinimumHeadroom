@@ -496,6 +496,61 @@ export function createAgentLifecycleRuntime(options = {}) {
     return response;
   }
 
+  async function paneExists(paneId) {
+    const targetPane = asNonEmptyString(paneId);
+    if (!targetPane || !tmuxEnabled) {
+      return false;
+    }
+    try {
+      const result = await runTmux(['display-message', '-p', '-t', targetPane, '#{pane_id}']);
+      const resolved = asNonEmptyString(result.stdout);
+      return resolved === targetPane;
+    } catch {
+      return false;
+    }
+  }
+
+  async function restoreAgent(agentId) {
+    const agent = getAgentStateOrThrow(agentId);
+    if (agent.status !== 'removed') {
+      return stateStore.restoreAgent(agent.id);
+    }
+
+    const worktreePath = asNonEmptyString(agent.worktree_path);
+    if (worktreePath && !fs.existsSync(path.resolve(worktreePath))) {
+      throw createLifecycleError('invalid_state', `restore requires existing worktree path: ${worktreePath}`);
+    }
+
+    const hasPane = asNonEmptyString(agent.pane_id);
+    const availablePane = hasPane ? await paneExists(agent.pane_id) : false;
+    const restored = stateStore.restoreAgent(agent.id);
+    if (restored.noop) {
+      return restored;
+    }
+    if (!hasPane || availablePane) {
+      return {
+        ...restored,
+        action: 'restore',
+        restore: {
+          pane_available: true
+        }
+      };
+    }
+
+    stateStore.updateAgentMetadata(agent.id, {
+      pane_id: null
+    });
+    const patched = stateStore.setAgentMessage(agent.id, 'restored; pane unavailable', 'status');
+    return {
+      ...patched,
+      action: 'restore',
+      noop: false,
+      restore: {
+        pane_available: false
+      }
+    };
+  }
+
   async function focusAgent(agentId, input = {}) {
     const agent = getAgentStateOrThrow(agentId);
     const paneId = asNonEmptyString(agent.pane_id);
@@ -599,7 +654,7 @@ export function createAgentLifecycleRuntime(options = {}) {
       case 'remove':
         return stateStore.removeAgent(agentId);
       case 'restore':
-        return stateStore.restoreAgent(agentId);
+        return restoreAgent(agentId);
       case 'focus':
         return focusAgent(agentId, input);
       case 'delete-worktree':

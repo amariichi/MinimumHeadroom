@@ -290,6 +290,66 @@ test('agent lifecycle runtime focus action emits focus callback and updates mess
   cleanup(repoRoot);
 });
 
+test('agent lifecycle runtime restore fails when worktree path is missing', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+  const missingWorktreePath = path.join(repoRoot, '.agent/worktrees/agent-restore-missing');
+  fs.mkdirSync(missingWorktreePath, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-restore-missing',
+    create_worktree: false,
+    create_tmux: false,
+    worktree_path: missingWorktreePath
+  });
+  fs.rmSync(missingWorktreePath, { recursive: true, force: true });
+  await runtime.dispatchAgentAction('agent-restore-missing', 'remove', {});
+
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-restore-missing', 'restore', {}),
+    (error) => error?.code === 'invalid_state' && /restore requires existing worktree path/.test(error.message)
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime restore clears stale pane metadata when pane is gone', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%91') {
+        const error = new Error('pane not found');
+        error.code = 'command_failed';
+        throw error;
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%45\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-restore-pane',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%91',
+    worktree_path: repoRoot
+  });
+  await runtime.dispatchAgentAction('agent-restore-pane', 'remove', {});
+
+  const result = await runtime.dispatchAgentAction('agent-restore-pane', 'restore', {});
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'restore');
+  assert.equal(result.restore?.pane_available, false);
+  assert.equal(result.agent?.status, 'active');
+  assert.equal(result.agent?.pane_id, null);
+  assert.equal(result.agent?.last_message, 'restored; pane unavailable');
+
+  cleanup(repoRoot);
+});
+
 test('agent lifecycle api serves state and add endpoints', async () => {
   const { repoRoot, runtime } = createRuntimeHarness();
   const api = createAgentLifecycleApi({ runtime });
@@ -384,6 +444,38 @@ test('agent lifecycle api returns stop partial orchestration details', async () 
   assert.equal(snapshot.body?.result?.orchestration?.pane_killed, false);
   assert.equal(typeof snapshot.body?.result?.orchestration?.pane_kill_error, 'string');
   assert.equal(snapshot.body?.result?.agent?.last_message, 'stopped; pane still attached');
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle api surfaces restore validation failure for missing worktree', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+  const api = createAgentLifecycleApi({ runtime });
+  const missingWorktreePath = path.join(repoRoot, '.agent/worktrees/agent-http-restore-missing');
+  fs.mkdirSync(missingWorktreePath, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-http-restore-missing',
+    create_worktree: false,
+    create_tmux: false,
+    worktree_path: missingWorktreePath
+  });
+  fs.rmSync(missingWorktreePath, { recursive: true, force: true });
+  await runtime.dispatchAgentAction('agent-http-restore-missing', 'remove', {});
+
+  const restoreReq = createRequest({
+    method: 'POST',
+    url: '/api/agents/agent-http-restore-missing/restore',
+    body: {}
+  });
+  const restoreRes = createResponseCapture();
+  const handled = await api.handleHttpRequest(restoreReq, restoreRes);
+  assert.equal(handled, true);
+  const snapshot = restoreRes.snapshot();
+  assert.equal(snapshot.statusCode, 409);
+  assert.equal(snapshot.body?.ok, false);
+  assert.equal(snapshot.body?.error, 'invalid_state');
+  assert.match(snapshot.body?.detail ?? '', /restore requires existing worktree path/);
 
   cleanup(repoRoot);
 });
