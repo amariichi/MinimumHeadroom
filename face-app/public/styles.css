@@ -535,6 +535,79 @@ body.boot-pending #operator-handle {
   color: var(--accent-ok);
 }
 
+.operator-agent-list {
+  border: 1px solid rgba(118, 226, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(5, 17, 25, 0.72);
+  padding: 7px;
+  display: grid;
+  gap: 6px;
+}
+
+.operator-agent-list-title {
+  margin: 0;
+  font-size: 0.64rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.operator-agent-list-items {
+  display: grid;
+  gap: 6px;
+}
+
+.operator-agent-item {
+  border: 1px solid rgba(118, 226, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(2, 9, 14, 0.72);
+  padding: 6px;
+  display: grid;
+  gap: 5px;
+}
+
+.operator-agent-item-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.operator-agent-item-id {
+  font-family: 'JetBrains Mono', 'Consolas', 'Roboto Mono', monospace;
+  font-size: 0.7rem;
+  color: #e8f4ff;
+}
+
+.operator-agent-item-status {
+  margin-left: auto;
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #bfd8ed;
+}
+
+.operator-agent-item-message {
+  margin: 0;
+  font-family: 'JetBrains Mono', 'Consolas', 'Roboto Mono', monospace;
+  font-size: 0.65rem;
+  line-height: 1.32;
+  color: #d9edff;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.operator-agent-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.operator-agent-item-actions .operator-btn {
+  font-size: 0.6rem;
+  line-height: 1.2;
+  padding: 5px 8px;
+}
+
 .operator-approval-meta {
   border: 1px solid rgba(255, 138, 61, 0.32);
   border-radius: 10px;
@@ -832,6 +905,10 @@ body.ui-mode-mobile .operator-header-actions {
 body.ui-mode-mobile .operator-status {
   font-size: 0.82rem;
   line-height: 1.3;
+}
+
+body.ui-mode-mobile .operator-agent-list {
+  display: grid;
 }
 
 body.ui-mode-mobile .operator-mirror-row {

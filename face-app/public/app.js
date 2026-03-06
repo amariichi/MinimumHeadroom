@@ -55,6 +55,8 @@ const operatorRestartButtonEl = document.getElementById('operator-restart');
 const operatorTitleEl = document.getElementById('operator-title');
 const operatorStatusEl = document.getElementById('operator-status');
 const operatorPromptEl = document.getElementById('operator-prompt');
+const operatorAgentListEl = document.getElementById('operator-agent-list');
+const operatorAgentListItemsEl = document.getElementById('operator-agent-list-items');
 const operatorAckEl = document.getElementById('operator-ack');
 const operatorChoiceButtonsEl = document.getElementById('operator-choice-buttons');
 const operatorApprovalMetaEl = document.getElementById('operator-approval-meta');
@@ -127,6 +129,9 @@ const OPERATOR_UI_MODES = new Set([OPERATOR_UI_MODE_AUTO, OPERATOR_UI_MODE_PC, O
 const OPERATOR_MIRROR_DEFAULT_FG_CSS_VAR = 'var(--operator-mirror-fg)';
 const OPERATOR_MIRROR_DEFAULT_BG_CSS_VAR = 'var(--operator-mirror-bg-solid)';
 const OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX = 24;
+const BROWSER_AUDIO_MAX_CHANNELS_DEFAULT = 4;
+const BROWSER_AUDIO_MAX_CHANNELS_MIN = 1;
+const BROWSER_AUDIO_MAX_CHANNELS_MAX = 8;
 const AGENT_DASHBOARD_POLL_INTERVAL_MS = 2_400;
 const AGENT_TILE_MESSAGE_TTL_MS = 11_000;
 const AGENT_TILE_SPEAKING_TTL_MS = 6_000;
@@ -423,12 +428,12 @@ let xrButtonEl = null;
 let panelsVisible = true;
 const latestSayMetaBySession = new Map();
 const latestAudioMetaBySession = new Map();
-let playbackAudioEl = null;
+let unlockAudioEl = null;
 let unlockInFlight = null;
 let audioUnlocked = false;
 let pendingReplayPayload = null;
-let activeAudioGeneration = null;
-let activeAudioSourceRelease = null;
+let browserAudioMixer = null;
+let browserAudioMaxChannels = BROWSER_AUDIO_MAX_CHANNELS_DEFAULT;
 let silentAudioDataUrl = null;
 const registerDoubleTap = createDoubleTapTracker({
   maxIntervalMs: DOUBLE_TAP_MAX_INTERVAL_MS,
@@ -874,6 +879,32 @@ function createDashboardActionButton(agent, label, action, onClick) {
   return button;
 }
 
+function listAgentLifecycleActions(agent) {
+  const actions = [];
+  if (agent.pane_id && agent.status !== 'removed') {
+    actions.push({ label: 'Focus', action: 'focus' });
+  }
+  if (agent.status === 'active') {
+    actions.push({ label: 'Pause', action: 'pause' });
+    actions.push({ label: 'Stop', action: 'stop' });
+    actions.push({ label: 'Remove', action: 'remove' });
+  } else if (agent.status === 'paused') {
+    actions.push({ label: 'Resume', action: 'resume' });
+    actions.push({ label: 'Stop', action: 'stop' });
+    actions.push({ label: 'Remove', action: 'remove' });
+  } else if (agent.status === 'parked') {
+    actions.push({ label: 'Stop', action: 'stop' });
+    actions.push({ label: 'Remove', action: 'remove' });
+  } else if (agent.status === 'stopped') {
+    actions.push({ label: 'Remove', action: 'remove' });
+    actions.push({ label: 'Delete WT', action: 'delete-worktree' });
+  } else if (agent.status === 'removed') {
+    actions.push({ label: 'Restore', action: 'restore' });
+    actions.push({ label: 'Delete WT', action: 'delete-worktree' });
+  }
+  return actions;
+}
+
 async function runAgentDashboardAction(agent, action) {
   const path = action === 'add' ? '/api/agents/add' : `/api/agents/${encodeURIComponent(agent.id)}/${action}`;
   const body = action === 'focus' ? { session_id: resolveOperatorSessionId() } : {};
@@ -893,6 +924,27 @@ async function runAgentDashboardAction(agent, action) {
   return payload;
 }
 
+function bindAgentActionButton(button, agent, action, options = {}) {
+  if (!button) {
+    return;
+  }
+  button.addEventListener('click', async (event) => {
+    if (options.stopPropagation === true) {
+      event.stopPropagation();
+    }
+    button.disabled = true;
+    try {
+      await runAgentDashboardAction(agent, action);
+      setAgentDashboardStatus(`${agent.id}: ${action} ok`, 'ok');
+      await refreshAgentDashboardState({ silentStatus: true });
+    } catch (error) {
+      setAgentDashboardStatus(`${agent.id}: ${error.message}`, 'warn');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
 function renderAgentDashboard() {
   if (!agentDashboardEl || !agentDashboardGridEl || !agentDashboardAddFormEl) {
     return;
@@ -902,6 +954,7 @@ function renderAgentDashboard() {
   const showDashboard = agentDashboardState.mode === 'multi' && operatorPanelEnabled;
   agentDashboardEl.classList.toggle('hidden', !showDashboard);
   if (!showDashboard) {
+    renderOperatorMobileAgentList();
     return;
   }
 
@@ -954,47 +1007,68 @@ function renderAgentDashboard() {
 
     const actions = document.createElement('div');
     actions.className = 'agent-tile-actions';
-
-    const withAction = (label, action) =>
-      createDashboardActionButton(agent, label, action, async (event) => {
-        event.stopPropagation();
-        const button = event.currentTarget;
-        button.disabled = true;
-        try {
-          await runAgentDashboardAction(agent, action);
-          setAgentDashboardStatus(`${agent.id}: ${action} ok`, 'ok');
-          await refreshAgentDashboardState({ silentStatus: true });
-        } catch (error) {
-          setAgentDashboardStatus(`${agent.id}: ${error.message}`, 'warn');
-        } finally {
-          button.disabled = false;
-        }
-      });
-
-    if (agent.pane_id && agent.status !== 'removed') {
-      actions.appendChild(withAction('Focus', 'focus'));
-    }
-    if (agent.status === 'active') {
-      actions.appendChild(withAction('Pause', 'pause'));
-      actions.appendChild(withAction('Stop', 'stop'));
-      actions.appendChild(withAction('Remove', 'remove'));
-    } else if (agent.status === 'paused') {
-      actions.appendChild(withAction('Resume', 'resume'));
-      actions.appendChild(withAction('Stop', 'stop'));
-      actions.appendChild(withAction('Remove', 'remove'));
-    } else if (agent.status === 'parked') {
-      actions.appendChild(withAction('Stop', 'stop'));
-      actions.appendChild(withAction('Remove', 'remove'));
-    } else if (agent.status === 'stopped') {
-      actions.appendChild(withAction('Remove', 'remove'));
-      actions.appendChild(withAction('Delete WT', 'delete-worktree'));
-    } else if (agent.status === 'removed') {
-      actions.appendChild(withAction('Restore', 'restore'));
-      actions.appendChild(withAction('Delete WT', 'delete-worktree'));
+    for (const item of listAgentLifecycleActions(agent)) {
+      const button = createDashboardActionButton(agent, item.label, item.action, () => {});
+      bindAgentActionButton(button, agent, item.action, { stopPropagation: true });
+      actions.appendChild(button);
     }
 
     tile.append(header, sessionEl, messageEl, actions);
     agentDashboardGridEl.appendChild(tile);
+  }
+  renderOperatorMobileAgentList();
+}
+
+function renderOperatorMobileAgentList() {
+  if (!operatorAgentListEl || !operatorAgentListItemsEl) {
+    return;
+  }
+  const isMobileUi = operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE;
+  const activeAgents = getNonRemovedDashboardAgents();
+  const shouldShow = isMobileUi && operatorPanelEnabled && activeAgents.length > 1;
+  operatorAgentListEl.classList.toggle('hidden', !shouldShow);
+  if (!shouldShow) {
+    return;
+  }
+
+  pruneAgentTransientState(Date.now());
+  operatorAgentListItemsEl.innerHTML = '';
+  for (const agent of agentDashboardState.agents) {
+    const transient = agentTransientStateById.get(agent.id) ?? null;
+    const nowMs = Date.now();
+    const message = summarizeAgentTileMessage(
+      agent,
+      transient && transient.messageExpiresAt > nowMs ? transient.message : null
+    );
+    const item = document.createElement('article');
+    item.className = 'operator-agent-item';
+    if (agent.id === agentDashboardState.selectedAgentId) {
+      item.style.borderColor = 'rgba(111, 243, 184, 0.65)';
+    }
+
+    const header = document.createElement('header');
+    header.className = 'operator-agent-item-header';
+    const idEl = document.createElement('span');
+    idEl.className = 'operator-agent-item-id';
+    idEl.textContent = agent.id;
+    const statusEl = document.createElement('span');
+    statusEl.className = 'operator-agent-item-status';
+    statusEl.textContent = agent.status;
+    header.append(idEl, statusEl);
+
+    const messageEl = document.createElement('p');
+    messageEl.className = 'operator-agent-item-message';
+    messageEl.textContent = message;
+
+    const actions = document.createElement('div');
+    actions.className = 'operator-agent-item-actions';
+    for (const actionItem of listAgentLifecycleActions(agent)) {
+      const button = createDashboardActionButton(agent, actionItem.label, actionItem.action, () => {});
+      bindAgentActionButton(button, agent, actionItem.action, { stopPropagation: false });
+      actions.appendChild(button);
+    }
+    item.append(header, messageEl, actions);
+    operatorAgentListItemsEl.appendChild(item);
   }
 }
 
@@ -1153,6 +1227,13 @@ async function loadOperatorUiConfig() {
       operatorRealtimeAsrConfig.sampleRateHz = Number.isFinite(payload?.realtimeAsr?.sampleRateHz)
         ? Math.max(8_000, Math.floor(payload.realtimeAsr.sampleRateHz))
         : OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE;
+      browserAudioMaxChannels = Number.isFinite(payload?.browserAudio?.maxChannels)
+        ? clamp(
+            Math.floor(payload.browserAudio.maxChannels),
+            BROWSER_AUDIO_MAX_CHANNELS_MIN,
+            BROWSER_AUDIO_MAX_CHANNELS_MAX
+          )
+        : BROWSER_AUDIO_MAX_CHANNELS_DEFAULT;
     }
   } catch {
     // Keep defaults on fetch failures.
@@ -1888,6 +1969,9 @@ function updateOperatorUi() {
     if (operatorKeyboardHelpEl) {
       operatorKeyboardHelpEl.hidden = true;
     }
+    if (operatorAgentListEl) {
+      operatorAgentListEl.classList.add('hidden');
+    }
     return;
   }
 
@@ -2144,9 +2228,9 @@ function shouldPlayTtsAudio(payload) {
   return shouldUseLatestPayload(payload, latestAudioMetaBySession);
 }
 
-function ensurePlaybackAudioElement() {
-  if (playbackAudioEl) {
-    return playbackAudioEl;
+function ensureUnlockAudioElement() {
+  if (unlockAudioEl) {
+    return unlockAudioEl;
   }
 
   const player = new Audio();
@@ -2155,17 +2239,99 @@ function ensurePlaybackAudioElement() {
   player.setAttribute('playsinline', 'true');
   player.setAttribute('webkit-playsinline', 'true');
   player.volume = 1;
-  player.addEventListener('ended', () => {
-    releaseActiveAudioSource();
-    resetActiveAudio();
-  });
-  player.addEventListener('error', () => {
-    releaseActiveAudioSource();
-    resetActiveAudio();
-    setTtsPhase('browser_error', 'warn');
-  });
-  playbackAudioEl = player;
+  unlockAudioEl = player;
   return player;
+}
+
+function createBrowserAudioChannel() {
+  const player = new Audio();
+  player.preload = 'auto';
+  player.playsInline = true;
+  player.setAttribute('playsinline', 'true');
+  player.setAttribute('webkit-playsinline', 'true');
+  player.volume = 1;
+  return {
+    player,
+    token: 0,
+    active: false,
+    sessionId: null,
+    generation: null,
+    startedAt: 0,
+    release: null
+  };
+}
+
+function ensureBrowserAudioMixer() {
+  if (browserAudioMixer) {
+    return browserAudioMixer;
+  }
+  browserAudioMixer = {
+    channels: []
+  };
+  return browserAudioMixer;
+}
+
+function releaseBrowserAudioChannelResource(channel) {
+  if (typeof channel.release === 'function') {
+    channel.release();
+  }
+  channel.release = null;
+}
+
+function clearBrowserAudioChannel(channel) {
+  releaseBrowserAudioChannelResource(channel);
+  channel.active = false;
+  channel.sessionId = null;
+  channel.generation = null;
+  channel.startedAt = 0;
+}
+
+function pauseAndResetBrowserAudioChannel(channel) {
+  try {
+    channel.player.pause();
+  } catch {
+    // Ignore pause errors while stopping a browser audio channel.
+  }
+  try {
+    channel.player.currentTime = 0;
+  } catch {
+    // Ignore seek errors while resetting a browser audio channel.
+  }
+}
+
+function reserveBrowserAudioChannel(sessionId) {
+  const mixer = ensureBrowserAudioMixer();
+
+  for (const channel of mixer.channels) {
+    if (channel.active && channel.sessionId === sessionId) {
+      return channel;
+    }
+  }
+
+  for (const channel of mixer.channels) {
+    if (!channel.active) {
+      return channel;
+    }
+  }
+
+  const cappedCount = clamp(
+    Math.floor(browserAudioMaxChannels),
+    BROWSER_AUDIO_MAX_CHANNELS_MIN,
+    BROWSER_AUDIO_MAX_CHANNELS_MAX
+  );
+  if (mixer.channels.length < cappedCount) {
+    const created = createBrowserAudioChannel();
+    mixer.channels.push(created);
+    return created;
+  }
+
+  let fallback = mixer.channels[0] ?? null;
+  for (const channel of mixer.channels) {
+    if (!fallback || channel.startedAt < fallback.startedAt) {
+      fallback = channel;
+    }
+  }
+  return fallback;
 }
 
 function withTimeout(promise, timeoutMs) {
@@ -2255,7 +2421,7 @@ async function unlockPlaybackAudio() {
     return unlockInFlight;
   }
 
-  const player = ensurePlaybackAudioElement();
+  const player = ensureUnlockAudioElement();
   if (!player.paused) {
     audioUnlocked = true;
     return true;
@@ -2302,38 +2468,24 @@ function showAudioReplayButton() {
   audioReplayButtonEl.classList.remove('hidden');
 }
 
-function resetActiveAudio() {
-  activeAudioGeneration = null;
-}
-
-function releaseActiveAudioSource() {
-  if (typeof activeAudioSourceRelease === 'function') {
-    activeAudioSourceRelease();
-    activeAudioSourceRelease = null;
-  }
-}
-
-function stopActiveBrowserAudio(generation = null) {
-  if (!playbackAudioEl) {
-    resetActiveAudio();
+function stopActiveBrowserAudio(generation = null, sessionId = null) {
+  if (!browserAudioMixer) {
     return;
   }
-  if (Number.isInteger(generation) && Number.isInteger(activeAudioGeneration) && generation !== activeAudioGeneration) {
-    return;
+  const resolvedSessionId = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : null;
+  for (const channel of browserAudioMixer.channels) {
+    if (!channel.active) {
+      continue;
+    }
+    if (Number.isInteger(generation) && (!Number.isInteger(channel.generation) || generation !== channel.generation)) {
+      continue;
+    }
+    if (resolvedSessionId && channel.sessionId !== resolvedSessionId) {
+      continue;
+    }
+    pauseAndResetBrowserAudioChannel(channel);
+    clearBrowserAudioChannel(channel);
   }
-
-  try {
-    playbackAudioEl.pause();
-  } catch {
-    // Ignore pause errors while stopping active browser audio.
-  }
-  try {
-    playbackAudioEl.currentTime = 0;
-  } catch {
-    // Ignore seek errors while stopping active browser audio.
-  }
-  releaseActiveAudioSource();
-  resetActiveAudio();
 }
 
 function queueReplayPayload(payload) {
@@ -2341,17 +2493,43 @@ function queueReplayPayload(payload) {
   showAudioReplayButton();
 }
 
-async function playAudioSource(src, generation = null, release = null) {
-  const player = ensurePlaybackAudioElement();
-  stopActiveBrowserAudio();
-  player.src = src;
-  player.currentTime = 0;
-  activeAudioSourceRelease = typeof release === 'function' ? release : null;
+async function playAudioSource(src, generation = null, release = null, sessionId = '-') {
+  const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : '-';
+  const channel = reserveBrowserAudioChannel(normalizedSessionId);
+  const token = channel.token + 1;
+  channel.token = token;
+  pauseAndResetBrowserAudioChannel(channel);
+  clearBrowserAudioChannel(channel);
+  channel.player.src = src;
+  channel.player.currentTime = 0;
+  channel.release = typeof release === 'function' ? release : null;
+  channel.active = true;
+  channel.sessionId = normalizedSessionId;
+  channel.generation = Number.isInteger(generation) ? generation : null;
+  channel.startedAt = Date.now();
+
+  const finalizeIfCurrent = () => {
+    if (channel.token !== token) {
+      return;
+    }
+    clearBrowserAudioChannel(channel);
+  };
+  channel.player.onended = finalizeIfCurrent;
+  channel.player.onerror = () => {
+    finalizeIfCurrent();
+    setTtsPhase('browser_error', 'warn');
+  };
+
   try {
-    await player.play();
-    activeAudioGeneration = Number.isInteger(generation) ? generation : null;
+    await channel.player.play();
+    if (channel.token !== token) {
+      return { superseded: true };
+    }
+    return { superseded: false };
   } catch (error) {
-    releaseActiveAudioSource();
+    if (channel.token === token) {
+      clearBrowserAudioChannel(channel);
+    }
     throw error;
   }
 }
@@ -2367,10 +2545,14 @@ async function playBrowserAudioPayload(payload) {
   const mimeType = typeof payload.mime_type === 'string' && payload.mime_type.trim() !== '' ? payload.mime_type.trim() : 'audio/wav';
   const source = buildPlaybackSource(mimeType, payload.audio_base64);
   const generation = Number.isInteger(payload.generation) ? payload.generation : null;
+  const sessionId = resolvePayloadSessionId(payload);
 
   try {
     await unlockPlaybackAudio();
-    await playAudioSource(source.src, generation, source.release);
+    const played = await playAudioSource(source.src, generation, source.release, sessionId);
+    if (played.superseded) {
+      return;
+    }
     pendingReplayPayload = null;
     hideAudioReplayButton();
   } catch {
@@ -2380,7 +2562,8 @@ async function playBrowserAudioPayload(payload) {
     queueReplayPayload({
       mimeType,
       audioBase64: payload.audio_base64,
-      generation
+      generation,
+      sessionId
     });
     setTtsPhase('browser_blocked', 'warn');
   }
@@ -3387,14 +3570,30 @@ function installAudioReplayButton() {
     void (async () => {
       try {
         const directSource = buildPlaybackSource(replay.mimeType, replay.audioBase64);
-        await playAudioSource(directSource.src, replay.generation, directSource.release);
+        const played = await playAudioSource(
+          directSource.src,
+          replay.generation,
+          directSource.release,
+          replay.sessionId ?? '-'
+        );
+        if (played.superseded) {
+          return;
+        }
         audioUnlocked = true;
         hideAudioReplayButton();
       } catch {
         try {
           await unlockPlaybackAudio();
           const retrySource = buildPlaybackSource(replay.mimeType, replay.audioBase64);
-          await playAudioSource(retrySource.src, replay.generation, retrySource.release);
+          const played = await playAudioSource(
+            retrySource.src,
+            replay.generation,
+            retrySource.release,
+            replay.sessionId ?? '-'
+          );
+          if (played.superseded) {
+            return;
+          }
           audioUnlocked = true;
           hideAudioReplayButton();
         } catch {

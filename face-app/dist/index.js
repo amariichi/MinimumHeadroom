@@ -76,6 +76,7 @@ const operatorRealtimeAsrModel =
   process.env.MH_OPERATOR_REALTIME_ASR_MODEL ?? 'mistralai/Voxtral-Mini-4B-Realtime-2602';
 const operatorRealtimeAsrDebug = (process.env.MH_OPERATOR_REALTIME_ASR_DEBUG ?? '0') === '1';
 const operatorRealtimeAsrSampleRateHz = Number.parseInt(process.env.MH_OPERATOR_REALTIME_ASR_SAMPLE_RATE_HZ ?? '16000', 10);
+const browserAudioMaxChannels = Number.parseInt(process.env.FACE_BROWSER_AUDIO_MAX_CHANNELS ?? '4', 10);
 const faceConfig = loadFaceAppConfig({ repoRoot, env: process.env, log: console });
 const agentStatePath = process.env.MH_AGENT_STATE_PATH ?? '';
 const agentRuntimeState = createAgentRuntimeStateStore({
@@ -249,6 +250,11 @@ const server = await startFaceWebSocketServer({
         realtimeAsr: {
           enabled: operatorRealtimeAsrProxy?.enabled === true,
           sampleRateHz: Number.isNaN(operatorRealtimeAsrSampleRateHz) ? 16_000 : operatorRealtimeAsrSampleRateHz
+        },
+        browserAudio: {
+          maxChannels: Number.isNaN(browserAudioMaxChannels)
+            ? 4
+            : Math.max(1, Math.min(8, browserAudioMaxChannels))
         }
       });
       return true;
