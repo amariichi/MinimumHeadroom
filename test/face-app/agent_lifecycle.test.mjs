@@ -341,3 +341,88 @@ test('agent lifecycle api serves state and add endpoints', async () => {
 
   cleanup(repoRoot);
 });
+
+test('agent lifecycle api returns stop partial orchestration details', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'kill-pane') {
+        const error = new Error('kill-pane failed');
+        error.code = 'command_failed';
+        throw error;
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%45\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  const api = createAgentLifecycleApi({ runtime });
+
+  await runtime.addAgent({
+    id: 'agent-http-stop',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%77'
+  });
+
+  const stopReq = createRequest({
+    method: 'POST',
+    url: '/api/agents/agent-http-stop/stop',
+    body: {
+      kill_pane: true
+    }
+  });
+  const stopRes = createResponseCapture();
+  const handled = await api.handleHttpRequest(stopReq, stopRes);
+  assert.equal(handled, true);
+  const snapshot = stopRes.snapshot();
+  assert.equal(snapshot.statusCode, 200);
+  assert.equal(snapshot.body?.ok, true);
+  assert.equal(snapshot.body?.result?.orchestration?.pane_killed, false);
+  assert.equal(typeof snapshot.body?.result?.orchestration?.pane_kill_error, 'string');
+  assert.equal(snapshot.body?.result?.agent?.last_message, 'stopped; pane still attached');
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle api returns delete-worktree noop message', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+  const api = createAgentLifecycleApi({ runtime });
+  const missingWorktreePath = path.join(repoRoot, '.agent/worktrees/agent-http-delete-noop');
+  fs.mkdirSync(missingWorktreePath, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-http-delete-noop',
+    create_worktree: false,
+    create_tmux: false,
+    worktree_path: missingWorktreePath
+  });
+  fs.rmSync(missingWorktreePath, { recursive: true, force: true });
+
+  const removeReq = createRequest({
+    method: 'POST',
+    url: '/api/agents/agent-http-delete-noop/remove',
+    body: {}
+  });
+  const removeRes = createResponseCapture();
+  await api.handleHttpRequest(removeReq, removeRes);
+
+  const deleteReq = createRequest({
+    method: 'POST',
+    url: '/api/agents/agent-http-delete-noop/delete-worktree',
+    body: {}
+  });
+  const deleteRes = createResponseCapture();
+  const handled = await api.handleHttpRequest(deleteReq, deleteRes);
+  assert.equal(handled, true);
+  const snapshot = deleteRes.snapshot();
+  assert.equal(snapshot.statusCode, 200);
+  assert.equal(snapshot.body?.ok, true);
+  assert.equal(snapshot.body?.result?.noop, true);
+  assert.equal(snapshot.body?.result?.agent?.last_message, 'worktree already absent');
+
+  cleanup(repoRoot);
+});
