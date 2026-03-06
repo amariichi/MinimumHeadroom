@@ -65,10 +65,6 @@ function timestampStamp(nowFn) {
   return String(value);
 }
 
-function jsonClone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
 function parseActionPath(pathname) {
   const match = pathname.match(/^\/api\/agents\/([^/]+)\/([a-z-]+)$/);
   if (!match) {
@@ -454,6 +450,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     const agent = getAgentStateOrThrow(agentId);
     const killPane = normalizeBoolean(input.kill_pane, true);
     let paneKilled = false;
+    let paneKillError = null;
     const result = stateStore.stopAgent(agent.id);
 
     if (!result.noop && killPane && tmuxEnabled && asNonEmptyString(agent.pane_id)) {
@@ -472,16 +469,31 @@ export function createAgentLifecycleRuntime(options = {}) {
           }
         };
       } catch (error) {
+        paneKillError = asNonEmptyString(error?.message);
         log.warn(`[agent-lifecycle] stop kill-pane failed (${agent.pane_id}): ${error.message}`);
+        const patched = stateStore.setAgentMessage(agent.id, 'stopped; pane still attached', 'status');
+        return {
+          ...patched,
+          action: 'stop',
+          noop: false,
+          orchestration: {
+            pane_killed: false,
+            pane_kill_error: paneKillError
+          }
+        };
       }
     }
 
-    return {
+    const response = {
       ...result,
       orchestration: {
         pane_killed: paneKilled
       }
     };
+    if (paneKillError) {
+      response.orchestration.pane_kill_error = paneKillError;
+    }
+    return response;
   }
 
   async function focusAgent(agentId, input = {}) {
@@ -529,12 +541,14 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
 
     if (!worktreePath) {
+      const patched = stateStore.setAgentMessage(agent.id, 'worktree already absent', 'status');
       return {
+        ...patched,
         ok: true,
         action: 'delete-worktree',
         noop: true,
-        agent: jsonClone(agent),
-        state: stateStore.getState()
+        agent: patched.agent,
+        state: patched.state
       };
     }
 
@@ -547,9 +561,10 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
 
     if (!fs.existsSync(resolved)) {
-      const patched = stateStore.updateAgentMetadata(agent.id, {
+      stateStore.updateAgentMetadata(agent.id, {
         worktree_path: null
       });
+      const patched = stateStore.setAgentMessage(agent.id, 'worktree already absent', 'status');
       return {
         ...patched,
         action: 'delete-worktree',
@@ -559,9 +574,10 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
 
     await runGit(sourceRepoPath, ['worktree', 'remove', '--force', resolved]);
-    const patched = stateStore.updateAgentMetadata(agent.id, {
+    stateStore.updateAgentMetadata(agent.id, {
       worktree_path: null
     });
+    const patched = stateStore.setAgentMessage(agent.id, 'worktree deleted', 'status');
     return {
       ...patched,
       action: 'delete-worktree',

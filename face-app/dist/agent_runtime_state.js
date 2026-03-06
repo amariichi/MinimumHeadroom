@@ -379,6 +379,15 @@ export function createAgentRuntimeStateStore(options = {}) {
       };
     }
 
+    if (Object.prototype.hasOwnProperty.call(result ?? {}, 'message')) {
+      const nextMessage = normalizeMessageValue(result?.message);
+      const nextSource = asNonEmptyString(result?.message_source) ?? 'status';
+      if (agent.last_message !== nextMessage || agent.message_source !== nextSource) {
+        agent.last_message = nextMessage;
+        agent.message_source = nextSource;
+      }
+    }
+
     agent.updated_at = nowMs(now);
     const nextState = commitState();
     return {
@@ -400,7 +409,7 @@ export function createAgentRuntimeStateStore(options = {}) {
       }
       agent.status = 'paused';
       agent.paused_at = nowMs(now);
-      return { noop: false };
+      return { noop: false, message: 'paused' };
     });
   }
 
@@ -417,7 +426,7 @@ export function createAgentRuntimeStateStore(options = {}) {
       }
       agent.status = 'active';
       agent.paused_at = null;
-      return { noop: false };
+      return { noop: false, message: 'active' };
     });
   }
 
@@ -431,7 +440,7 @@ export function createAgentRuntimeStateStore(options = {}) {
       }
       agent.status = 'parked';
       agent.paused_at = null;
-      return { noop: false };
+      return { noop: false, message: 'parked' };
     });
   }
 
@@ -445,7 +454,7 @@ export function createAgentRuntimeStateStore(options = {}) {
       }
       agent.status = 'stopped';
       agent.paused_at = null;
-      return { noop: false };
+      return { noop: false, message: 'stopped' };
     });
   }
 
@@ -460,7 +469,7 @@ export function createAgentRuntimeStateStore(options = {}) {
       agent.status = 'removed';
       agent.removed_at = nowMs(now);
       agent.paused_at = null;
-      return { noop: false };
+      return { noop: false, message: 'removed' };
     });
   }
 
@@ -487,7 +496,7 @@ export function createAgentRuntimeStateStore(options = {}) {
       agent.status_before_remove = null;
       agent.removed_at = null;
       agent.paused_at = agent.status === 'paused' ? nowMs(now) : null;
-      return { noop: false };
+      return { noop: false, message: 'restored' };
     });
   }
 

@@ -80,6 +80,7 @@ function createRuntimeHarness(options = {}) {
 
   const commands = [];
   const focusCalls = [];
+  const externalCommandRunner = typeof options.commandRunner === 'function' ? options.commandRunner : null;
   const runtime = createAgentLifecycleRuntime({
     stateStore,
     repoRoot,
@@ -88,6 +89,9 @@ function createRuntimeHarness(options = {}) {
     allowExternalDelete: options.allowExternalDelete ?? false,
     commandRunner: async (command, args) => {
       commands.push([command, ...args]);
+      if (externalCommandRunner) {
+        return externalCommandRunner(command, args);
+      }
       if (command === 'tmux' && args[0] === 'list-windows') {
         return { stdout: 'operator\n', stderr: '', code: 0 };
       }
@@ -150,6 +154,53 @@ test('agent lifecycle runtime stop action kills pane and marks stopped', async (
   const agent = state.agents.find((item) => item.id === 'agent-stop');
   assert.equal(agent?.status, 'stopped');
   assert.equal(agent?.pane_id, null);
+  assert.equal(agent?.last_message, 'stopped');
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime stop action reports partial success when pane kill fails', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'kill-pane') {
+        const error = new Error('kill-pane failed');
+        error.code = 'command_failed';
+        throw error;
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%45\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-stop-fail',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%89'
+  });
+
+  const result = await runtime.dispatchAgentAction('agent-stop-fail', 'stop', {
+    kill_pane: true
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'stop');
+  assert.equal(result.orchestration.pane_killed, false);
+  assert.equal(typeof result.orchestration.pane_kill_error, 'string');
+  assert.equal(
+    commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'kill-pane' && entry[3] === '%89'),
+    true
+  );
+
+  const state = runtime.getState();
+  const agent = state.agents.find((item) => item.id === 'agent-stop-fail');
+  assert.equal(agent?.status, 'stopped');
+  assert.equal(agent?.pane_id, '%89');
+  assert.equal(agent?.last_message, 'stopped; pane still attached');
 
   cleanup(repoRoot);
 });
@@ -188,6 +239,29 @@ test('agent lifecycle runtime requires removed/stopped before delete-worktree', 
     () => runtime.dispatchAgentAction('agent-active-delete', 'delete-worktree', {}),
     (error) => error?.code === 'invalid_state'
   );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime records delete-worktree noop message when path is absent', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+  const missingWorktreePath = path.join(repoRoot, '.agent/worktrees/agent-delete-noop');
+  fs.mkdirSync(missingWorktreePath, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-delete-noop',
+    create_worktree: false,
+    create_tmux: false,
+    worktree_path: missingWorktreePath
+  });
+  fs.rmSync(missingWorktreePath, { recursive: true, force: true });
+  await runtime.dispatchAgentAction('agent-delete-noop', 'remove', {});
+  const result = await runtime.dispatchAgentAction('agent-delete-noop', 'delete-worktree', {});
+
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'delete-worktree');
+  assert.equal(result.noop, true);
+  assert.equal(result.agent?.last_message, 'worktree already absent');
 
   cleanup(repoRoot);
 });

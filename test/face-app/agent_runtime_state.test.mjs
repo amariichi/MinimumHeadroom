@@ -109,19 +109,24 @@ test('agent runtime pause/resume/remove/restore transitions are idempotent and k
   const pause2 = store.pauseAgent('a');
   assert.equal(pause1.noop, false);
   assert.equal(pause2.noop, true);
-  assert.equal(store.getState().agents.find((agent) => agent.id === 'a')?.status, 'paused');
+  const afterPause = store.getState().agents.find((agent) => agent.id === 'a');
+  assert.equal(afterPause?.status, 'paused');
+  assert.equal(afterPause?.last_message, 'paused');
 
   const resume1 = store.resumeAgent('a');
   const resume2 = store.resumeAgent('a');
   assert.equal(resume1.noop, false);
   assert.equal(resume2.noop, true);
-  assert.equal(store.getState().agents.find((agent) => agent.id === 'a')?.status, 'active');
+  const afterResume = store.getState().agents.find((agent) => agent.id === 'a');
+  assert.equal(afterResume?.status, 'active');
+  assert.equal(afterResume?.last_message, 'active');
 
   store.removeAgent('a');
   const afterRemove = store.getState().agents.find((agent) => agent.id === 'a');
   assert.equal(afterRemove?.status, 'removed');
   assert.equal(afterRemove?.slot, null);
   assert.equal(afterRemove?.removed_slot, 0);
+  assert.equal(afterRemove?.last_message, 'removed');
 
   store.addAgent({ id: 'c', slot: 0 });
   const restore = store.restoreAgent('a');
@@ -130,6 +135,7 @@ test('agent runtime pause/resume/remove/restore transitions are idempotent and k
   const afterRestore = store.getState().agents.find((agent) => agent.id === 'a');
   assert.equal(afterRestore?.status, 'active');
   assert.equal(afterRestore?.slot, 2);
+  assert.equal(afterRestore?.last_message, 'restored');
 
   cleanup(rootDir);
 });
