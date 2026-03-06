@@ -32,6 +32,10 @@ import {
   summarizeAgentTileMessage
 } from './agent_dashboard_state.js';
 import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
+import {
+  deriveAgentTransientUpdate,
+  resolveAgentIdForPayload as resolveFeedAgentIdForPayload
+} from './agent_dashboard_feed.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -716,26 +720,6 @@ function ensureSelectedDashboardAgent() {
   agentDashboardState.selectedAgentId = fallback?.id ?? null;
 }
 
-function resolveDashboardAgentBySession(sessionId) {
-  if (typeof sessionId !== 'string' || sessionId.trim() === '' || sessionId === '-') {
-    return null;
-  }
-  const normalized = sessionId.trim();
-  return (
-    agentDashboardState.agents.find((agent) => agent.session_id === normalized) ??
-    agentDashboardState.agents.find((agent) => agent.id === normalized) ??
-    null
-  );
-}
-
-function resolveDashboardAgentIdForPayload(payload) {
-  const explicit = typeof payload?.agent_id === 'string' && payload.agent_id.trim() !== '' ? payload.agent_id.trim() : null;
-  if (explicit && agentDashboardState.agents.some((agent) => agent.id === explicit)) {
-    return explicit;
-  }
-  return resolveDashboardAgentBySession(payload?.session_id)?.id ?? null;
-}
-
 function getAgentTransientState(agentId) {
   const existing = agentTransientStateById.get(agentId);
   if (existing) {
@@ -775,78 +759,20 @@ function markAgentSpeaking(agentId, active) {
   transient.speakingUntil = active ? Date.now() + AGENT_TILE_SPEAKING_TTL_MS : 0;
 }
 
-function summarizeAgentEventMessage(payload) {
-  const name = typeof payload?.name === 'string' ? payload.name.trim() : '';
-  if (!name) {
-    return null;
-  }
-  if (name === 'cmd_started') {
-    const action = truncateAgentText(payload?.meta?.action ?? payload?.meta?.task ?? '');
-    return action ? `running: ${action}` : 'running command';
-  }
-  if (name === 'cmd_succeeded' || name === 'tests_passed') {
-    return 'completed successfully';
-  }
-  if (name === 'cmd_failed' || name === 'tests_failed') {
-    return 'task failed';
-  }
-  if (name === 'retrying') {
-    return 'retrying task';
-  }
-  if (name === 'idle') {
-    return 'idle';
-  }
-  if (name === 'permission_required') {
-    return 'approval required';
-  }
-  return truncateAgentText(name.replaceAll('_', ' '));
-}
-
 function trackAgentTileFromPayload(payload) {
-  const agentId = resolveDashboardAgentIdForPayload(payload);
+  const agentId = resolveFeedAgentIdForPayload(payload, agentDashboardState.agents);
   if (!agentId) {
     return;
   }
-
-  if (payload.type === 'say') {
-    const text = typeof payload.text === 'string' ? payload.text : '';
-    if (text.trim() !== '') {
-      setAgentTransientMessage(agentId, text);
-      markAgentSpeaking(agentId, true);
-    }
+  const update = deriveAgentTransientUpdate(payload);
+  if (!update) {
     return;
   }
-
-  if (payload.type === 'say_result') {
-    if (payload.spoken === false) {
-      const reason = typeof payload.reason === 'string' && payload.reason.trim() !== '' ? payload.reason.trim() : 'not spoken';
-      setAgentTransientMessage(agentId, `speech skipped: ${reason}`);
-      markAgentSpeaking(agentId, false);
-    }
-    return;
+  if (typeof update.message === 'string' && update.message.trim() !== '') {
+    setAgentTransientMessage(agentId, update.message);
   }
-
-  if (payload.type === 'event') {
-    const eventMessage = summarizeAgentEventMessage(payload);
-    if (eventMessage) {
-      setAgentTransientMessage(agentId, eventMessage);
-    }
-    return;
-  }
-
-  if (payload.type === 'tts_state') {
-    if (payload.phase === 'play_start') {
-      markAgentSpeaking(agentId, true);
-      return;
-    }
-    if (payload.phase === 'play_stop' || payload.phase === 'dropped' || payload.phase === 'error') {
-      markAgentSpeaking(agentId, false);
-      return;
-    }
-  }
-
-  if (payload.type === 'operator_set_pane_result' && payload.ok === true) {
-    setAgentTransientMessage(agentId, 'focused in operator');
+  if (typeof update.speaking === 'boolean') {
+    markAgentSpeaking(agentId, update.speaking);
   }
 }
 
