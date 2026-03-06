@@ -32,6 +32,7 @@ import {
   summarizeAgentTileMessage
 } from './agent_dashboard_state.js';
 import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
+import { summarizeAgentActionFailure, summarizeAgentActionSuccess } from './agent_dashboard_action_feedback.js';
 import {
   deriveAgentTransientUpdate,
   resolveAgentIdForPayload as resolveFeedAgentIdForPayload
@@ -822,8 +823,13 @@ async function runAgentDashboardAction(agent, action) {
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok || payload?.ok !== true) {
-    const detail = payload?.detail ? `: ${payload.detail}` : '';
-    throw new Error(`${action} failed (${response.status})${detail}`);
+    const detail =
+      typeof payload?.detail === 'string' && payload.detail.trim() !== '' ? payload.detail.trim() : null;
+    const error = new Error(`${action} failed (${response.status})${detail ? `: ${detail}` : ''}`);
+    error.code = typeof payload?.error === 'string' ? payload.error : 'agent_action_failed';
+    error.status = response.status;
+    error.detail = detail;
+    throw error;
   }
   return payload;
 }
@@ -838,11 +844,20 @@ function bindAgentActionButton(button, agent, action, options = {}) {
     }
     button.disabled = true;
     try {
-      await runAgentDashboardAction(agent, action);
-      setAgentDashboardStatus(`${agent.id}: ${action} ok`, 'ok');
+      const payload = await runAgentDashboardAction(agent, action);
+      const feedback = summarizeAgentActionSuccess(agent.id, action, payload);
+      setAgentDashboardStatus(feedback.statusText, feedback.statusTone);
+      if (typeof feedback.tileMessage === 'string' && feedback.tileMessage.trim() !== '') {
+        setAgentTransientMessage(agent.id, feedback.tileMessage);
+      }
       await refreshAgentDashboardState({ silentStatus: true });
     } catch (error) {
-      setAgentDashboardStatus(`${agent.id}: ${error.message}`, 'warn');
+      const feedback = summarizeAgentActionFailure(agent.id, action, error);
+      setAgentDashboardStatus(feedback.statusText, feedback.statusTone);
+      if (typeof feedback.tileMessage === 'string' && feedback.tileMessage.trim() !== '') {
+        setAgentTransientMessage(agent.id, feedback.tileMessage);
+      }
+      renderAgentDashboard();
     } finally {
       button.disabled = false;
     }
