@@ -14,7 +14,7 @@ export function createInitialOperatorUiState() {
     noResponse: false,
     activeRequestId: null,
     activePrompt: null,
-    showMirror: false
+    showMirror: true
   };
 }
 
@@ -68,7 +68,8 @@ export function reduceOperatorUiState(inputState, action) {
       }
       return {
         ...state,
-        panelOpen: false,
+        // Keep operator panel open after successful submit so desktop users retain direct input access.
+        panelOpen: true,
         awaiting: false,
         activeRequestId: null,
         activePrompt: null
@@ -87,7 +88,7 @@ export function reduceOperatorUiState(inputState, action) {
     case 'mirror_toggle':
       return {
         ...state,
-        showMirror: !state.showMirror
+        showMirror: true
       };
     default:
       return state;
@@ -102,6 +103,6 @@ export function deriveOperatorUiFlags(inputState) {
     showHandle: !state.panelOpen,
     showClose: state.awaiting,
     showRestart: !state.bridgeOnline || state.recoveryMode || state.noResponse,
-    showMirror: state.showMirror
+    showMirror: true
   };
 }

@@ -7,6 +7,8 @@ import { createTtsController } from './tts_controller.js';
 import { loadFaceAppConfig } from './config_loader.js';
 import { createOperatorAsrProxy } from './operator_asr_proxy.js';
 import { createOperatorRealtimeAsrProxy } from './operator_realtime_asr_proxy.js';
+import { createAgentRuntimeStateStore } from './agent_runtime_state.js';
+import { createAgentLifecycleApi, createAgentLifecycleRuntime } from './agent_lifecycle.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -74,7 +76,46 @@ const operatorRealtimeAsrModel =
   process.env.MH_OPERATOR_REALTIME_ASR_MODEL ?? 'mistralai/Voxtral-Mini-4B-Realtime-2602';
 const operatorRealtimeAsrDebug = (process.env.MH_OPERATOR_REALTIME_ASR_DEBUG ?? '0') === '1';
 const operatorRealtimeAsrSampleRateHz = Number.parseInt(process.env.MH_OPERATOR_REALTIME_ASR_SAMPLE_RATE_HZ ?? '16000', 10);
+const browserAudioMaxChannels = Number.parseInt(process.env.FACE_BROWSER_AUDIO_MAX_CHANNELS ?? '4', 10);
 const faceConfig = loadFaceAppConfig({ repoRoot, env: process.env, log: console });
+const agentStatePath = process.env.MH_AGENT_STATE_PATH ?? '';
+const agentRuntimeState = createAgentRuntimeStateStore({
+  repoRoot,
+  statePath: agentStatePath,
+  hardCap: Number.parseInt(process.env.MH_AGENT_HARD_CAP ?? '8', 10),
+  log: console
+});
+agentRuntimeState.load();
+let liveServer = null;
+const agentLifecycleRuntime = createAgentLifecycleRuntime({
+  stateStore: agentRuntimeState,
+  repoRoot,
+  worktreesRoot: process.env.MH_AGENT_WORKTREES_ROOT ?? '',
+  tmuxSession: process.env.MH_AGENT_TMUX_SESSION ?? 'agent',
+  defaultAgentCommand: process.env.MH_AGENT_DEFAULT_CMD ?? 'codex',
+  tmuxEnabled: (process.env.MH_AGENT_TMUX_ENABLED ?? '1') === '1',
+  worktreeEnabled: (process.env.MH_AGENT_WORKTREE_ENABLED ?? '1') === '1',
+  allowExternalDelete: (process.env.MH_AGENT_ALLOW_EXTERNAL_DELETE ?? '0') === '1',
+  async onFocus({ agentId, paneId, sessionId }) {
+    if (!liveServer || typeof liveServer.broadcast !== 'function') {
+      const error = new Error('face server is unavailable for focus handoff');
+      error.code = 'invalid_state';
+      throw error;
+    }
+    liveServer.broadcast({
+      v: 1,
+      type: 'operator_bridge_set_pane',
+      session_id: sessionId,
+      pane: paneId,
+      agent_id: agentId,
+      ts: Date.now()
+    });
+  },
+  log: console
+});
+const agentLifecycleApi = createAgentLifecycleApi({
+  runtime: agentLifecycleRuntime
+});
 const operatorAsrProxy = createOperatorAsrProxy({
   baseUrl: operatorAsrBaseUrl,
   endpointUrl: operatorAsrEndpointUrl,
@@ -170,8 +211,11 @@ const server = await startFaceWebSocketServer({
         server.broadcast(toSayResultPayload(sayPayload, { accepted: false, spoken: false }, 'controller_error'));
       });
   },
-  onHttpRequest(request, response) {
+  async onHttpRequest(request, response) {
     const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (await agentLifecycleApi.handleHttpRequest(request, response)) {
+      return true;
+    }
     if (parsedUrl.pathname === '/api/operator/recover-default') {
       if (request.method !== 'POST') {
         writeJson(response, 405, {
@@ -206,6 +250,11 @@ const server = await startFaceWebSocketServer({
         realtimeAsr: {
           enabled: operatorRealtimeAsrProxy?.enabled === true,
           sampleRateHz: Number.isNaN(operatorRealtimeAsrSampleRateHz) ? 16_000 : operatorRealtimeAsrSampleRateHz
+        },
+        browserAudio: {
+          maxChannels: Number.isNaN(browserAudioMaxChannels)
+            ? 4
+            : Math.max(1, Math.min(8, browserAudioMaxChannels))
         }
       });
       return true;
@@ -214,6 +263,22 @@ const server = await startFaceWebSocketServer({
   },
   log: console
 });
+liveServer = server;
+
+try {
+  const reconcileResult = await agentLifecycleRuntime.reconcileAgents({
+    recreate_missing_panes: true
+  });
+  const recreated = reconcileResult.results.filter((item) => item.disposition === 'recreated').length;
+  const missing = reconcileResult.results.filter((item) => item.disposition === 'missing').length;
+  if (recreated > 0 || missing > 0) {
+    console.info(
+      `[face-app] agent reconcile: recreated=${recreated} missing=${missing} total=${reconcileResult.results.length}`
+    );
+  }
+} catch (error) {
+  console.warn(`[face-app] agent reconcile failed: ${error.message}`);
+}
 
 operatorRealtimeAsrProxy = createOperatorRealtimeAsrProxy({
   enabled: operatorRealtimeAsrEnabled,

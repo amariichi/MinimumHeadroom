@@ -18,6 +18,26 @@ import { normalizeOperatorAsrTerms } from './operator_asr_term_normalizer.js';
 import { createTapBurstTrigger } from './operator_hidden_recovery.js';
 import { resolveOperatorKeyboardCommandAction, resolveOperatorKeyboardPttLanguage } from './operator_keyboard_ptt.js';
 import { buildOperatorTextInsertion, normalizeOperatorTextSelection } from './operator_text_insert.js';
+import {
+  BROWSER_AUDIO_MAX_CHANNELS_DEFAULT,
+  clampBrowserAudioMaxChannels,
+  selectBrowserAudioChannelIndex,
+  shouldStopBrowserAudioChannel
+} from './browser_audio_policy.js';
+import {
+  deriveAgentTileTone,
+  deriveDashboardMode,
+  normalizeDashboardAgent,
+  sortDashboardAgents,
+  summarizeAgentTileMessage
+} from './agent_dashboard_state.js';
+import { resolveAgentsFromActionResult } from './agent_dashboard_apply_result.js';
+import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
+import { summarizeAgentActionFailure, summarizeAgentActionSuccess } from './agent_dashboard_action_feedback.js';
+import {
+  deriveAgentTransientUpdate,
+  resolveAgentIdForPayload as resolveFeedAgentIdForPayload
+} from './agent_dashboard_feed.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -46,8 +66,14 @@ const operatorEscInlineButtonEl = document.getElementById('operator-esc-inline')
 const operatorCloseButtonEl = document.getElementById('operator-close');
 const operatorRestartButtonEl = document.getElementById('operator-restart');
 const operatorTitleEl = document.getElementById('operator-title');
+const operatorCurrentAgentButtonEl = document.getElementById('operator-agent-current');
+const operatorCurrentAgentLabelEl = document.getElementById('operator-agent-current-label');
+const operatorCurrentAgentMetaEl = document.getElementById('operator-agent-current-meta');
 const operatorStatusEl = document.getElementById('operator-status');
 const operatorPromptEl = document.getElementById('operator-prompt');
+const operatorAgentListEl = document.getElementById('operator-agent-list');
+const operatorAgentListItemsEl = document.getElementById('operator-agent-list-items');
+const operatorAgentListAddButtonEl = document.getElementById('operator-agent-list-add');
 const operatorAckEl = document.getElementById('operator-ack');
 const operatorChoiceButtonsEl = document.getElementById('operator-choice-buttons');
 const operatorApprovalMetaEl = document.getElementById('operator-approval-meta');
@@ -65,6 +91,17 @@ const operatorMirrorToggleEl = document.getElementById('operator-mirror-toggle')
 const operatorHelpToggleEl = document.getElementById('operator-help-toggle');
 const operatorKeyboardHelpEl = document.getElementById('operator-keyboard-help');
 const operatorMirrorEl = document.getElementById('operator-mirror');
+const agentDashboardEl = document.getElementById('agent-dashboard');
+const agentDashboardStatusEl = document.getElementById('agent-dashboard-status');
+const agentDashboardGridEl = document.getElementById('agent-dashboard-grid');
+const agentDashboardCloseButtonEl = document.getElementById('agent-dashboard-close');
+const agentDashboardAddToggleButtonEl = document.getElementById('agent-dashboard-add-toggle');
+const agentDashboardAddFormEl = document.getElementById('agent-dashboard-add-form');
+const agentDashboardAddIdEl = document.getElementById('agent-dashboard-id');
+const agentDashboardAddSessionIdEl = document.getElementById('agent-dashboard-session-id');
+const agentDashboardAddRepoPathEl = document.getElementById('agent-dashboard-repo-path');
+const agentDashboardAddBranchEl = document.getElementById('agent-dashboard-branch');
+const agentDashboardAddSubmitEl = document.getElementById('agent-dashboard-add-submit');
 
 const LOOKING_GLASS_ENABLED_KEY = 'mh_lg_webxr_enabled';
 const HEAD_LIMITS = {
@@ -99,9 +136,11 @@ const OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE = 16_000;
 const OPERATOR_REALTIME_ASR_PROCESSOR_BUFFER_SIZE = 4096;
 const OPERATOR_REALTIME_BATCH_FALLBACK_MIN_SECONDS = 0.25;
 const OPERATOR_KEYBOARD_MODIFIER_PTT_DELAY_MS = 140;
+const OPERATOR_KEYBOARD_SPACE_PTT_DELAY_MS = 1_000;
 const OPERATOR_ESC_RECOVERY_REQUIRED_TAPS = 4;
 const OPERATOR_ESC_RECOVERY_WINDOW_MS = 1_600;
 const OPERATOR_RECOVER_PENDING_TIMEOUT_MS = 3_000;
+const OPERATOR_FOCUS_PENDING_TIMEOUT_MS = 3_000;
 const OPERATOR_UI_MODE_AUTO = 'auto';
 const OPERATOR_UI_MODE_PC = 'pc';
 const OPERATOR_UI_MODE_MOBILE = 'mobile';
@@ -109,6 +148,12 @@ const OPERATOR_UI_MODES = new Set([OPERATOR_UI_MODE_AUTO, OPERATOR_UI_MODE_PC, O
 const OPERATOR_MIRROR_DEFAULT_FG_CSS_VAR = 'var(--operator-mirror-fg)';
 const OPERATOR_MIRROR_DEFAULT_BG_CSS_VAR = 'var(--operator-mirror-bg-solid)';
 const OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX = 24;
+const AGENT_DASHBOARD_POLL_INTERVAL_MS = 2_400;
+const AGENT_TILE_MESSAGE_TTL_MS = 11_000;
+const AGENT_TILE_SPEAKING_TTL_MS = 6_000;
+const OPERATOR_DASHBOARD_AGENT_ID = '__operator__';
+const OPERATOR_DASHBOARD_AGENT_LABEL = 'operator';
+const OPERATOR_BRIDGE_SESSION_ID_DEFAULT = 'default';
 const MIC_AUDIO_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -402,12 +447,12 @@ let xrButtonEl = null;
 let panelsVisible = true;
 const latestSayMetaBySession = new Map();
 const latestAudioMetaBySession = new Map();
-let playbackAudioEl = null;
+let unlockAudioEl = null;
 let unlockInFlight = null;
 let audioUnlocked = false;
 let pendingReplayPayload = null;
-let activeAudioGeneration = null;
-let activeAudioSourceRelease = null;
+let browserAudioMixer = null;
+let browserAudioMaxChannels = BROWSER_AUDIO_MAX_CHANNELS_DEFAULT;
 let silentAudioDataUrl = null;
 const registerDoubleTap = createDoubleTapTracker({
   maxIntervalMs: DOUBLE_TAP_MAX_INTERVAL_MS,
@@ -470,8 +515,25 @@ const operatorMicState = {
 let operatorConfiguredUiMode = OPERATOR_UI_MODE_AUTO;
 let operatorEffectiveUiMode = OPERATOR_UI_MODE_PC;
 let operatorPanelEnabled = true;
+let operatorBridgeSessionId = OPERATOR_BRIDGE_SESSION_ID_DEFAULT;
+let operatorMirrorPaneId = null;
 let operatorRecoverPending = false;
 let operatorRecoverPendingTimer = null;
+let operatorFocusPending = null;
+let operatorFocusPendingTimer = null;
+let agentDashboardPollTimer = null;
+let agentDashboardLoadInFlight = null;
+let agentDashboardAddFormOpen = false;
+let agentDashboardAddPending = false;
+let agentDashboardSurfaceOpen = false;
+let operatorAgentPickerOpen = false;
+let agentDashboardState = {
+  mode: 'single',
+  selectedAgentId: OPERATOR_DASHBOARD_AGENT_ID,
+  agents: [],
+  loaded: false
+};
+const agentTransientStateById = new Map();
 const operatorEscRecoveryTracker = createTapBurstTrigger({
   requiredCount: OPERATOR_ESC_RECOVERY_REQUIRED_TAPS,
   windowMs: OPERATOR_ESC_RECOVERY_WINDOW_MS
@@ -604,10 +666,14 @@ function appendEvent(payload) {
 }
 
 function resolveOperatorSessionId() {
-  if (typeof faceState.session_id === 'string' && faceState.session_id.trim() !== '' && faceState.session_id !== '-') {
-    return faceState.session_id;
+  if (
+    typeof operatorBridgeSessionId === 'string' &&
+    operatorBridgeSessionId.trim() !== '' &&
+    operatorBridgeSessionId !== '-'
+  ) {
+    return operatorBridgeSessionId;
   }
-  return 'default';
+  return OPERATOR_BRIDGE_SESSION_ID_DEFAULT;
 }
 
 function normalizeOperatorUiMode(value) {
@@ -633,6 +699,768 @@ function shouldShowOperatorKeyboardHelpToggle() {
   return finePointer || !touchPrimary;
 }
 
+function truncateAgentText(value, maxLength = 84) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function setAgentDashboardStatus(text, tone = 'default') {
+  if (!agentDashboardStatusEl) {
+    return;
+  }
+  agentDashboardStatusEl.textContent = text;
+  agentDashboardStatusEl.style.color = toneColor(tone);
+}
+
+function updateOperatorCurrentAgentBar() {
+  if (!operatorCurrentAgentButtonEl || !operatorCurrentAgentLabelEl || !operatorCurrentAgentMetaEl) {
+    return;
+  }
+  const current = getCurrentDashboardAgent();
+  const label = current?.label ?? current?.id ?? OPERATOR_DASHBOARD_AGENT_LABEL;
+  const status = current?.status ?? 'active';
+  const message = current?.last_message ?? '';
+  const countText = formatDashboardVisibleCount();
+  const paneText = operatorMirrorPaneId ? ` · ${operatorMirrorPaneId}` : '';
+  operatorCurrentAgentLabelEl.textContent = label;
+  operatorCurrentAgentMetaEl.textContent = `${status} · ${countText}${paneText}${message ? ` · ${truncateAgentText(message, 40)}` : ''}`;
+  operatorCurrentAgentButtonEl.setAttribute(
+    'aria-expanded',
+    operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE ? String(operatorAgentPickerOpen) : String(agentDashboardSurfaceOpen)
+  );
+}
+
+function clearPendingOperatorFocus() {
+  operatorFocusPending = null;
+  if (operatorFocusPendingTimer !== null) {
+    window.clearTimeout(operatorFocusPendingTimer);
+    operatorFocusPendingTimer = null;
+  }
+}
+
+function armPendingOperatorFocus(agentId, options = {}) {
+  clearPendingOperatorFocus();
+  operatorFocusPending = {
+    agentId,
+    closePicker: options.closePicker === true
+  };
+  operatorFocusPendingTimer = window.setTimeout(() => {
+    const pending = operatorFocusPending;
+    clearPendingOperatorFocus();
+    if (!pending) {
+      return;
+    }
+    setAgentDashboardStatus(`focus timeout: ${pending.agentId}`, 'warn');
+    renderAgentDashboard();
+    updateOperatorUi();
+  }, OPERATOR_FOCUS_PENDING_TIMEOUT_MS);
+}
+
+function applyCompletedOperatorFocus(agentId, closePicker = true) {
+  agentDashboardState.selectedAgentId = agentId;
+  if (closePicker) {
+    closeDesktopAgentDashboardSurface();
+    operatorAgentPickerOpen = false;
+  }
+  renderAgentDashboard();
+  updateOperatorUi();
+}
+
+function shouldCloseOperatorPickerAfterFocus() {
+  return operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE;
+}
+
+function handleCompletedOperatorFocusResult(options = {}) {
+  const paneId = typeof options.pane === 'string' && options.pane.trim() !== '' ? options.pane.trim() : null;
+  const focusedAgentId =
+    typeof options.agentId === 'string' && options.agentId.trim() !== '' ? options.agentId.trim() : null;
+  const ackText = typeof options.ackText === 'string' && options.ackText.trim() !== '' ? options.ackText.trim() : 'ack: pane switched';
+  const statusPrefix =
+    typeof options.statusPrefix === 'string' && options.statusPrefix.trim() !== '' ? options.statusPrefix.trim() : 'pane switched';
+
+  operatorMirrorPaneId = paneId ?? operatorMirrorPaneId;
+  if (operatorFocusPending) {
+    const pending = operatorFocusPending;
+    applyCompletedOperatorFocus(pending.agentId, pending.closePicker);
+    clearPendingOperatorFocus();
+  } else if (focusedAgentId) {
+    agentDashboardState.selectedAgentId = focusedAgentId;
+  }
+  if (focusedAgentId) {
+    setAgentTransientMessage(focusedAgentId, 'focused in operator');
+  }
+  if (focusedAgentId === OPERATOR_DASHBOARD_AGENT_ID) {
+    setAgentDashboardStatus('operator selected', 'ok');
+  } else if (focusedAgentId) {
+    setAgentDashboardStatus(`${focusedAgentId}: focus ok`, 'ok');
+  }
+  setOperatorStatusLine(`${statusPrefix}${paneId ? `: ${paneId}` : ''}`, 'ok');
+  setOperatorAckLine(ackText, 'ok');
+  void refreshAgentDashboardState({ silentStatus: true });
+}
+
+function handleFailedOperatorFocusResult(reason, options = {}) {
+  const normalizedReason = typeof reason === 'string' && reason.trim() !== '' ? reason.trim() : 'focus_failed';
+  const ackPrefix =
+    typeof options.ackPrefix === 'string' && options.ackPrefix.trim() !== '' ? options.ackPrefix.trim() : 'ack: focus failed';
+  const statusPrefix =
+    typeof options.statusPrefix === 'string' && options.statusPrefix.trim() !== '' ? options.statusPrefix.trim() : 'focus failed';
+  const pendingAgentId = typeof options.pendingAgentId === 'string' && options.pendingAgentId.trim() !== ''
+    ? options.pendingAgentId.trim()
+    : null;
+
+  if (!pendingAgentId || operatorFocusPending?.agentId === pendingAgentId) {
+    clearPendingOperatorFocus();
+  }
+  setAgentDashboardStatus(`${statusPrefix}: ${normalizedReason}`, 'warn');
+  setOperatorAckLine(`${ackPrefix} (${normalizedReason})`, 'warn');
+  setOperatorStatusLine(`${statusPrefix}: ${normalizedReason}`, 'warn');
+}
+
+function normalizeDashboardAgentList(rawAgents) {
+  if (!Array.isArray(rawAgents)) {
+    return [];
+  }
+  const mapped = rawAgents.map((agent, index) => normalizeDashboardAgent(agent, index));
+  return sortDashboardAgents(mapped);
+}
+
+function getTrackedDashboardAgents() {
+  return agentDashboardState.agents;
+}
+
+function getOperatorDashboardAdditionalCount() {
+  return operatorPanelEnabled ? 1 : 0;
+}
+
+function getDashboardVisibleCount() {
+  return getTrackedDashboardAgents().length + getOperatorDashboardAdditionalCount();
+}
+
+function isOperatorDashboardAgentId(agentId) {
+  return agentId === OPERATOR_DASHBOARD_AGENT_ID;
+}
+
+function getCurrentDashboardAgent() {
+  if (isOperatorDashboardAgentId(agentDashboardState.selectedAgentId)) {
+    return {
+      id: OPERATOR_DASHBOARD_AGENT_ID,
+      label: OPERATOR_DASHBOARD_AGENT_LABEL,
+      status: operatorRecoverPending ? 'recovering' : 'active',
+      session_id: resolveOperatorSessionId(),
+      last_message: operatorRecoverPending ? 'recovering operator...' : 'primary operator'
+    };
+  }
+  return agentDashboardState.agents.find((agent) => agent.id === agentDashboardState.selectedAgentId) ?? null;
+}
+
+function syncSelectedDashboardAgentToMirrorPane() {
+  if (!operatorMirrorPaneId) {
+    return;
+  }
+  const focusedAgent = agentDashboardState.agents.find((agent) => agent.pane_id === operatorMirrorPaneId) ?? null;
+  agentDashboardState.selectedAgentId = focusedAgent ? focusedAgent.id : OPERATOR_DASHBOARD_AGENT_ID;
+}
+
+function formatDashboardVisibleCount() {
+  const count = getDashboardVisibleCount();
+  return `${count} agent${count === 1 ? '' : 's'}`;
+}
+
+function closeDesktopAgentDashboardSurface() {
+  agentDashboardSurfaceOpen = false;
+}
+
+function toggleDesktopAgentDashboardSurface(forceOpen = null) {
+  if (operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE) {
+    return;
+  }
+  agentDashboardSurfaceOpen = typeof forceOpen === 'boolean' ? forceOpen : !agentDashboardSurfaceOpen;
+  if (agentDashboardSurfaceOpen) {
+    operatorAgentPickerOpen = false;
+    void refreshAgentDashboardState({ silentStatus: true });
+  }
+  renderAgentDashboard();
+}
+
+function toggleOperatorAgentPicker(forceOpen = null) {
+  if (operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE) {
+    operatorAgentPickerOpen = typeof forceOpen === 'boolean' ? forceOpen : !operatorAgentPickerOpen;
+    if (operatorAgentPickerOpen) {
+      void refreshAgentDashboardState({ silentStatus: true });
+    }
+    renderAgentDashboard();
+    updateOperatorUi();
+    return;
+  }
+  toggleDesktopAgentDashboardSurface(forceOpen);
+}
+
+function ensureSelectedDashboardAgent() {
+  syncSelectedDashboardAgentToMirrorPane();
+  if (agentDashboardState.selectedAgentId) {
+    if (agentDashboardState.selectedAgentId === OPERATOR_DASHBOARD_AGENT_ID && operatorPanelEnabled) {
+      return;
+    }
+    const existing = agentDashboardState.agents.find((agent) => agent.id === agentDashboardState.selectedAgentId);
+    if (existing) {
+      return;
+    }
+  }
+  if (operatorPanelEnabled) {
+    agentDashboardState.selectedAgentId = OPERATOR_DASHBOARD_AGENT_ID;
+    return;
+  }
+  const fallback = getTrackedDashboardAgents()[0] ?? agentDashboardState.agents[0] ?? null;
+  agentDashboardState.selectedAgentId = fallback?.id ?? null;
+}
+
+function getAgentTransientState(agentId) {
+  const existing = agentTransientStateById.get(agentId);
+  if (existing) {
+    return existing;
+  }
+  const next = {
+    message: null,
+    messageExpiresAt: 0,
+    speakingUntil: 0
+  };
+  agentTransientStateById.set(agentId, next);
+  return next;
+}
+
+function pruneAgentTransientState(nowMs = Date.now()) {
+  for (const [agentId, state] of agentTransientStateById.entries()) {
+    const messageExpired = !state.message || state.messageExpiresAt <= nowMs;
+    const speakingExpired = state.speakingUntil <= nowMs;
+    if (messageExpired && speakingExpired) {
+      agentTransientStateById.delete(agentId);
+    }
+  }
+}
+
+function setAgentTransientMessage(agentId, message, ttlMs = AGENT_TILE_MESSAGE_TTL_MS) {
+  const text = truncateAgentText(message);
+  if (text === '') {
+    return;
+  }
+  const transient = getAgentTransientState(agentId);
+  transient.message = text;
+  transient.messageExpiresAt = Date.now() + Math.max(600, ttlMs);
+}
+
+function markAgentSpeaking(agentId, active) {
+  const transient = getAgentTransientState(agentId);
+  transient.speakingUntil = active ? Date.now() + AGENT_TILE_SPEAKING_TTL_MS : 0;
+}
+
+function trackAgentTileFromPayload(payload) {
+  const agentId = resolveFeedAgentIdForPayload(payload, agentDashboardState.agents);
+  if (!agentId) {
+    return;
+  }
+  const update = deriveAgentTransientUpdate(payload);
+  if (!update) {
+    return;
+  }
+  if (typeof update.message === 'string' && update.message.trim() !== '') {
+    setAgentTransientMessage(agentId, update.message);
+  }
+  if (typeof update.speaking === 'boolean') {
+    markAgentSpeaking(agentId, update.speaking);
+  }
+}
+
+async function readAgentDashboardState() {
+  const response = await fetch('/api/agents/state', {
+    method: 'GET',
+    cache: 'no-store'
+  });
+  if (!response.ok) {
+    throw new Error(`agent state request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  if (!payload || payload.ok !== true || !Array.isArray(payload?.state?.agents)) {
+    throw new Error('agent state response is invalid');
+  }
+  return normalizeDashboardAgentList(payload.state.agents);
+}
+
+function updateAgentDashboardMode() {
+  agentDashboardState.mode = deriveDashboardMode(agentDashboardState.agents, {
+    isMobileUi: operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE,
+    additionalActiveCount: getOperatorDashboardAdditionalCount()
+  });
+  updateOperatorCurrentAgentBar();
+}
+
+function createDashboardActionButton(agent, label, action, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'operator-btn';
+  button.textContent = label;
+  button.dataset.agentId = agent.id;
+  button.dataset.agentAction = action;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+async function runAgentDashboardAction(agent, action) {
+  const path = action === 'add' ? '/api/agents/add' : `/api/agents/${encodeURIComponent(agent.id)}/${action}`;
+  const body = action === 'focus' ? { session_id: resolveOperatorSessionId() } : {};
+  const response = await fetch(path, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      'content-type': 'application/json; charset=utf-8'
+    },
+    body: JSON.stringify(body)
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || payload?.ok !== true) {
+    const detail =
+      typeof payload?.detail === 'string' && payload.detail.trim() !== '' ? payload.detail.trim() : null;
+    const error = new Error(`${action} failed (${response.status})${detail ? `: ${detail}` : ''}`);
+    error.code = typeof payload?.error === 'string' ? payload.error : 'agent_action_failed';
+    error.status = response.status;
+    error.detail = detail;
+    throw error;
+  }
+  return payload;
+}
+
+async function createManagedAgent(options = {}) {
+  const payload = {
+    create_worktree: true,
+    create_tmux: true,
+    ...options
+  };
+  const response = await fetch('/api/agents/add', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      'content-type': 'application/json; charset=utf-8'
+    },
+    body: JSON.stringify(payload)
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok || json?.ok !== true) {
+    const detail = json?.detail ? `: ${json.detail}` : '';
+    throw new Error(`add failed (${response.status})${detail}`);
+  }
+  return json;
+}
+
+async function focusDashboardAgent(agentId, options = {}) {
+  const closePicker = typeof options.closePicker === 'boolean'
+    ? options.closePicker
+    : shouldCloseOperatorPickerAfterFocus();
+  if (isOperatorDashboardAgentId(agentId)) {
+    armPendingOperatorFocus(OPERATOR_DASHBOARD_AGENT_ID, { closePicker });
+    setAgentDashboardStatus('operator: switching...', 'default');
+    renderAgentDashboard();
+    updateOperatorUi();
+    try {
+      const ok = await requestOperatorRecoverDefault();
+      if (!ok) {
+        throw new Error('focus failed (recover request failed)');
+      }
+      return true;
+    } catch (error) {
+      if (operatorFocusPending?.agentId === OPERATOR_DASHBOARD_AGENT_ID) {
+        clearPendingOperatorFocus();
+      }
+      throw error;
+    }
+  }
+
+  const agent = agentDashboardState.agents.find((item) => item.id === agentId);
+  if (!agent) {
+    throw new Error(`focus failed (unknown agent: ${agentId})`);
+  }
+  armPendingOperatorFocus(agent.id, { closePicker });
+  setAgentDashboardStatus(`${agent.id}: switching...`, 'default');
+  renderAgentDashboard();
+  updateOperatorUi();
+  try {
+    const payload = await runAgentDashboardAction(agent, 'focus');
+    const nextAgents = resolveAgentsFromActionResult(agentDashboardState.agents, payload?.result);
+    agentDashboardState.agents = nextAgents;
+    renderAgentDashboard();
+    updateOperatorUi();
+    await refreshAgentDashboardState({ silentStatus: true });
+    return true;
+  } catch (error) {
+    if (operatorFocusPending?.agentId === agent.id) {
+      clearPendingOperatorFocus();
+    }
+    throw error;
+  }
+}
+
+function bindAgentActionButton(button, agent, action, options = {}) {
+  if (!button) {
+    return;
+  }
+  button.addEventListener('click', async (event) => {
+    if (options.stopPropagation === true) {
+      event.stopPropagation();
+    }
+    button.disabled = true;
+    try {
+      const payload = await runAgentDashboardAction(agent, action);
+      const feedback = summarizeAgentActionSuccess(agent.id, action, payload);
+      setAgentDashboardStatus(feedback.statusText, feedback.statusTone);
+      if (typeof feedback.tileMessage === 'string' && feedback.tileMessage.trim() !== '') {
+        setAgentTransientMessage(agent.id, feedback.tileMessage);
+      }
+      const nextAgents = resolveAgentsFromActionResult(agentDashboardState.agents, payload?.result);
+      if (nextAgents.length !== agentDashboardState.agents.length || nextAgents !== agentDashboardState.agents) {
+        agentDashboardState.agents = nextAgents;
+        renderAgentDashboard();
+      }
+      await refreshAgentDashboardState({ silentStatus: true });
+    } catch (error) {
+      const feedback = summarizeAgentActionFailure(agent.id, action, error);
+      setAgentDashboardStatus(feedback.statusText, feedback.statusTone);
+      if (typeof feedback.tileMessage === 'string' && feedback.tileMessage.trim() !== '') {
+        setAgentTransientMessage(agent.id, feedback.tileMessage);
+      }
+      renderAgentDashboard();
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+function renderAgentDashboard() {
+  if (!agentDashboardEl || !agentDashboardGridEl || !agentDashboardAddFormEl) {
+    return;
+  }
+
+  updateAgentDashboardMode();
+  const isMobileUi = operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE;
+  const showDashboard = !isMobileUi && operatorPanelEnabled && agentDashboardSurfaceOpen;
+  document.body.classList.toggle('agent-dashboard-open', showDashboard);
+  agentDashboardEl.classList.toggle('hidden', !showDashboard);
+  if (!showDashboard) {
+    renderOperatorMobileAgentList();
+    return;
+  }
+
+  pruneAgentTransientState(Date.now());
+  ensureSelectedDashboardAgent();
+  agentDashboardAddFormEl.classList.add('hidden');
+  agentDashboardAddFormOpen = false;
+
+  agentDashboardGridEl.innerHTML = '';
+  const operatorTile = document.createElement('article');
+  operatorTile.className = 'agent-tile';
+  operatorTile.dataset.tone = operatorRecoverPending ? 'speaking' : 'working';
+  if (agentDashboardState.selectedAgentId === OPERATOR_DASHBOARD_AGENT_ID) {
+    operatorTile.classList.add('is-selected');
+  }
+
+  const operatorFocusButton = document.createElement('button');
+  operatorFocusButton.type = 'button';
+  operatorFocusButton.className = 'agent-tile-focus';
+  operatorFocusButton.setAttribute('aria-label', 'Focus operator');
+  operatorFocusButton.addEventListener('click', () => {
+    void focusDashboardAgent(OPERATOR_DASHBOARD_AGENT_ID).catch((error) => {
+      setAgentDashboardStatus(error.message, 'warn');
+      renderAgentDashboard();
+    });
+  });
+
+  const operatorHeader = document.createElement('header');
+  operatorHeader.className = 'agent-tile-header';
+  const operatorIdEl = document.createElement('span');
+  operatorIdEl.className = 'agent-tile-id';
+  operatorIdEl.textContent = OPERATOR_DASHBOARD_AGENT_LABEL;
+  const operatorStatusEl = document.createElement('span');
+  operatorStatusEl.className = 'agent-tile-status';
+  operatorStatusEl.textContent = 'active';
+  operatorHeader.append(operatorIdEl, operatorStatusEl);
+
+  const operatorSessionEl = document.createElement('div');
+  operatorSessionEl.className = 'agent-tile-session';
+  operatorSessionEl.textContent = `session: ${resolveOperatorSessionId()}`;
+
+  const operatorMessageEl = document.createElement('p');
+  operatorMessageEl.className = 'agent-tile-message';
+  operatorMessageEl.textContent = operatorRecoverPending ? 'recovering operator...' : 'primary operator';
+
+  operatorFocusButton.append(operatorHeader, operatorSessionEl, operatorMessageEl);
+  operatorTile.append(operatorFocusButton);
+  agentDashboardGridEl.appendChild(operatorTile);
+
+  for (const agent of agentDashboardState.agents) {
+    const transient = agentTransientStateById.get(agent.id) ?? null;
+    const nowMs = Date.now();
+    const speaking = Boolean(transient && transient.speakingUntil > nowMs);
+    const transientMessage = transient && transient.messageExpiresAt > nowMs ? transient.message : null;
+    const tile = document.createElement('article');
+    tile.className = 'agent-tile';
+    if (agent.id === agentDashboardState.selectedAgentId) {
+      tile.classList.add('is-selected');
+    }
+    tile.dataset.tone = deriveAgentTileTone(agent, { speaking });
+
+    const focusButton = document.createElement('button');
+    focusButton.type = 'button';
+    focusButton.className = 'agent-tile-focus';
+    focusButton.setAttribute('aria-label', `Focus ${agent.id}`);
+    focusButton.addEventListener('click', () => {
+      void focusDashboardAgent(agent.id).catch((error) => {
+        setAgentDashboardStatus(error.message, 'warn');
+        renderAgentDashboard();
+      });
+    });
+
+    const header = document.createElement('header');
+    header.className = 'agent-tile-header';
+    const idEl = document.createElement('span');
+    idEl.className = 'agent-tile-id';
+    idEl.textContent = agent.id;
+    const statusEl = document.createElement('span');
+    statusEl.className = 'agent-tile-status';
+    statusEl.textContent = agent.status;
+    header.append(idEl, statusEl);
+
+    const sessionEl = document.createElement('div');
+    sessionEl.className = 'agent-tile-session';
+    sessionEl.textContent = `session: ${agent.session_id ?? '-'}`;
+
+    const messageEl = document.createElement('p');
+    messageEl.className = 'agent-tile-message';
+    messageEl.textContent = summarizeAgentTileMessage(agent, transientMessage);
+
+    const actions = document.createElement('div');
+    actions.className = 'agent-tile-actions';
+    for (const item of listAgentLifecycleActions(agent)) {
+      const button = createDashboardActionButton(agent, item.label, item.action, () => {});
+      bindAgentActionButton(button, agent, item.action, { stopPropagation: true });
+      actions.appendChild(button);
+    }
+
+    focusButton.append(header, sessionEl, messageEl);
+    tile.append(focusButton, actions);
+    agentDashboardGridEl.appendChild(tile);
+  }
+  renderOperatorMobileAgentList();
+}
+
+function renderOperatorMobileAgentList() {
+  if (!operatorAgentListEl || !operatorAgentListItemsEl) {
+    return;
+  }
+  if (operatorAgentListAddButtonEl) {
+    operatorAgentListAddButtonEl.disabled = agentDashboardAddPending;
+  }
+  const shouldShow = shouldShowMobileAgentList(agentDashboardState.agents, {
+    isMobileUi: operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE,
+    operatorPanelEnabled,
+    pickerOpen: operatorAgentPickerOpen
+  });
+  operatorAgentListEl.classList.toggle('hidden', !shouldShow);
+  if (!shouldShow) {
+    return;
+  }
+
+  pruneAgentTransientState(Date.now());
+  operatorAgentListItemsEl.innerHTML = '';
+  const operatorItem = document.createElement('article');
+  operatorItem.className = 'operator-agent-item';
+  if (agentDashboardState.selectedAgentId === OPERATOR_DASHBOARD_AGENT_ID) {
+    operatorItem.classList.add('is-selected');
+    operatorItem.style.borderColor = 'rgba(111, 243, 184, 0.65)';
+  }
+  const operatorItemFocus = document.createElement('button');
+  operatorItemFocus.type = 'button';
+  operatorItemFocus.className = 'operator-agent-item-focus';
+  operatorItemFocus.setAttribute('aria-label', 'Focus operator');
+  operatorItemFocus.addEventListener('click', () => {
+    void focusDashboardAgent(OPERATOR_DASHBOARD_AGENT_ID).catch((error) => {
+      setAgentDashboardStatus(error.message, 'warn');
+      renderOperatorMobileAgentList();
+    });
+  });
+
+  const operatorHeader = document.createElement('header');
+  operatorHeader.className = 'operator-agent-item-header';
+  const operatorIdEl = document.createElement('span');
+  operatorIdEl.className = 'operator-agent-item-id';
+  operatorIdEl.textContent = OPERATOR_DASHBOARD_AGENT_LABEL;
+  const operatorStatusEl = document.createElement('span');
+  operatorStatusEl.className = 'operator-agent-item-status';
+  operatorStatusEl.textContent = 'active';
+  operatorHeader.append(operatorIdEl, operatorStatusEl);
+
+  const operatorMessageEl = document.createElement('p');
+  operatorMessageEl.className = 'operator-agent-item-message';
+  operatorMessageEl.textContent = operatorRecoverPending ? 'recovering operator...' : 'primary operator';
+
+  operatorItemFocus.append(operatorHeader, operatorMessageEl);
+  operatorItem.append(operatorItemFocus);
+  operatorAgentListItemsEl.appendChild(operatorItem);
+
+  for (const agent of agentDashboardState.agents) {
+    const transient = agentTransientStateById.get(agent.id) ?? null;
+    const nowMs = Date.now();
+    const message = summarizeAgentTileMessage(
+      agent,
+      transient && transient.messageExpiresAt > nowMs ? transient.message : null
+    );
+    const item = document.createElement('article');
+    item.className = 'operator-agent-item';
+    if (agent.id === agentDashboardState.selectedAgentId) {
+      item.classList.add('is-selected');
+      item.style.borderColor = 'rgba(111, 243, 184, 0.65)';
+    }
+    const itemFocus = document.createElement('button');
+    itemFocus.type = 'button';
+    itemFocus.className = 'operator-agent-item-focus';
+    itemFocus.setAttribute('aria-label', `Focus ${agent.id}`);
+    itemFocus.addEventListener('click', () => {
+      void focusDashboardAgent(agent.id).catch((error) => {
+        setAgentDashboardStatus(error.message, 'warn');
+        renderOperatorMobileAgentList();
+      });
+    });
+
+    const header = document.createElement('header');
+    header.className = 'operator-agent-item-header';
+    const idEl = document.createElement('span');
+    idEl.className = 'operator-agent-item-id';
+    idEl.textContent = agent.id;
+    const statusEl = document.createElement('span');
+    statusEl.className = 'operator-agent-item-status';
+    statusEl.textContent = agent.status;
+    header.append(idEl, statusEl);
+
+    const messageEl = document.createElement('p');
+    messageEl.className = 'operator-agent-item-message';
+    messageEl.textContent = message;
+
+    const actions = document.createElement('div');
+    actions.className = 'operator-agent-item-actions';
+    for (const actionItem of listAgentLifecycleActions(agent)) {
+      const button = createDashboardActionButton(agent, actionItem.label, actionItem.action, () => {});
+      bindAgentActionButton(button, agent, actionItem.action, { stopPropagation: true });
+      actions.appendChild(button);
+    }
+    itemFocus.append(header, messageEl);
+    item.append(itemFocus, actions);
+    operatorAgentListItemsEl.appendChild(item);
+  }
+}
+
+async function refreshAgentDashboardState(options = {}) {
+  if (agentDashboardLoadInFlight) {
+    return agentDashboardLoadInFlight;
+  }
+  const silentStatus = options.silentStatus === true;
+  agentDashboardLoadInFlight = (async () => {
+    const agents = await readAgentDashboardState();
+    agentDashboardState.agents = agents;
+    agentDashboardState.loaded = true;
+    ensureSelectedDashboardAgent();
+    renderAgentDashboard();
+    if (!silentStatus) {
+      setAgentDashboardStatus(`${getDashboardVisibleCount()} agents`, 'ok');
+    }
+  })()
+    .catch((error) => {
+      if (!silentStatus) {
+        setAgentDashboardStatus(`agent state error: ${error.message}`, 'warn');
+      }
+    })
+    .finally(() => {
+      agentDashboardLoadInFlight = null;
+    });
+  return agentDashboardLoadInFlight;
+}
+
+function scheduleAgentDashboardPoll(delayMs = AGENT_DASHBOARD_POLL_INTERVAL_MS) {
+  if (agentDashboardPollTimer !== null) {
+    clearTimeout(agentDashboardPollTimer);
+  }
+  agentDashboardPollTimer = window.setTimeout(() => {
+    agentDashboardPollTimer = null;
+    void refreshAgentDashboardState({ silentStatus: true }).finally(() => {
+      scheduleAgentDashboardPoll(AGENT_DASHBOARD_POLL_INTERVAL_MS);
+    });
+  }, Math.max(600, delayMs));
+}
+
+function installAgentDashboardControls() {
+  if (!agentDashboardEl || !agentDashboardAddFormEl) {
+    return;
+  }
+
+  if (agentDashboardCloseButtonEl) {
+    agentDashboardCloseButtonEl.addEventListener('click', () => {
+      closeDesktopAgentDashboardSurface();
+      renderAgentDashboard();
+      updateOperatorUi();
+    });
+  }
+  if (agentDashboardAddToggleButtonEl) {
+    agentDashboardAddToggleButtonEl.addEventListener('click', async () => {
+      if (agentDashboardAddPending) {
+        return;
+      }
+      agentDashboardAddPending = true;
+      renderAgentDashboard();
+      try {
+        const json = await createManagedAgent();
+        agentDashboardState.agents = resolveAgentsFromActionResult(agentDashboardState.agents, json?.result);
+        setAgentDashboardStatus('agent created', 'ok');
+        renderAgentDashboard();
+        await refreshAgentDashboardState({ silentStatus: true });
+      } catch (error) {
+        setAgentDashboardStatus(error.message, 'warn');
+      } finally {
+        agentDashboardAddPending = false;
+        renderAgentDashboard();
+      }
+    });
+  }
+  if (operatorCurrentAgentButtonEl) {
+    operatorCurrentAgentButtonEl.addEventListener('click', () => {
+      toggleOperatorAgentPicker();
+    });
+  }
+  if (operatorAgentListAddButtonEl) {
+    operatorAgentListAddButtonEl.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (agentDashboardAddPending) {
+        return;
+      }
+      agentDashboardAddPending = true;
+      renderOperatorMobileAgentList();
+      try {
+        const json = await createManagedAgent();
+        agentDashboardState.agents = resolveAgentsFromActionResult(agentDashboardState.agents, json?.result);
+        setAgentDashboardStatus('agent created', 'ok');
+        await refreshAgentDashboardState({ silentStatus: true });
+      } catch (error) {
+        setAgentDashboardStatus(error.message, 'warn');
+      } finally {
+        agentDashboardAddPending = false;
+        renderOperatorMobileAgentList();
+      }
+    });
+  }
+}
+
 function applyOperatorUiMode(mode) {
   const configured = normalizeOperatorUiMode(mode) ?? OPERATOR_UI_MODE_AUTO;
   operatorConfiguredUiMode = configured;
@@ -644,6 +1472,7 @@ function applyOperatorUiMode(mode) {
   if (operatorTitleEl) {
     operatorTitleEl.textContent = operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE ? 'MINIMUM HEADROOM OPERATOR' : 'Operator';
   }
+  renderAgentDashboard();
 }
 
 async function loadOperatorUiConfig() {
@@ -663,6 +1492,9 @@ async function loadOperatorUiConfig() {
       operatorRealtimeAsrConfig.sampleRateHz = Number.isFinite(payload?.realtimeAsr?.sampleRateHz)
         ? Math.max(8_000, Math.floor(payload.realtimeAsr.sampleRateHz))
         : OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE;
+      browserAudioMaxChannels = Number.isFinite(payload?.browserAudio?.maxChannels)
+        ? clampBrowserAudioMaxChannels(payload.browserAudio.maxChannels)
+        : BROWSER_AUDIO_MAX_CHANNELS_DEFAULT;
     }
   } catch {
     // Keep defaults on fetch failures.
@@ -737,6 +1569,13 @@ function setOperatorAckLine(text, tone = 'default') {
   }
   operatorAckEl.textContent = text;
   operatorAckEl.style.color = toneColor(tone);
+}
+
+function rememberOperatorBridgeSessionId(payload) {
+  const sessionId = resolvePayloadSessionId(payload);
+  if (sessionId !== '-') {
+    operatorBridgeSessionId = sessionId;
+  }
 }
 
 function dispatchOperatorUiAction(action) {
@@ -1245,8 +2084,25 @@ function cancelPendingOperatorKeyboardPttStart() {
   operatorMicState.keyboardPendingKey = null;
 }
 
-function shouldDelayOperatorKeyboardPttStart(key) {
-  return key === 'Control' || key === 'Alt';
+function normalizeOperatorKeyboardPttTriggerKey(event) {
+  if (!event || typeof event !== 'object') {
+    return '';
+  }
+  if (event.code === 'Space' || event.key === ' ' || event.key === 'Spacebar') {
+    return 'Space';
+  }
+  return typeof event.key === 'string' ? event.key : '';
+}
+
+function resolveOperatorKeyboardPttDelayMs(event) {
+  const triggerKey = normalizeOperatorKeyboardPttTriggerKey(event);
+  if (triggerKey === 'Control' || triggerKey === 'Alt') {
+    return OPERATOR_KEYBOARD_MODIFIER_PTT_DELAY_MS;
+  }
+  if (triggerKey === 'Space') {
+    return OPERATOR_KEYBOARD_SPACE_PTT_DELAY_MS;
+  }
+  return 0;
 }
 
 function hideOperatorKeyboard(updateStatus = true) {
@@ -1398,6 +2254,12 @@ function updateOperatorUi() {
     if (operatorKeyboardHelpEl) {
       operatorKeyboardHelpEl.hidden = true;
     }
+    if (operatorAgentListEl) {
+      operatorAgentListEl.classList.add('hidden');
+    }
+    if (operatorCurrentAgentButtonEl) {
+      operatorCurrentAgentButtonEl.classList.add('hidden');
+    }
     return;
   }
 
@@ -1428,13 +2290,14 @@ function updateOperatorUi() {
   if (operatorRestartButtonEl) {
     operatorRestartButtonEl.classList.toggle('hidden', !flags.showRestart);
   }
+  if (operatorCurrentAgentButtonEl) {
+    operatorCurrentAgentButtonEl.classList.toggle('hidden', false);
+  }
   if (operatorMirrorEl) {
-    const showMirror = isMobileUi || flags.showMirror;
-    operatorMirrorEl.classList.toggle('hidden', !showMirror);
+    operatorMirrorEl.classList.toggle('hidden', false);
   }
   if (operatorMirrorToggleEl) {
-    operatorMirrorToggleEl.classList.toggle('hidden', isMobileUi);
-    operatorMirrorToggleEl.textContent = flags.showMirror ? 'Hide Terminal' : 'Terminal';
+    operatorMirrorToggleEl.classList.add('hidden');
   }
   const showKeyboardHelpToggle = shouldShowOperatorKeyboardHelpToggle();
   if (operatorHelpToggleEl) {
@@ -1444,6 +2307,8 @@ function updateOperatorUi() {
   if (operatorKeyboardHelpEl) {
     operatorKeyboardHelpEl.hidden = !showKeyboardHelpToggle || !operatorKeyboardHelpOpen;
   }
+  updateOperatorCurrentAgentBar();
+  renderOperatorMobileAgentList();
 
   if (operatorPromptEl) {
     let promptText = '';
@@ -1545,6 +2410,7 @@ function handleOperatorStatePayload(payload) {
   if (!payload || typeof payload !== 'object') {
     return;
   }
+  rememberOperatorBridgeSessionId(payload);
 
   dispatchOperatorUiAction({
     type: 'operator_state',
@@ -1570,6 +2436,7 @@ function handleOperatorRecoverResult(payload) {
   if (!payload || typeof payload !== 'object') {
     return;
   }
+  rememberOperatorBridgeSessionId(payload);
 
   operatorRecoverPending = false;
   if (operatorRecoverPendingTimer !== null) {
@@ -1577,22 +2444,33 @@ function handleOperatorRecoverResult(payload) {
     operatorRecoverPendingTimer = null;
   }
   if (payload.ok === true) {
-    setOperatorAckLine('ack: recovered', 'ok');
-    setOperatorStatusLine(`recovered${payload.pane ? `: ${payload.pane}` : ''}`, 'ok');
+    handleCompletedOperatorFocusResult({
+      pane: payload.pane,
+      agentId: OPERATOR_DASHBOARD_AGENT_ID,
+      ackText: 'ack: recovered',
+      statusPrefix: 'recovered'
+    });
     return;
   }
 
   const reason = typeof payload.reason === 'string' && payload.reason !== '' ? payload.reason : 'recover_failed';
-  setOperatorAckLine(`ack: recover failed (${reason})`, 'warn');
-  setOperatorStatusLine(`recover failed: ${reason}`, 'warn');
+  handleFailedOperatorFocusResult(reason, {
+    ackPrefix: 'ack: recover failed',
+    statusPrefix: 'recover failed',
+    pendingAgentId: OPERATOR_DASHBOARD_AGENT_ID
+  });
 }
 
 function handleOperatorTerminalSnapshot(payload) {
   if (!payload || !Array.isArray(payload.lines)) {
     return;
   }
+  rememberOperatorBridgeSessionId(payload);
+  operatorMirrorPaneId = typeof payload.pane === 'string' && payload.pane.trim() !== '' ? payload.pane.trim() : null;
+  syncSelectedDashboardAgentToMirrorPane();
   operatorTerminalSnapshotLines = payload.lines.map((line) => String(line));
   renderOperatorTerminalSnapshot();
+  updateOperatorCurrentAgentBar();
 }
 
 function showUtterance(text, ttlMs) {
@@ -1654,9 +2532,9 @@ function shouldPlayTtsAudio(payload) {
   return shouldUseLatestPayload(payload, latestAudioMetaBySession);
 }
 
-function ensurePlaybackAudioElement() {
-  if (playbackAudioEl) {
-    return playbackAudioEl;
+function ensureUnlockAudioElement() {
+  if (unlockAudioEl) {
+    return unlockAudioEl;
   }
 
   const player = new Audio();
@@ -1665,17 +2543,77 @@ function ensurePlaybackAudioElement() {
   player.setAttribute('playsinline', 'true');
   player.setAttribute('webkit-playsinline', 'true');
   player.volume = 1;
-  player.addEventListener('ended', () => {
-    releaseActiveAudioSource();
-    resetActiveAudio();
-  });
-  player.addEventListener('error', () => {
-    releaseActiveAudioSource();
-    resetActiveAudio();
-    setTtsPhase('browser_error', 'warn');
-  });
-  playbackAudioEl = player;
+  unlockAudioEl = player;
   return player;
+}
+
+function createBrowserAudioChannel() {
+  const player = new Audio();
+  player.preload = 'auto';
+  player.playsInline = true;
+  player.setAttribute('playsinline', 'true');
+  player.setAttribute('webkit-playsinline', 'true');
+  player.volume = 1;
+  return {
+    player,
+    token: 0,
+    active: false,
+    sessionId: null,
+    generation: null,
+    startedAt: 0,
+    release: null
+  };
+}
+
+function ensureBrowserAudioMixer() {
+  if (browserAudioMixer) {
+    return browserAudioMixer;
+  }
+  browserAudioMixer = {
+    channels: []
+  };
+  return browserAudioMixer;
+}
+
+function releaseBrowserAudioChannelResource(channel) {
+  if (typeof channel.release === 'function') {
+    channel.release();
+  }
+  channel.release = null;
+}
+
+function clearBrowserAudioChannel(channel) {
+  releaseBrowserAudioChannelResource(channel);
+  channel.active = false;
+  channel.sessionId = null;
+  channel.generation = null;
+  channel.startedAt = 0;
+}
+
+function pauseAndResetBrowserAudioChannel(channel) {
+  try {
+    channel.player.pause();
+  } catch {
+    // Ignore pause errors while stopping a browser audio channel.
+  }
+  try {
+    channel.player.currentTime = 0;
+  } catch {
+    // Ignore seek errors while resetting a browser audio channel.
+  }
+}
+
+function reserveBrowserAudioChannel(sessionId) {
+  const mixer = ensureBrowserAudioMixer();
+  const nextIndex = selectBrowserAudioChannelIndex(
+    mixer.channels,
+    sessionId,
+    clampBrowserAudioMaxChannels(browserAudioMaxChannels)
+  );
+  while (mixer.channels.length <= nextIndex) {
+    mixer.channels.push(createBrowserAudioChannel());
+  }
+  return mixer.channels[nextIndex];
 }
 
 function withTimeout(promise, timeoutMs) {
@@ -1765,7 +2703,7 @@ async function unlockPlaybackAudio() {
     return unlockInFlight;
   }
 
-  const player = ensurePlaybackAudioElement();
+  const player = ensureUnlockAudioElement();
   if (!player.paused) {
     audioUnlocked = true;
     return true;
@@ -1812,38 +2750,17 @@ function showAudioReplayButton() {
   audioReplayButtonEl.classList.remove('hidden');
 }
 
-function resetActiveAudio() {
-  activeAudioGeneration = null;
-}
-
-function releaseActiveAudioSource() {
-  if (typeof activeAudioSourceRelease === 'function') {
-    activeAudioSourceRelease();
-    activeAudioSourceRelease = null;
-  }
-}
-
-function stopActiveBrowserAudio(generation = null) {
-  if (!playbackAudioEl) {
-    resetActiveAudio();
+function stopActiveBrowserAudio(generation = null, sessionId = null) {
+  if (!browserAudioMixer) {
     return;
   }
-  if (Number.isInteger(generation) && Number.isInteger(activeAudioGeneration) && generation !== activeAudioGeneration) {
-    return;
+  for (const channel of browserAudioMixer.channels) {
+    if (!shouldStopBrowserAudioChannel(channel, { generation, sessionId })) {
+      continue;
+    }
+    pauseAndResetBrowserAudioChannel(channel);
+    clearBrowserAudioChannel(channel);
   }
-
-  try {
-    playbackAudioEl.pause();
-  } catch {
-    // Ignore pause errors while stopping active browser audio.
-  }
-  try {
-    playbackAudioEl.currentTime = 0;
-  } catch {
-    // Ignore seek errors while stopping active browser audio.
-  }
-  releaseActiveAudioSource();
-  resetActiveAudio();
 }
 
 function queueReplayPayload(payload) {
@@ -1851,17 +2768,43 @@ function queueReplayPayload(payload) {
   showAudioReplayButton();
 }
 
-async function playAudioSource(src, generation = null, release = null) {
-  const player = ensurePlaybackAudioElement();
-  stopActiveBrowserAudio();
-  player.src = src;
-  player.currentTime = 0;
-  activeAudioSourceRelease = typeof release === 'function' ? release : null;
+async function playAudioSource(src, generation = null, release = null, sessionId = '-') {
+  const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : '-';
+  const channel = reserveBrowserAudioChannel(normalizedSessionId);
+  const token = channel.token + 1;
+  channel.token = token;
+  pauseAndResetBrowserAudioChannel(channel);
+  clearBrowserAudioChannel(channel);
+  channel.player.src = src;
+  channel.player.currentTime = 0;
+  channel.release = typeof release === 'function' ? release : null;
+  channel.active = true;
+  channel.sessionId = normalizedSessionId;
+  channel.generation = Number.isInteger(generation) ? generation : null;
+  channel.startedAt = Date.now();
+
+  const finalizeIfCurrent = () => {
+    if (channel.token !== token) {
+      return;
+    }
+    clearBrowserAudioChannel(channel);
+  };
+  channel.player.onended = finalizeIfCurrent;
+  channel.player.onerror = () => {
+    finalizeIfCurrent();
+    setTtsPhase('browser_error', 'warn');
+  };
+
   try {
-    await player.play();
-    activeAudioGeneration = Number.isInteger(generation) ? generation : null;
+    await channel.player.play();
+    if (channel.token !== token) {
+      return { superseded: true };
+    }
+    return { superseded: false };
   } catch (error) {
-    releaseActiveAudioSource();
+    if (channel.token === token) {
+      clearBrowserAudioChannel(channel);
+    }
     throw error;
   }
 }
@@ -1877,10 +2820,14 @@ async function playBrowserAudioPayload(payload) {
   const mimeType = typeof payload.mime_type === 'string' && payload.mime_type.trim() !== '' ? payload.mime_type.trim() : 'audio/wav';
   const source = buildPlaybackSource(mimeType, payload.audio_base64);
   const generation = Number.isInteger(payload.generation) ? payload.generation : null;
+  const sessionId = resolvePayloadSessionId(payload);
 
   try {
     await unlockPlaybackAudio();
-    await playAudioSource(source.src, generation, source.release);
+    const played = await playAudioSource(source.src, generation, source.release, sessionId);
+    if (played.superseded) {
+      return;
+    }
     pendingReplayPayload = null;
     hideAudioReplayButton();
   } catch {
@@ -1890,7 +2837,8 @@ async function playBrowserAudioPayload(payload) {
     queueReplayPayload({
       mimeType,
       audioBase64: payload.audio_base64,
-      generation
+      generation,
+      sessionId
     });
     setTtsPhase('browser_blocked', 'warn');
   }
@@ -2287,6 +3235,7 @@ function handleTtsState(payload) {
   const phase = typeof payload.phase === 'string' ? payload.phase : '-';
   const audioTarget = typeof payload.audio_target === 'string' ? payload.audio_target : 'local';
   const reason = typeof payload.reason === 'string' ? payload.reason : null;
+  const sessionId = resolvePayloadSessionId(payload);
 
   if (phase === 'worker_ready') {
     if (payload.playback_backend === 'silent' && audioTarget === 'local') {
@@ -2317,7 +3266,7 @@ function handleTtsState(payload) {
 
   if (phase === 'play_stop') {
     if (reason === 'interrupted') {
-      stopActiveBrowserAudio(payload.generation);
+      stopActiveBrowserAudio(payload.generation, sessionId);
     }
     setTtsStatus('ready', 'ok');
     setTtsPhase(phase, 'default');
@@ -2327,7 +3276,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'interrupt_requested') {
-    stopActiveBrowserAudio(payload.generation);
+    stopActiveBrowserAudio(payload.generation, sessionId);
     setTtsStatus('busy', 'default');
     setTtsPhase(`${phase}:${reason ?? '-'}`, 'default');
     return;
@@ -2340,7 +3289,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'dropped') {
-    stopActiveBrowserAudio(payload.generation);
+    stopActiveBrowserAudio(payload.generation, sessionId);
     setTtsPhase(`dropped:${payload.reason ?? '-'}`, 'warn');
     if (!speechActive) {
       setTtsStatus('ready', 'default');
@@ -2349,7 +3298,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'error') {
-    stopActiveBrowserAudio(payload.generation);
+    stopActiveBrowserAudio(payload.generation, sessionId);
     setTtsStatus('error', 'warn');
     setTtsPhase(`error:${payload.reason ?? '-'}`, 'warn');
     speechActive = false;
@@ -2469,6 +3418,7 @@ function handlePayload(payload) {
   }
 
   appendEvent(payload);
+  trackAgentTileFromPayload(payload);
 
   if (payload.type === 'event') {
     faceState = applyEventToFaceState(faceState, payload, Date.now());
@@ -2479,13 +3429,30 @@ function handlePayload(payload) {
   } else if (payload.type === 'say_result') {
     handleSayResult(payload);
   } else if (payload.type === 'operator_prompt') {
+    rememberOperatorBridgeSessionId(payload);
     handleOperatorPrompt(payload);
   } else if (payload.type === 'operator_ack') {
+    rememberOperatorBridgeSessionId(payload);
     handleOperatorAck(payload);
   } else if (payload.type === 'operator_state') {
     handleOperatorStatePayload(payload);
   } else if (payload.type === 'operator_recover_result') {
     handleOperatorRecoverResult(payload);
+  } else if (payload.type === 'operator_set_pane_result') {
+    rememberOperatorBridgeSessionId(payload);
+    if (payload.ok === true) {
+      handleCompletedOperatorFocusResult({
+        pane: payload.pane,
+        agentId: typeof payload.agent_id === 'string' ? payload.agent_id : null,
+        ackText: 'ack: pane switched',
+        statusPrefix: 'pane switched'
+      });
+    } else {
+      handleFailedOperatorFocusResult(payload.reason, {
+        ackPrefix: 'ack: pane switch failed',
+        statusPrefix: 'pane switch failed'
+      });
+    }
   } else if (payload.type === 'operator_terminal_snapshot') {
     handleOperatorTerminalSnapshot(payload);
   } else if (payload.type === 'operator_realtime_asr_delta') {
@@ -2501,6 +3468,7 @@ function handlePayload(payload) {
   } else if (payload.type === 'tts_audio') {
     handleTtsAudio(payload);
   }
+  renderAgentDashboard();
 }
 
 function connectWebSocket() {
@@ -2888,14 +3856,30 @@ function installAudioReplayButton() {
     void (async () => {
       try {
         const directSource = buildPlaybackSource(replay.mimeType, replay.audioBase64);
-        await playAudioSource(directSource.src, replay.generation, directSource.release);
+        const played = await playAudioSource(
+          directSource.src,
+          replay.generation,
+          directSource.release,
+          replay.sessionId ?? '-'
+        );
+        if (played.superseded) {
+          return;
+        }
         audioUnlocked = true;
         hideAudioReplayButton();
       } catch {
         try {
           await unlockPlaybackAudio();
           const retrySource = buildPlaybackSource(replay.mimeType, replay.audioBase64);
-          await playAudioSource(retrySource.src, replay.generation, retrySource.release);
+          const played = await playAudioSource(
+            retrySource.src,
+            replay.generation,
+            retrySource.release,
+            replay.sessionId ?? '-'
+          );
+          if (played.superseded) {
+            return;
+          }
           audioUnlocked = true;
           hideAudioReplayButton();
         } catch {
@@ -2943,6 +3927,10 @@ function registerOperatorPttButton(button, language) {
 
 function installOperatorKeyboardPtt() {
   window.addEventListener('keydown', async (event) => {
+    const triggerKey = normalizeOperatorKeyboardPttTriggerKey(event);
+    if (triggerKey === '') {
+      return;
+    }
     const language = resolveOperatorKeyboardPttLanguage(event, {
       isMobileUi: operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE,
       textInputElement: operatorTextInputEl
@@ -2957,58 +3945,63 @@ function installOperatorKeyboardPtt() {
       return;
     }
 
-    event.preventDefault();
-    if (document.activeElement === operatorTextInputEl) {
-      operatorTextInputEl.blur();
-    }
-    if (shouldDelayOperatorKeyboardPttStart(event.key)) {
-      operatorMicState.keyboardPendingKey = event.key;
+    const delayMs = resolveOperatorKeyboardPttDelayMs(event);
+    if (delayMs > 0) {
+      operatorMicState.keyboardPendingKey = triggerKey;
       operatorMicState.keyboardPendingTimer = window.setTimeout(async () => {
         operatorMicState.keyboardPendingTimer = null;
-        if (operatorMicState.keyboardPendingKey !== event.key) {
+        if (operatorMicState.keyboardPendingKey !== triggerKey) {
           return;
         }
         operatorMicState.keyboardPendingKey = null;
         if (operatorMicState.pointerArmed || operatorMicState.keyboardArmedKey !== null || operatorMicState.recording) {
           return;
         }
+        if (document.activeElement === operatorTextInputEl) {
+          operatorTextInputEl.blur();
+        }
         setOperatorStatusLine(`keyboard PTT (${language})...`, 'default');
-        operatorMicState.keyboardArmedKey = event.key;
+        operatorMicState.keyboardArmedKey = triggerKey;
         const started = await startOperatorRecording(language);
         if (!started) {
-          if (operatorMicState.keyboardArmedKey === event.key) {
+          if (operatorMicState.keyboardArmedKey === triggerKey) {
             operatorMicState.keyboardArmedKey = null;
           }
           return;
         }
-        if (operatorMicState.keyboardArmedKey !== event.key) {
+        if (operatorMicState.keyboardArmedKey !== triggerKey) {
           await stopOperatorRecordingAndTranscribe();
         }
-      }, OPERATOR_KEYBOARD_MODIFIER_PTT_DELAY_MS);
+      }, delayMs);
       return;
     }
 
+    event.preventDefault();
+    if (document.activeElement === operatorTextInputEl) {
+      operatorTextInputEl.blur();
+    }
     setOperatorStatusLine(`keyboard PTT (${language})...`, 'default');
-    operatorMicState.keyboardArmedKey = event.key;
+    operatorMicState.keyboardArmedKey = triggerKey;
     const started = await startOperatorRecording(language);
     if (!started) {
-      if (operatorMicState.keyboardArmedKey === event.key) {
+      if (operatorMicState.keyboardArmedKey === triggerKey) {
         operatorMicState.keyboardArmedKey = null;
       }
       return;
     }
-    if (operatorMicState.keyboardArmedKey !== event.key) {
+    if (operatorMicState.keyboardArmedKey !== triggerKey) {
       await stopOperatorRecordingAndTranscribe();
     }
   }, true);
 
   window.addEventListener('keyup', async (event) => {
-    if (operatorMicState.keyboardPendingKey && event.key === operatorMicState.keyboardPendingKey) {
+    const triggerKey = normalizeOperatorKeyboardPttTriggerKey(event);
+    if (operatorMicState.keyboardPendingKey && triggerKey === operatorMicState.keyboardPendingKey) {
       event.preventDefault();
       cancelPendingOperatorKeyboardPttStart();
       return;
     }
-    if (!operatorMicState.keyboardArmedKey || event.key !== operatorMicState.keyboardArmedKey) {
+    if (!operatorMicState.keyboardArmedKey || triggerKey !== operatorMicState.keyboardArmedKey) {
       return;
     }
 
@@ -3313,6 +4306,9 @@ async function bootstrap() {
   } else {
     updateOperatorUi();
   }
+  installAgentDashboardControls();
+  await refreshAgentDashboardState({ silentStatus: false });
+  scheduleAgentDashboardPoll(AGENT_DASHBOARD_POLL_INTERVAL_MS);
   markOperatorUiBootReady();
 
   lgApplyButton.addEventListener('click', () => {
@@ -3355,6 +4351,10 @@ window.addEventListener('beforeunload', () => {
   if (reconnectTimer !== null) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
+  }
+  if (agentDashboardPollTimer !== null) {
+    clearTimeout(agentDashboardPollTimer);
+    agentDashboardPollTimer = null;
   }
 
   if (socket && socket.readyState === WebSocket.OPEN) {
