@@ -9,7 +9,7 @@ import {
 test('applyAgentResultToAgents updates an existing agent in place by id', () => {
   const before = [
     { id: 'a', status: 'active', slot: 0, session_id: 's-a', last_message: 'working' },
-    { id: 'b', status: 'paused', slot: 1, session_id: 's-b', last_message: 'paused' }
+    { id: 'b', status: 'missing', slot: 1, session_id: 's-b', last_message: 'pane missing' }
   ];
   const next = applyAgentResultToAgents(before, {
     id: 'b',
@@ -45,19 +45,19 @@ test('applyAgentResultToAgents keeps original list when result agent is invalid'
 
 test('normalizeResultStateAgents maps and sorts state agents', () => {
   const next = normalizeResultStateAgents([
-    { id: 'b', status: 'removed', slot: null, session_id: 's-b' },
+    { id: 'b', status: 'missing', slot: null, session_id: 's-b' },
     { id: 'a', status: 'active', slot: 0, session_id: 's-a' }
   ]);
   assert.equal(next.length, 2);
   assert.equal(next[0].id, 'a');
   assert.equal(next[1].id, 'b');
-  assert.equal(next[1].status, 'removed');
+  assert.equal(next[1].status, 'missing');
 });
 
 test('resolveAgentsFromActionResult prefers result.state.agents over result.agent', () => {
   const before = [
     { id: 'a', status: 'active', slot: 0, session_id: 's-a' },
-    { id: 'b', status: 'paused', slot: 1, session_id: 's-b' }
+    { id: 'b', status: 'missing', slot: 1, session_id: 's-b' }
   ];
   const next = resolveAgentsFromActionResult(before, {
     agent: { id: 'b', status: 'active', slot: 1, session_id: 's-b' },

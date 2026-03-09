@@ -30,8 +30,7 @@ function cleanup(dirPath) {
 }
 
 function createRequest({ method, url, body }) {
-  const payload =
-    body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body), 'utf8');
+  const payload = body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body), 'utf8');
   const stream = Readable.from(payload.length > 0 ? [payload] : []);
   stream.method = method;
   stream.url = url;
@@ -98,6 +97,9 @@ function createRuntimeHarness(options = {}) {
       if (command === 'tmux' && args[0] === 'new-window') {
         return { stdout: '%45\n', stderr: '', code: 0 };
       }
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
       return { stdout: '', stderr: '', code: 0 };
     },
     async onFocus(payload) {
@@ -129,82 +131,6 @@ test('agent lifecycle runtime adds agent without worktree/tmux orchestration', a
   cleanup(repoRoot);
 });
 
-test('agent lifecycle runtime stop action kills pane and marks stopped', async () => {
-  const { repoRoot, runtime, commands } = createRuntimeHarness();
-
-  await runtime.addAgent({
-    id: 'agent-stop',
-    create_worktree: false,
-    create_tmux: false,
-    pane_id: '%88'
-  });
-
-  const result = await runtime.dispatchAgentAction('agent-stop', 'stop', {
-    kill_pane: true
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.action, 'stop');
-  assert.equal(result.orchestration.pane_killed, true);
-  assert.equal(
-    commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'kill-pane' && entry[3] === '%88'),
-    true
-  );
-
-  const state = runtime.getState();
-  const agent = state.agents.find((item) => item.id === 'agent-stop');
-  assert.equal(agent?.status, 'stopped');
-  assert.equal(agent?.pane_id, null);
-  assert.equal(agent?.last_message, 'stopped');
-
-  cleanup(repoRoot);
-});
-
-test('agent lifecycle runtime stop action reports partial success when pane kill fails', async () => {
-  const { repoRoot, runtime, commands } = createRuntimeHarness({
-    commandRunner: async (command, args) => {
-      if (command === 'tmux' && args[0] === 'kill-pane') {
-        const error = new Error('kill-pane failed');
-        error.code = 'command_failed';
-        throw error;
-      }
-      if (command === 'tmux' && args[0] === 'list-windows') {
-        return { stdout: 'operator\n', stderr: '', code: 0 };
-      }
-      if (command === 'tmux' && args[0] === 'new-window') {
-        return { stdout: '%45\n', stderr: '', code: 0 };
-      }
-      return { stdout: '', stderr: '', code: 0 };
-    }
-  });
-
-  await runtime.addAgent({
-    id: 'agent-stop-fail',
-    create_worktree: false,
-    create_tmux: false,
-    pane_id: '%89'
-  });
-
-  const result = await runtime.dispatchAgentAction('agent-stop-fail', 'stop', {
-    kill_pane: true
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.action, 'stop');
-  assert.equal(result.orchestration.pane_killed, false);
-  assert.equal(typeof result.orchestration.pane_kill_error, 'string');
-  assert.equal(
-    commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'kill-pane' && entry[3] === '%89'),
-    true
-  );
-
-  const state = runtime.getState();
-  const agent = state.agents.find((item) => item.id === 'agent-stop-fail');
-  assert.equal(agent?.status, 'stopped');
-  assert.equal(agent?.pane_id, '%89');
-  assert.equal(agent?.last_message, 'stopped; pane still attached');
-
-  cleanup(repoRoot);
-});
-
 test('agent lifecycle runtime blocks deleting worktree outside managed root by default', async () => {
   const { repoRoot, runtime } = createRuntimeHarness();
   const externalDir = createTempRoot('mh-agent-external-delete-');
@@ -215,7 +141,6 @@ test('agent lifecycle runtime blocks deleting worktree outside managed root by d
     create_tmux: false,
     worktree_path: externalDir
   });
-  await runtime.dispatchAgentAction('agent-delete', 'remove', {});
 
   await assert.rejects(
     () => runtime.dispatchAgentAction('agent-delete', 'delete-worktree', {}),
@@ -226,25 +151,35 @@ test('agent lifecycle runtime blocks deleting worktree outside managed root by d
   cleanup(externalDir);
 });
 
-test('agent lifecycle runtime requires removed/stopped before delete-worktree', async () => {
-  const { repoRoot, runtime } = createRuntimeHarness();
+test('agent lifecycle runtime delete-worktree only requires pane detachment', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness();
+  const managedWorktree = path.join(repoRoot, '.agent/worktrees/agent-worktree-only');
+  fs.mkdirSync(managedWorktree, { recursive: true });
 
   await runtime.addAgent({
-    id: 'agent-active-delete',
+    id: 'agent-worktree-only',
     create_worktree: false,
-    create_tmux: false
+    create_tmux: false,
+    worktree_path: managedWorktree,
+    source_repo_path: repoRoot
   });
 
-  await assert.rejects(
-    () => runtime.dispatchAgentAction('agent-active-delete', 'delete-worktree', {}),
-    (error) => error?.code === 'invalid_state'
+  const result = await runtime.dispatchAgentAction('agent-worktree-only', 'delete-worktree', {});
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'delete-worktree');
+  assert.equal(result.noop, false);
+  assert.equal(result.deleted_path, managedWorktree);
+  assert.equal(result.agent?.worktree_path, null);
+  assert.equal(
+    commands.some((entry) => entry[0] === 'git' && entry[3] === 'worktree' && entry[4] === 'prune'),
+    true
   );
 
   cleanup(repoRoot);
 });
 
 test('agent lifecycle runtime records delete-worktree noop message when path is absent', async () => {
-  const { repoRoot, runtime } = createRuntimeHarness();
+  const { repoRoot, runtime, commands } = createRuntimeHarness();
   const missingWorktreePath = path.join(repoRoot, '.agent/worktrees/agent-delete-noop');
   fs.mkdirSync(missingWorktreePath, { recursive: true });
 
@@ -255,13 +190,121 @@ test('agent lifecycle runtime records delete-worktree noop message when path is 
     worktree_path: missingWorktreePath
   });
   fs.rmSync(missingWorktreePath, { recursive: true, force: true });
-  await runtime.dispatchAgentAction('agent-delete-noop', 'remove', {});
-  const result = await runtime.dispatchAgentAction('agent-delete-noop', 'delete-worktree', {});
 
+  const result = await runtime.dispatchAgentAction('agent-delete-noop', 'delete-worktree', {});
   assert.equal(result.ok, true);
   assert.equal(result.action, 'delete-worktree');
   assert.equal(result.noop, true);
   assert.equal(result.agent?.last_message, 'worktree already absent');
+  assert.equal(
+    commands.some((entry) => entry[0] === 'git' && entry[3] === 'worktree' && entry[4] === 'prune'),
+    true
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime delete action detaches pane, deletes worktree, and purges agent', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%92') {
+        return { stdout: '%92\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'kill-pane') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'git' && args[1] === 'worktree' && args[2] === 'remove') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%45\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  const managedWorktree = path.join(repoRoot, '.agent/worktrees/agent-delete-all');
+  fs.mkdirSync(managedWorktree, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-delete-all',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%92',
+    worktree_path: managedWorktree,
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.dispatchAgentAction('agent-delete-all', 'delete', {});
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'delete');
+  assert.equal(result.agent?.id, 'agent-delete-all');
+  assert.equal(result.deleted_path, managedWorktree);
+  assert.equal(runtime.getState().agents.some((agent) => agent.id === 'agent-delete-all'), false);
+  assert.equal(
+    commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'display-message' && entry[4] === '%92'),
+    true
+  );
+  assert.equal(
+    commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'kill-pane' && entry[3] === '%92'),
+    true
+  );
+  assert.equal(
+    commands.some(
+      (entry) => entry[0] === 'git' && entry[3] === 'worktree' && entry[4] === 'remove' && entry[6] === managedWorktree
+    ),
+    true
+  );
+  assert.equal(
+    commands.some((entry) => entry[0] === 'git' && entry[3] === 'worktree' && entry[4] === 'prune'),
+    true
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime delete action marks stale pane as missing before purge', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%93') {
+        const error = new Error('pane not found');
+        error.code = 'command_failed';
+        throw error;
+      }
+      if (command === 'git' && args[1] === 'worktree' && args[2] === 'remove') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%45\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  const managedWorktree = path.join(repoRoot, '.agent/worktrees/agent-delete-stale');
+  fs.mkdirSync(managedWorktree, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-delete-stale',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%93',
+    worktree_path: managedWorktree,
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.dispatchAgentAction('agent-delete-stale', 'delete', {});
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'delete');
+  assert.equal(runtime.getState().agents.some((agent) => agent.id === 'agent-delete-stale'), false);
+  assert.equal(
+    commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'kill-pane' && entry[3] === '%93'),
+    false
+  );
 
   cleanup(repoRoot);
 });
@@ -290,32 +333,31 @@ test('agent lifecycle runtime focus action emits focus callback and updates mess
   cleanup(repoRoot);
 });
 
-test('agent lifecycle runtime restore fails when worktree path is missing', async () => {
+test('agent lifecycle runtime focus marks agent missing when pane id is absent', async () => {
   const { repoRoot, runtime } = createRuntimeHarness();
-  const missingWorktreePath = path.join(repoRoot, '.agent/worktrees/agent-restore-missing');
-  fs.mkdirSync(missingWorktreePath, { recursive: true });
-
   await runtime.addAgent({
-    id: 'agent-restore-missing',
+    id: 'agent-focus-missing',
     create_worktree: false,
     create_tmux: false,
-    worktree_path: missingWorktreePath
+    pane_id: null
   });
-  fs.rmSync(missingWorktreePath, { recursive: true, force: true });
-  await runtime.dispatchAgentAction('agent-restore-missing', 'remove', {});
 
   await assert.rejects(
-    () => runtime.dispatchAgentAction('agent-restore-missing', 'restore', {}),
-    (error) => error?.code === 'invalid_state' && /restore requires existing worktree path/.test(error.message)
+    () => runtime.dispatchAgentAction('agent-focus-missing', 'focus', {}),
+    (error) => error?.code === 'invalid_state'
   );
+
+  const agent = runtime.getState().agents.find((item) => item.id === 'agent-focus-missing');
+  assert.equal(agent?.status, 'missing');
+  assert.equal(agent?.last_message, 'pane missing');
 
   cleanup(repoRoot);
 });
 
-test('agent lifecycle runtime restore clears stale pane metadata when pane is gone', async () => {
+test('agent lifecycle runtime focus marks agent missing when pane is stale', async () => {
   const { repoRoot, runtime } = createRuntimeHarness({
     commandRunner: async (command, args) => {
-      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%91') {
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%99') {
         const error = new Error('pane not found');
         error.code = 'command_failed';
         throw error;
@@ -329,23 +371,109 @@ test('agent lifecycle runtime restore clears stale pane metadata when pane is go
       return { stdout: '', stderr: '', code: 0 };
     }
   });
-
   await runtime.addAgent({
-    id: 'agent-restore-pane',
+    id: 'agent-focus-stale',
     create_worktree: false,
     create_tmux: false,
-    pane_id: '%91',
-    worktree_path: repoRoot
+    pane_id: '%99'
   });
-  await runtime.dispatchAgentAction('agent-restore-pane', 'remove', {});
 
-  const result = await runtime.dispatchAgentAction('agent-restore-pane', 'restore', {});
-  assert.equal(result.ok, true);
-  assert.equal(result.action, 'restore');
-  assert.equal(result.restore?.pane_available, false);
-  assert.equal(result.agent?.status, 'active');
-  assert.equal(result.agent?.pane_id, null);
-  assert.equal(result.agent?.last_message, 'restored; pane unavailable');
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-focus-stale', 'focus', {}),
+    (error) => error?.code === 'invalid_state' && /pane is unavailable/.test(error.message)
+  );
+
+  const agent = runtime.getState().agents.find((item) => item.id === 'agent-focus-stale');
+  assert.equal(agent?.status, 'missing');
+  assert.equal(agent?.pane_id, null);
+  assert.equal(agent?.last_message, 'pane missing');
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime reconcile recreates helper panes from existing worktrees', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%101') {
+        const error = new Error('pane not found');
+        error.code = 'command_failed';
+        throw error;
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%145\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  const managedWorktree = path.join(repoRoot, '.agent/worktrees/agent-recreate');
+  fs.mkdirSync(managedWorktree, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-recreate',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%101',
+    worktree_path: managedWorktree
+  });
+
+  const reconcile = await runtime.reconcileAgents();
+  const record = reconcile.results.find((item) => item.agent_id === 'agent-recreate');
+  assert.equal(record?.disposition, 'recreated');
+  assert.equal(record?.pane_id, '%145');
+
+  const agent = runtime.getState().agents.find((item) => item.id === 'agent-recreate');
+  assert.equal(agent?.status, 'active');
+  assert.equal(agent?.pane_id, '%145');
+  assert.equal(agent?.last_message, 'agent restored after startup');
+  assert.equal(
+    commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'new-window'),
+    true
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime reconcile marks helper missing when worktree is gone', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%102') {
+        const error = new Error('pane not found');
+        error.code = 'command_failed';
+        throw error;
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%146\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  const missingWorktree = path.join(repoRoot, '.agent/worktrees/agent-missing');
+  fs.mkdirSync(missingWorktree, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-missing',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%102',
+    worktree_path: missingWorktree
+  });
+  fs.rmSync(missingWorktree, { recursive: true, force: true });
+
+  const reconcile = await runtime.reconcileAgents();
+  const record = reconcile.results.find((item) => item.agent_id === 'agent-missing');
+  assert.equal(record?.disposition, 'missing');
+  assert.equal(record?.reason, 'worktree_missing');
+
+  const agent = runtime.getState().agents.find((item) => item.id === 'agent-missing');
+  assert.equal(agent?.status, 'missing');
+  assert.equal(agent?.pane_id, null);
+  assert.equal(agent?.last_message, 'worktree missing');
 
   cleanup(repoRoot);
 });
@@ -384,9 +512,6 @@ test('agent lifecycle api serves state and add endpoints', async () => {
   assert.equal(addSnapshot.body?.ok, true);
   assert.equal(addSnapshot.body?.result?.agent?.id, 'agent-http');
 
-  const stateAfter = runtime.getState();
-  assert.equal(stateAfter.agents.some((agent) => agent.id === 'agent-http'), true);
-
   const listReq = createRequest({
     method: 'GET',
     url: '/api/agents?include_removed=1'
@@ -402,11 +527,11 @@ test('agent lifecycle api serves state and add endpoints', async () => {
   cleanup(repoRoot);
 });
 
-test('agent lifecycle api returns stop partial orchestration details', async () => {
+test('agent lifecycle api surfaces focus validation failure for stale pane', async () => {
   const { repoRoot, runtime } = createRuntimeHarness({
     commandRunner: async (command, args) => {
-      if (command === 'tmux' && args[0] === 'kill-pane') {
-        const error = new Error('kill-pane failed');
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%77') {
+        const error = new Error('pane not found');
         error.code = 'command_failed';
         throw error;
       }
@@ -422,60 +547,25 @@ test('agent lifecycle api returns stop partial orchestration details', async () 
   const api = createAgentLifecycleApi({ runtime });
 
   await runtime.addAgent({
-    id: 'agent-http-stop',
+    id: 'agent-http-focus',
     create_worktree: false,
     create_tmux: false,
     pane_id: '%77'
   });
 
-  const stopReq = createRequest({
+  const focusReq = createRequest({
     method: 'POST',
-    url: '/api/agents/agent-http-stop/stop',
-    body: {
-      kill_pane: true
-    }
-  });
-  const stopRes = createResponseCapture();
-  const handled = await api.handleHttpRequest(stopReq, stopRes);
-  assert.equal(handled, true);
-  const snapshot = stopRes.snapshot();
-  assert.equal(snapshot.statusCode, 200);
-  assert.equal(snapshot.body?.ok, true);
-  assert.equal(snapshot.body?.result?.orchestration?.pane_killed, false);
-  assert.equal(typeof snapshot.body?.result?.orchestration?.pane_kill_error, 'string');
-  assert.equal(snapshot.body?.result?.agent?.last_message, 'stopped; pane still attached');
-
-  cleanup(repoRoot);
-});
-
-test('agent lifecycle api surfaces restore validation failure for missing worktree', async () => {
-  const { repoRoot, runtime } = createRuntimeHarness();
-  const api = createAgentLifecycleApi({ runtime });
-  const missingWorktreePath = path.join(repoRoot, '.agent/worktrees/agent-http-restore-missing');
-  fs.mkdirSync(missingWorktreePath, { recursive: true });
-
-  await runtime.addAgent({
-    id: 'agent-http-restore-missing',
-    create_worktree: false,
-    create_tmux: false,
-    worktree_path: missingWorktreePath
-  });
-  fs.rmSync(missingWorktreePath, { recursive: true, force: true });
-  await runtime.dispatchAgentAction('agent-http-restore-missing', 'remove', {});
-
-  const restoreReq = createRequest({
-    method: 'POST',
-    url: '/api/agents/agent-http-restore-missing/restore',
+    url: '/api/agents/agent-http-focus/focus',
     body: {}
   });
-  const restoreRes = createResponseCapture();
-  const handled = await api.handleHttpRequest(restoreReq, restoreRes);
+  const focusRes = createResponseCapture();
+  const handled = await api.handleHttpRequest(focusReq, focusRes);
   assert.equal(handled, true);
-  const snapshot = restoreRes.snapshot();
+  const snapshot = focusRes.snapshot();
   assert.equal(snapshot.statusCode, 409);
   assert.equal(snapshot.body?.ok, false);
   assert.equal(snapshot.body?.error, 'invalid_state');
-  assert.match(snapshot.body?.detail ?? '', /restore requires existing worktree path/);
+  assert.match(snapshot.body?.detail ?? '', /pane is unavailable/);
 
   cleanup(repoRoot);
 });
@@ -494,14 +584,6 @@ test('agent lifecycle api returns delete-worktree noop message', async () => {
   });
   fs.rmSync(missingWorktreePath, { recursive: true, force: true });
 
-  const removeReq = createRequest({
-    method: 'POST',
-    url: '/api/agents/agent-http-delete-noop/remove',
-    body: {}
-  });
-  const removeRes = createResponseCapture();
-  await api.handleHttpRequest(removeReq, removeRes);
-
   const deleteReq = createRequest({
     method: 'POST',
     url: '/api/agents/agent-http-delete-noop/delete-worktree',
@@ -515,6 +597,58 @@ test('agent lifecycle api returns delete-worktree noop message', async () => {
   assert.equal(snapshot.body?.ok, true);
   assert.equal(snapshot.body?.result?.noop, true);
   assert.equal(snapshot.body?.result?.agent?.last_message, 'worktree already absent');
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle api returns delete success and purged state', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%98') {
+        return { stdout: '%98\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'kill-pane') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'git' && args[1] === 'worktree' && args[2] === 'remove') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%45\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  const api = createAgentLifecycleApi({ runtime });
+  const managedWorktree = path.join(repoRoot, '.agent/worktrees/agent-http-delete');
+  fs.mkdirSync(managedWorktree, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-http-delete',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%98',
+    worktree_path: managedWorktree,
+    source_repo_path: repoRoot
+  });
+
+  const deleteReq = createRequest({
+    method: 'POST',
+    url: '/api/agents/agent-http-delete/delete',
+    body: {}
+  });
+  const deleteRes = createResponseCapture();
+  const handled = await api.handleHttpRequest(deleteReq, deleteRes);
+  assert.equal(handled, true);
+  const snapshot = deleteRes.snapshot();
+  assert.equal(snapshot.statusCode, 200);
+  assert.equal(snapshot.body?.ok, true);
+  assert.equal(snapshot.body?.result?.action, 'delete');
+  assert.equal(snapshot.body?.result?.agent?.id, 'agent-http-delete');
+  assert.equal(snapshot.body?.result?.state?.agents?.some((agent) => agent.id === 'agent-http-delete'), false);
 
   cleanup(repoRoot);
 });

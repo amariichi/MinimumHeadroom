@@ -265,6 +265,21 @@ const server = await startFaceWebSocketServer({
 });
 liveServer = server;
 
+try {
+  const reconcileResult = await agentLifecycleRuntime.reconcileAgents({
+    recreate_missing_panes: true
+  });
+  const recreated = reconcileResult.results.filter((item) => item.disposition === 'recreated').length;
+  const missing = reconcileResult.results.filter((item) => item.disposition === 'missing').length;
+  if (recreated > 0 || missing > 0) {
+    console.info(
+      `[face-app] agent reconcile: recreated=${recreated} missing=${missing} total=${reconcileResult.results.length}`
+    );
+  }
+} catch (error) {
+  console.warn(`[face-app] agent reconcile failed: ${error.message}`);
+}
+
 operatorRealtimeAsrProxy = createOperatorRealtimeAsrProxy({
   enabled: operatorRealtimeAsrEnabled,
   endpointUrl: operatorRealtimeAsrEndpointUrl,

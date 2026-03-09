@@ -2,24 +2,34 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { listAgentLifecycleActions, shouldShowMobileAgentList } from '../../face-app/public/agent_dashboard_actions.js';
 
-test('listAgentLifecycleActions exposes expected controls per status', () => {
-  const active = listAgentLifecycleActions({ status: 'active', pane_id: '%1' }).map((item) => item.action);
-  assert.deepEqual(active, ['focus', 'pause', 'stop', 'remove']);
-
-  const paused = listAgentLifecycleActions({ status: 'paused', pane_id: '%2' }).map((item) => item.action);
-  assert.deepEqual(paused, ['focus', 'resume', 'stop', 'remove']);
-
-  const removed = listAgentLifecycleActions({ status: 'removed', pane_id: '%3' }).map((item) => item.action);
-  assert.deepEqual(removed, ['restore', 'delete-worktree']);
+test('listAgentLifecycleActions exposes delete-only control for known statuses', () => {
+  for (const status of ['active', 'missing']) {
+    const actions = listAgentLifecycleActions({ status, pane_id: '%1' }).map((item) => item.action);
+    assert.deepEqual(actions, ['delete']);
+  }
+  assert.deepEqual(listAgentLifecycleActions({ status: 'unknown' }), []);
 });
 
-test('shouldShowMobileAgentList requires mobile mode and more than one non-removed agent', () => {
-  const agents = [{ status: 'active' }, { status: 'paused' }];
-  assert.equal(shouldShowMobileAgentList(agents, { isMobileUi: true, operatorPanelEnabled: true }), true);
-  assert.equal(shouldShowMobileAgentList(agents, { isMobileUi: false, operatorPanelEnabled: true }), false);
+test('shouldShowMobileAgentList requires mobile mode, operator panel, and picker open', () => {
+  const agents = [{ status: 'active' }];
   assert.equal(
-    shouldShowMobileAgentList([{ status: 'active' }, { status: 'removed' }], { isMobileUi: true, operatorPanelEnabled: true }),
+    shouldShowMobileAgentList(agents, { isMobileUi: true, operatorPanelEnabled: true, pickerOpen: true }),
+    true
+  );
+  assert.equal(
+    shouldShowMobileAgentList(agents, { isMobileUi: true, operatorPanelEnabled: true, pickerOpen: false }),
+    false
+  );
+  assert.equal(
+    shouldShowMobileAgentList(agents, { isMobileUi: false, operatorPanelEnabled: true, pickerOpen: true }),
+    false
+  );
+  assert.equal(
+    shouldShowMobileAgentList(agents, { isMobileUi: true, operatorPanelEnabled: false, pickerOpen: true }),
+    false
+  );
+  assert.equal(
+    shouldShowMobileAgentList(null, { isMobileUi: true, operatorPanelEnabled: true, pickerOpen: true }),
     false
   );
 });
-

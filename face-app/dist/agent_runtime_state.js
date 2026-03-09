@@ -5,8 +5,7 @@ import path from 'node:path';
 const SCHEMA_VERSION = 1;
 const DEFAULT_CAP = 4;
 const HARD_CAP = 8;
-const ACTIVE_STATUSES = new Set(['active', 'paused', 'parked', 'stopped']);
-const KNOWN_STATUSES = new Set([...ACTIVE_STATUSES, 'removed']);
+const TRACKED_STATUSES = new Set(['active', 'missing']);
 
 function toLogger(log) {
   if (!log) {
@@ -67,21 +66,29 @@ function createEmptyState(now, hardCap = HARD_CAP) {
 
 function normalizeStatus(raw, fallback = 'active') {
   const normalized = asNonEmptyString(raw)?.toLowerCase();
-  if (!normalized || !KNOWN_STATUSES.has(normalized)) {
+  if (!normalized) {
     return fallback;
   }
-  return normalized;
+  if (normalized === 'removed') {
+    return null;
+  }
+  if (TRACKED_STATUSES.has(normalized)) {
+    return normalized;
+  }
+  return fallback;
 }
 
 function normalizeAgent(rawAgent, index, now, hardCap) {
   const ts = nowMs(now);
-  const normalized = {
+  const normalizedStatus = normalizeStatus(rawAgent?.status, 'active');
+  if (!normalizedStatus) {
+    return null;
+  }
+  return {
     id: asNonEmptyString(rawAgent?.id) ?? `agent-${index + 1}`,
     session_id: asNonEmptyString(rawAgent?.session_id),
-    status: normalizeStatus(rawAgent?.status),
-    slot: asInteger(rawAgent?.slot, null, 0),
-    removed_slot: asInteger(rawAgent?.removed_slot, null, 0),
-    status_before_remove: asNonEmptyString(rawAgent?.status_before_remove),
+    status: normalizedStatus,
+    slot: asInteger(rawAgent?.slot, index < hardCap ? index : null, 0),
     source_repo_path: asNonEmptyString(rawAgent?.source_repo_path),
     worktree_path: asNonEmptyString(rawAgent?.worktree_path),
     branch: asNonEmptyString(rawAgent?.branch),
@@ -89,43 +96,13 @@ function normalizeAgent(rawAgent, index, now, hardCap) {
     last_message: asNonEmptyString(rawAgent?.last_message),
     message_source: asNonEmptyString(rawAgent?.message_source),
     created_at: asInteger(rawAgent?.created_at, ts, 0),
-    updated_at: asInteger(rawAgent?.updated_at, ts, 0),
-    paused_at: asInteger(rawAgent?.paused_at, null, 0),
-    removed_at: asInteger(rawAgent?.removed_at, null, 0)
+    updated_at: asInteger(rawAgent?.updated_at, ts, 0)
   };
-
-  if (normalized.status === 'removed') {
-    if (normalized.removed_slot === null && normalized.slot !== null) {
-      normalized.removed_slot = normalized.slot;
-    }
-    normalized.slot = null;
-    normalized.removed_at = normalized.removed_at ?? normalized.updated_at;
-  } else {
-    if (normalized.slot === null) {
-      normalized.slot = index < hardCap ? index : null;
-    }
-    normalized.removed_slot = null;
-    normalized.removed_at = null;
-    if (normalized.status_before_remove && normalizeStatus(normalized.status_before_remove, '') === 'removed') {
-      normalized.status_before_remove = null;
-    }
-  }
-
-  if (normalized.status !== 'paused') {
-    normalized.paused_at = null;
-  } else {
-    normalized.paused_at = normalized.paused_at ?? normalized.updated_at;
-  }
-
-  return normalized;
 }
 
 function nextAvailableSlot(agents) {
   const used = new Set();
   for (const agent of agents) {
-    if (agent.status === 'removed') {
-      continue;
-    }
     if (Number.isInteger(agent.slot) && agent.slot >= 0) {
       used.add(agent.slot);
     }
@@ -159,7 +136,7 @@ function normalizeState(rawState, now, hardCap) {
   const seenIds = new Set();
   for (let index = 0; index < rawState.agents.length; index += 1) {
     const normalized = normalizeAgent(rawState.agents[index], index, now, hardCap);
-    if (seenIds.has(normalized.id)) {
+    if (!normalized || seenIds.has(normalized.id)) {
       continue;
     }
     seenIds.add(normalized.id);
@@ -168,9 +145,6 @@ function normalizeState(rawState, now, hardCap) {
 
   const occupied = new Set();
   for (const agent of state.agents) {
-    if (agent.status === 'removed') {
-      continue;
-    }
     if (!Number.isInteger(agent.slot) || agent.slot < 0 || occupied.has(agent.slot)) {
       agent.slot = nextAvailableSlot(state.agents);
     }
@@ -199,14 +173,8 @@ function backupCorruptedStateFile(statePath, log) {
   }
 }
 
-function countActiveOrParkedAgents(agents) {
-  let count = 0;
-  for (const agent of agents) {
-    if (agent.status !== 'removed') {
-      count += 1;
-    }
-  }
-  return count;
+function countTrackedAgents(agents) {
+  return Array.isArray(agents) ? agents.length : 0;
 }
 
 function normalizeStatePath(inputPath, repoRoot) {
@@ -283,16 +251,16 @@ export function createAgentRuntimeStateStore(options = {}) {
     return clone(state);
   }
 
-  function listAgents(options = {}) {
+  function listAgents() {
     ensureLoaded();
-    const includeRemoved = options.includeRemoved === true;
-    const listed = state.agents
-      .filter((agent) => includeRemoved || agent.status !== 'removed')
-      .sort((left, right) => {
-        const leftSlot = Number.isInteger(left.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
-        const rightSlot = Number.isInteger(right.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
+    const listed = [...state.agents].sort((left, right) => {
+      const leftSlot = Number.isInteger(left.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
+      const rightSlot = Number.isInteger(right.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
+      if (leftSlot !== rightSlot) {
         return leftSlot - rightSlot;
-      });
+      }
+      return String(left.id).localeCompare(String(right.id));
+    });
     return clone(listed);
   }
 
@@ -308,7 +276,7 @@ export function createAgentRuntimeStateStore(options = {}) {
 
   function addAgent(input = {}) {
     ensureLoaded();
-    if (countActiveOrParkedAgents(state.agents) >= hardCap) {
+    if (countTrackedAgents(state.agents) >= hardCap) {
       throw createStoreError('hard_cap_reached', `agent hard cap reached (${hardCap})`);
     }
 
@@ -320,20 +288,15 @@ export function createAgentRuntimeStateStore(options = {}) {
     const ts = nowMs(now);
     const requestedSlot = asInteger(input.slot, null, 0);
     const slot = Number.isInteger(requestedSlot) ? requestedSlot : nextAvailableSlot(state.agents);
-    const occupied = new Set(
-      state.agents.filter((item) => item.status !== 'removed' && Number.isInteger(item.slot)).map((item) => item.slot)
-    );
+    const occupied = new Set(state.agents.filter((item) => Number.isInteger(item.slot)).map((item) => item.slot));
     const resolvedSlot = occupied.has(slot) ? nextAvailableSlot(state.agents) : slot;
-    const status = normalizeStatus(input.status, 'active');
-    const normalizedStatus = status === 'removed' ? 'active' : status;
+    const status = normalizeStatus(input.status, 'active') ?? 'active';
 
     const agent = {
       id,
       session_id: asNonEmptyString(input.session_id),
-      status: normalizedStatus,
+      status,
       slot: resolvedSlot,
-      removed_slot: null,
-      status_before_remove: null,
       source_repo_path: asNonEmptyString(input.source_repo_path),
       worktree_path: asNonEmptyString(input.worktree_path),
       branch: asNonEmptyString(input.branch),
@@ -341,9 +304,7 @@ export function createAgentRuntimeStateStore(options = {}) {
       last_message: normalizeMessageValue(input.last_message),
       message_source: asNonEmptyString(input.message_source),
       created_at: ts,
-      updated_at: ts,
-      paused_at: normalizedStatus === 'paused' ? ts : null,
-      removed_at: null
+      updated_at: ts
     };
 
     state.agents.push(agent);
@@ -399,104 +360,30 @@ export function createAgentRuntimeStateStore(options = {}) {
     };
   }
 
-  function pauseAgent(agentId) {
-    return transitionAgent(agentId, 'pause', (agent) => {
-      if (agent.status === 'removed') {
-        throw createStoreError('invalid_state', 'cannot pause a removed agent');
-      }
-      if (agent.status === 'paused') {
+  function setAgentStatus(agentId, status, options = {}) {
+    const nextStatus = normalizeStatus(status, 'active');
+    if (!nextStatus) {
+      throw createStoreError('invalid_status', `unsupported status: ${status}`);
+    }
+    const message = Object.prototype.hasOwnProperty.call(options, 'message')
+      ? normalizeMessageValue(options.message)
+      : undefined;
+    const messageSource = asNonEmptyString(options.message_source) ?? 'status';
+    return transitionAgent(agentId, 'set_status', (agent) => {
+      const sameStatus = agent.status === nextStatus;
+      const sameMessage = message === undefined || agent.last_message === message;
+      if (sameStatus && sameMessage) {
         return { noop: true };
       }
-      agent.status = 'paused';
-      agent.paused_at = nowMs(now);
-      return { noop: false, message: 'paused' };
-    });
-  }
-
-  function resumeAgent(agentId) {
-    return transitionAgent(agentId, 'resume', (agent) => {
-      if (agent.status === 'removed') {
-        throw createStoreError('invalid_state', 'cannot resume a removed agent');
+      agent.status = nextStatus;
+      if (message !== undefined) {
+        return {
+          noop: false,
+          message,
+          message_source: messageSource
+        };
       }
-      if (agent.status === 'active') {
-        return { noop: true };
-      }
-      if (agent.status !== 'paused') {
-        throw createStoreError('invalid_transition', `cannot resume from status=${agent.status}`);
-      }
-      agent.status = 'active';
-      agent.paused_at = null;
-      return { noop: false, message: 'active' };
-    });
-  }
-
-  function parkAgent(agentId) {
-    return transitionAgent(agentId, 'park', (agent) => {
-      if (agent.status === 'removed') {
-        throw createStoreError('invalid_state', 'cannot park a removed agent');
-      }
-      if (agent.status === 'parked') {
-        return { noop: true };
-      }
-      agent.status = 'parked';
-      agent.paused_at = null;
-      return { noop: false, message: 'parked' };
-    });
-  }
-
-  function stopAgent(agentId) {
-    return transitionAgent(agentId, 'stop', (agent) => {
-      if (agent.status === 'removed') {
-        throw createStoreError('invalid_state', 'cannot stop a removed agent');
-      }
-      if (agent.status === 'stopped') {
-        return { noop: true };
-      }
-      agent.status = 'stopped';
-      agent.paused_at = null;
-      return { noop: false, message: 'stopped' };
-    });
-  }
-
-  function removeAgent(agentId) {
-    return transitionAgent(agentId, 'remove', (agent) => {
-      if (agent.status === 'removed') {
-        return { noop: true };
-      }
-      agent.status_before_remove = agent.status;
-      agent.removed_slot = Number.isInteger(agent.slot) ? agent.slot : agent.removed_slot;
-      agent.slot = null;
-      agent.status = 'removed';
-      agent.removed_at = nowMs(now);
-      agent.paused_at = null;
-      return { noop: false, message: 'removed' };
-    });
-  }
-
-  function restoreAgent(agentId) {
-    return transitionAgent(agentId, 'restore', (agent) => {
-      if (agent.status !== 'removed') {
-        return { noop: true };
-      }
-
-      let restoredStatus = normalizeStatus(agent.status_before_remove, 'active');
-      if (restoredStatus === 'removed') {
-        restoredStatus = 'active';
-      }
-      agent.status = restoredStatus;
-
-      const requestedSlot = Number.isInteger(agent.removed_slot) ? agent.removed_slot : nextAvailableSlot(state.agents);
-      const used = new Set(
-        state.agents
-          .filter((item) => item.id !== agent.id && item.status !== 'removed' && Number.isInteger(item.slot))
-          .map((item) => item.slot)
-      );
-      agent.slot = used.has(requestedSlot) ? nextAvailableSlot(state.agents) : requestedSlot;
-      agent.removed_slot = null;
-      agent.status_before_remove = null;
-      agent.removed_at = null;
-      agent.paused_at = agent.status === 'paused' ? nowMs(now) : null;
-      return { noop: false, message: 'restored' };
+      return { noop: false };
     });
   }
 
@@ -529,8 +416,8 @@ export function createAgentRuntimeStateStore(options = {}) {
     const nextSessionId = Object.prototype.hasOwnProperty.call(updates, 'session_id')
       ? asNonEmptyString(updates.session_id)
       : undefined;
-    const nextStatusBeforeRemove = Object.prototype.hasOwnProperty.call(updates, 'status_before_remove')
-      ? asNonEmptyString(updates.status_before_remove)
+    const nextSlot = Object.prototype.hasOwnProperty.call(updates, 'slot')
+      ? asInteger(updates.slot, null, 0)
       : undefined;
 
     return transitionAgent(agentId, 'update_metadata', (agent) => {
@@ -556,13 +443,41 @@ export function createAgentRuntimeStateStore(options = {}) {
         agent.session_id = nextSessionId;
         changed = true;
       }
-      if (nextStatusBeforeRemove !== undefined && nextStatusBeforeRemove !== agent.status_before_remove) {
-        agent.status_before_remove = nextStatusBeforeRemove;
+      if (nextSlot !== undefined && nextSlot !== agent.slot) {
+        agent.slot = nextSlot;
         changed = true;
       }
 
       return { noop: !changed };
     });
+  }
+
+  function purgeAgent(agentId) {
+    ensureLoaded();
+    const id = asNonEmptyString(agentId);
+    if (!id) {
+      throw createStoreError('invalid_agent_id', 'agent id is empty');
+    }
+    const index = state.agents.findIndex((agent) => agent.id === id);
+    if (index < 0) {
+      throw createStoreError('agent_not_found', `agent not found: ${id}`);
+    }
+    const agent = state.agents[index];
+    if (asNonEmptyString(agent.pane_id)) {
+      throw createStoreError('invalid_state', 'purge requires pane to be detached first');
+    }
+    if (asNonEmptyString(agent.worktree_path)) {
+      throw createStoreError('invalid_state', 'purge requires worktree to be absent first');
+    }
+    state.agents.splice(index, 1);
+    const nextState = commitState();
+    return {
+      ok: true,
+      action: 'purge',
+      noop: false,
+      agent: clone(agent),
+      state: nextState
+    };
   }
 
   return {
@@ -573,13 +488,9 @@ export function createAgentRuntimeStateStore(options = {}) {
     getAgent,
     listAgents,
     addAgent,
-    pauseAgent,
-    resumeAgent,
-    parkAgent,
-    stopAgent,
-    removeAgent,
-    restoreAgent,
+    setAgentStatus,
     setAgentMessage,
-    updateAgentMetadata
+    updateAgentMetadata,
+    purgeAgent
   };
 }

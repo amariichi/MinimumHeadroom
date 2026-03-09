@@ -43,10 +43,18 @@ A face and operator companion app for coding agents.
 - Operator input pipeline:
   - terminal direct prompt, frontend PTT (JA/EN), and frontend text fallback
   - browser audio -> ASR proxy -> Parakeet ASR -> append to text fallback -> tmux send
+  - desktop keyboard safety: `Space` / `Shift+Space` PTT starts only after a 1 second hold
   - key controls (`Esc`, `↑`, `Select`, `↓`) and restart/recovery support
 - Terminal mirror:
   - read-only tmux tail snapshots
   - 500ms publish interval (change-only)
+- Multi-agent operator control:
+  - desktop current-agent bar opens the Agents surface from the normal one-agent view
+  - mobile current-agent bar opens the agent list without displacing `Esc`
+  - `+Agent` uses safe auto-generated id/branch/worktree defaults
+  - selecting a tile or list row changes the real operator focus target
+  - `Delete` removes the helper agent pane, worktree, and runtime record together
+  - after full tmux shutdown, helper agents are recreated from saved worktrees on the next startup when possible; otherwise they appear as `missing`
 - MCP tools for signaling:
   - `face.event` / `face.say` / `face.ping`
 - Browser 3D face renderer with state-driven animation:
@@ -224,6 +232,12 @@ Recommended one-shot startup:
 
 Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring.
 
+After startup, multi-agent use is centered in the operator pane:
+
+- Desktop: click the current-agent bar to open `Agents`, use `+Agent` to spawn a helper, click a tile to retarget the operator pane, and use `Delete` to remove a finished helper agent.
+- Mobile: tap the current-agent bar below the title row to open the agent list, then `+Agent`, tap an agent row to retarget, or `Delete` a helper agent.
+- If you later shut the whole tmux session down and start fresh with `./scripts/run-operator-once.sh`, saved helper agents are recreated from their existing worktrees; helpers whose worktrees are gone come back as `missing`.
+
 Useful variants:
 
 ```bash
@@ -243,7 +257,7 @@ Useful variants:
 The top-level README intentionally stays shorter now. Use these files for the full operational playbook:
 
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english)
-  - launcher choice, tmux bridge wiring, operator UI behavior, keyboard shortcuts, batch/realtime ASR, hidden mobile recovery, and Tailscale remote operation
+  - launcher choice, tmux bridge wiring, operator UI behavior, multi-agent add/focus/delete flow, keyboard shortcuts, hidden mobile recovery, supported shutdown guidance, batch/realtime ASR, and Tailscale remote operation
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#english)
   - Kokoro and Qwen3 setup, speech gate, long-speech behavior, and pre-synthesis text normalization
 
@@ -362,6 +376,7 @@ npm run asr-worker:smoke
 - オペレーター入力パイプライン:
   - 端末直接入力 / フロントエンドPTT（JA/EN）/ フロントエンドテキスト入力
   - ブラウザ音声 -> ASRプロキシ -> Parakeet ASR -> テキスト入力へ追記 -> tmux送信
+  - デスクトップの誤作動対策として `Space` / `Shift+Space` の PTT は 1 秒長押しで開始
   - キー操作（`Esc`, `↑`, `Select`, `↓`）と復旧用 `Restart`
 - ターミナルミラー:
   - tmux末尾出力の読み取り専用スナップショット

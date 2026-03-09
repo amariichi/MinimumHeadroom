@@ -126,7 +126,7 @@ test('face-app e2e serves operator UI config and dashboard markup', async () => 
   }
 });
 
-test('face-app e2e lifecycle HTTP flow updates state end to end', async () => {
+test('face-app e2e lifecycle HTTP flow keeps agent active before delete', async () => {
   const { child, baseUrl, stateRoot } = await startFaceAppE2e();
   try {
     const add = await postJson(`${baseUrl}/api/agents/add`, {
@@ -137,32 +137,37 @@ test('face-app e2e lifecycle HTTP flow updates state end to end', async () => {
     assert.equal(add.response.status, 200);
     assert.equal(add.payload?.ok, true);
 
-    const pause = await postJson(`${baseUrl}/api/agents/agent-e2e/pause`, {});
-    assert.equal(pause.response.status, 200);
-    assert.equal(pause.payload?.ok, true);
+    const stateResponse = await fetch(`${baseUrl}/api/agents/state`, { method: 'GET' });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = await stateResponse.json();
+    const agent = statePayload?.state?.agents?.find((item) => item.id === 'agent-e2e');
+    assert.equal(agent?.status, 'active');
+  } finally {
+    await stopChild(child);
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
 
-    const stateAfterPause = await fetch(`${baseUrl}/api/agents/state`, { method: 'GET' });
-    assert.equal(stateAfterPause.ok, true);
-    const pauseStatePayload = await stateAfterPause.json();
-    const pausedAgent = pauseStatePayload?.state?.agents?.find((agent) => agent.id === 'agent-e2e');
-    assert.equal(pausedAgent?.status, 'paused');
+test('face-app e2e delete action purges the agent from runtime state', async () => {
+  const { child, baseUrl, stateRoot } = await startFaceAppE2e();
+  try {
+    const add = await postJson(`${baseUrl}/api/agents/add`, {
+      id: 'agent-delete-e2e',
+      create_worktree: false,
+      create_tmux: false
+    });
+    assert.equal(add.response.status, 200);
+    assert.equal(add.payload?.ok, true);
 
-    const resume = await postJson(`${baseUrl}/api/agents/agent-e2e/resume`, {});
-    assert.equal(resume.response.status, 200);
-    assert.equal(resume.payload?.ok, true);
-
-    const remove = await postJson(`${baseUrl}/api/agents/agent-e2e/remove`, {});
-    assert.equal(remove.response.status, 200);
-    assert.equal(remove.payload?.ok, true);
-
-    const restore = await postJson(`${baseUrl}/api/agents/agent-e2e/restore`, {});
-    assert.equal(restore.response.status, 200);
-    assert.equal(restore.payload?.ok, true);
+    const deleted = await postJson(`${baseUrl}/api/agents/agent-delete-e2e/delete`, {});
+    assert.equal(deleted.response.status, 200);
+    assert.equal(deleted.payload?.ok, true);
+    assert.equal(deleted.payload?.result?.action, 'delete');
 
     const finalStateResponse = await fetch(`${baseUrl}/api/agents/state`, { method: 'GET' });
+    assert.equal(finalStateResponse.ok, true);
     const finalStatePayload = await finalStateResponse.json();
-    const finalAgent = finalStatePayload?.state?.agents?.find((agent) => agent.id === 'agent-e2e');
-    assert.equal(finalAgent?.status, 'active');
+    assert.equal(finalStatePayload?.state?.agents?.some((agent) => agent.id === 'agent-delete-e2e'), false);
   } finally {
     await stopChild(child);
     fs.rmSync(stateRoot, { recursive: true, force: true });

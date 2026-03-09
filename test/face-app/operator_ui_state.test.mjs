@@ -53,3 +53,28 @@ test('operator ui exposes Restart when bridge is offline or in recovery mode', (
   flags = deriveOperatorUiFlags(state);
   assert.equal(flags.showRestart, true);
 });
+
+test('operator ui keeps panel open after successful submit ack', () => {
+  let state = createInitialOperatorUiState();
+  state = reduceOperatorUiState(state, {
+    type: 'prompt_received',
+    requestId: 'r1',
+    prompt: {
+      request_id: 'r1',
+      state: 'awaiting_input',
+      input_kind: 'text'
+    }
+  });
+
+  state = reduceOperatorUiState(state, {
+    type: 'ack_received',
+    ok: true,
+    stage: 'sent_to_tmux',
+    requestId: 'r1'
+  });
+
+  const flags = deriveOperatorUiFlags(state);
+  assert.equal(flags.showPanel, true);
+  assert.equal(state.awaiting, false);
+  assert.equal(state.activeRequestId, null);
+});

@@ -13,7 +13,7 @@ test('normalizeDashboardAgent keeps expected shape', () => {
   const agent = normalizeDashboardAgent(
     {
       id: 'agent-a',
-      status: 'paused',
+      status: 'missing',
       slot: 2,
       pane_id: '%12',
       session_id: 'session-a',
@@ -23,7 +23,7 @@ test('normalizeDashboardAgent keeps expected shape', () => {
   );
 
   assert.equal(agent.id, 'agent-a');
-  assert.equal(agent.status, 'paused');
+  assert.equal(agent.status, 'missing');
   assert.equal(agent.slot, 2);
   assert.equal(agent.pane_id, '%12');
   assert.equal(agent.session_id, 'session-a');
@@ -36,9 +36,9 @@ test('normalizeAgentStatus falls back to active on unknown values', () => {
   assert.equal(normalizeAgentStatus(null), 'active');
 });
 
-test('sortDashboardAgents keeps removed agents at the end and respects slot', () => {
+test('sortDashboardAgents respects slot ordering', () => {
   const sorted = sortDashboardAgents([
-    normalizeDashboardAgent({ id: 'c', status: 'removed', slot: 0 }),
+    normalizeDashboardAgent({ id: 'c', status: 'missing', slot: 3 }),
     normalizeDashboardAgent({ id: 'b', status: 'active', slot: 3 }),
     normalizeDashboardAgent({ id: 'a', status: 'active', slot: 1 })
   ]);
@@ -52,24 +52,30 @@ test('sortDashboardAgents keeps removed agents at the end and respects slot', ()
 test('deriveDashboardMode returns multi only on desktop with multiple active agents', () => {
   const agents = [
     normalizeDashboardAgent({ id: 'a', status: 'active' }),
-    normalizeDashboardAgent({ id: 'b', status: 'paused' })
+    normalizeDashboardAgent({ id: 'b', status: 'missing' })
   ];
   assert.equal(deriveDashboardMode(agents, { isMobileUi: false }), 'multi');
   assert.equal(deriveDashboardMode(agents, { isMobileUi: true }), 'single');
 });
 
+test('deriveDashboardMode supports additional active tiles on desktop', () => {
+  const agents = [normalizeDashboardAgent({ id: 'a', status: 'active' })];
+  assert.equal(deriveDashboardMode(agents, { isMobileUi: false }), 'single');
+  assert.equal(deriveDashboardMode(agents, { isMobileUi: false, additionalActiveCount: 1 }), 'multi');
+  assert.equal(deriveDashboardMode(agents, { isMobileUi: true, additionalActiveCount: 1 }), 'single');
+});
+
 test('deriveAgentTileTone prioritizes speaking state', () => {
   const active = normalizeDashboardAgent({ status: 'active' });
-  const paused = normalizeDashboardAgent({ status: 'paused' });
+  const missing = normalizeDashboardAgent({ status: 'missing' });
   assert.equal(deriveAgentTileTone(active, { speaking: false }), 'working');
-  assert.equal(deriveAgentTileTone(paused, { speaking: false }), 'idle');
-  assert.equal(deriveAgentTileTone(paused, { speaking: true }), 'speaking');
+  assert.equal(deriveAgentTileTone(missing, { speaking: false }), 'idle');
+  assert.equal(deriveAgentTileTone(missing, { speaking: true }), 'speaking');
 });
 
 test('summarizeAgentTileMessage prefers transient then persisted text', () => {
   const agent = normalizeDashboardAgent({ status: 'active', last_message: 'persisted' });
   assert.equal(summarizeAgentTileMessage(agent, 'transient'), 'transient');
   assert.equal(summarizeAgentTileMessage(agent, null), 'persisted');
-  assert.equal(summarizeAgentTileMessage(normalizeDashboardAgent({ status: 'removed' })), 'removed');
+  assert.equal(summarizeAgentTileMessage(normalizeDashboardAgent({ status: 'missing' })), 'missing');
 });
-

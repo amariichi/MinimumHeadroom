@@ -79,6 +79,7 @@ body.boot-pending #operator-handle {
 .panel-right {
   right: 16px;
   bottom: 16px;
+  display: none;
 }
 
 .panel-title {
@@ -313,6 +314,10 @@ body.boot-pending #operator-handle {
   backdrop-filter: blur(6px);
 }
 
+body.agent-dashboard-open .panel-left {
+  display: none;
+}
+
 .agent-dashboard-header {
   display: flex;
   align-items: center;
@@ -386,9 +391,30 @@ body.boot-pending #operator-handle {
   border: 1px solid rgba(118, 226, 255, 0.22);
   border-radius: 10px;
   background: rgba(5, 13, 21, 0.82);
-  padding: 8px;
+  padding: 0;
   display: grid;
   gap: 7px;
+  overflow: hidden;
+}
+
+.agent-tile-focus {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 8px;
+  margin: 0;
+  width: 100%;
+  display: grid;
+  gap: 7px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-tile-focus:focus-visible {
+  outline: 2px solid rgba(111, 243, 184, 0.76);
+  outline-offset: 3px;
 }
 
 .agent-tile[data-tone='idle'] {
@@ -406,7 +432,16 @@ body.boot-pending #operator-handle {
 
 .agent-tile.is-selected {
   border-color: rgba(111, 243, 184, 0.76);
+  background: rgba(33, 78, 62, 0.92);
   box-shadow: inset 0 0 0 1px rgba(111, 243, 184, 0.22);
+}
+
+.agent-tile.is-selected[data-tone='working'] {
+  background: rgba(42, 88, 73, 0.94);
+}
+
+.agent-tile.is-selected[data-tone='speaking'] {
+  background: rgba(35, 95, 89, 0.94);
 }
 
 .agent-tile-header {
@@ -452,6 +487,7 @@ body.boot-pending #operator-handle {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  padding: 0 8px 8px;
 }
 
 .agent-tile-actions .operator-btn {
@@ -466,9 +502,9 @@ body.boot-pending #operator-handle {
   right: 14px;
   top: 58px;
   left: auto;
-  bottom: auto;
-  width: min(430px, calc(100vw - 28px));
-  max-height: calc(100vh - 72px);
+  bottom: 14px;
+  width: min(560px, calc(100vw - 28px));
+  max-height: none;
   overflow: auto;
   border-radius: 14px;
   border: 1px solid rgba(118, 226, 255, 0.34);
@@ -503,6 +539,35 @@ body.boot-pending #operator-handle {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.operator-agent-current {
+  border: 1px solid rgba(118, 226, 255, 0.3);
+  border-radius: 12px;
+  background: rgba(8, 28, 41, 0.82);
+  color: #e8f5ff;
+  padding: 8px 10px;
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.operator-agent-current:hover {
+  background: rgba(12, 37, 53, 0.9);
+}
+
+.operator-agent-current-label {
+  font-family: 'JetBrains Mono', 'Consolas', 'Roboto Mono', monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.operator-agent-current-meta {
+  font-size: 0.64rem;
+  line-height: 1.3;
+  color: #b7d4ea;
 }
 
 .operator-btn {
@@ -552,6 +617,13 @@ body.boot-pending #operator-handle {
   color: var(--text-muted);
 }
 
+.operator-agent-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
 .operator-agent-list-items {
   display: grid;
   gap: 6px;
@@ -561,9 +633,35 @@ body.boot-pending #operator-handle {
   border: 1px solid rgba(118, 226, 255, 0.2);
   border-radius: 8px;
   background: rgba(2, 9, 14, 0.72);
-  padding: 6px;
+  padding: 0;
   display: grid;
   gap: 5px;
+  overflow: hidden;
+}
+
+.operator-agent-item.is-selected {
+  background: rgba(33, 78, 62, 0.9);
+  border-color: rgba(111, 243, 184, 0.65);
+}
+
+.operator-agent-item-focus {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 6px;
+  margin: 0;
+  width: 100%;
+  display: grid;
+  gap: 5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.operator-agent-item-focus:focus-visible {
+  outline: 2px solid rgba(111, 243, 184, 0.76);
+  outline-offset: 3px;
 }
 
 .operator-agent-item-header {
@@ -600,6 +698,8 @@ body.boot-pending #operator-handle {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  justify-content: flex-end;
+  padding: 0 6px 6px;
 }
 
 .operator-agent-item-actions .operator-btn {
@@ -804,8 +904,8 @@ body.boot-pending #operator-handle {
   --operator-mirror-fg: #f2f8ff;
   --operator-mirror-bg-solid: #02080e;
   margin: 0;
-  min-height: 80px;
-  max-height: 200px;
+  min-height: 220px;
+  max-height: 38vh;
   overflow: auto;
   border: 1px solid rgba(118, 226, 255, 0.22);
   border-radius: 10px;
@@ -862,7 +962,7 @@ body.boot-pending #operator-handle {
 }
 
 body.ui-mode-pc .operator-panel {
-  width: min(430px, calc(100vw - 28px));
+  width: min(560px, calc(100vw - 28px));
 }
 
 body.ui-mode-mobile .panel {
@@ -917,8 +1017,8 @@ body.ui-mode-mobile .operator-mirror-row {
 
 body.ui-mode-mobile .operator-mirror {
   display: block;
-  min-height: min(42vh, 360px);
-  max-height: min(46vh, 420px);
+  min-height: min(38vh, 320px);
+  max-height: min(44vh, 400px);
   font-size: 0.96rem;
   line-height: 1.5;
   background: rgba(2, 8, 14, 0.3);
@@ -970,6 +1070,11 @@ body.ui-mode-mobile .operator-esc {
   bottom: auto;
 }
 
+body.ui-mode-mobile .operator-agent-current {
+  margin-right: 66px;
+  padding-right: 14px;
+}
+
 body.ui-mode-mobile .operator-handle {
   left: 12px;
   bottom: 12px;
@@ -982,10 +1087,6 @@ body.ui-mode-mobile #operator-esc-inline.operator-btn {
   font-weight: 800;
   line-height: 1.04;
   padding: 12px 16px;
-}
-
-body.agent-mode-multi .panel {
-  display: none;
 }
 
 @media (max-width: 960px) {
@@ -1020,12 +1121,12 @@ body.agent-mode-multi .panel {
   }
 
   .operator-panel {
-    width: min(92vw, 420px);
+    width: min(92vw, 520px);
     right: 10px;
     top: 52px;
     left: auto;
-    bottom: auto;
-    max-height: calc(100vh - 64px);
+    bottom: 10px;
+    max-height: none;
     padding: 8px;
   }
 

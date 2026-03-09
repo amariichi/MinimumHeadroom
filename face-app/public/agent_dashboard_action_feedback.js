@@ -54,31 +54,19 @@ export function summarizeAgentActionSuccess(agentId, action, payload, options = 
     };
   }
 
-  if (
-    actionName === 'stop' &&
-    result?.orchestration?.pane_killed === false &&
-    asNonEmptyString(result?.agent?.pane_id)
-  ) {
-    return {
-      statusTone: 'warn',
-      statusText: truncateText(`${id}: stop partial (pane alive)`, statusMax),
-      tileMessage: truncateText('stopped; pane is still attached', tileMax)
-    };
-  }
-
-  if (actionName === 'restore' && result?.restore?.pane_available === false) {
-    return {
-      statusTone: 'warn',
-      statusText: truncateText(`${id}: restore partial (pane unavailable)`, statusMax),
-      tileMessage: 'restored; pane unavailable'
-    };
-  }
-
   if (actionName === 'delete-worktree' && noop) {
     return {
       statusTone: 'ok',
       statusText: truncateText(`${id}: delete-worktree noop`, statusMax),
       tileMessage: 'worktree already absent'
+    };
+  }
+
+  if (actionName === 'delete') {
+    return {
+      statusTone: 'ok',
+      statusText: truncateText(`${id}: deleted`, statusMax),
+      tileMessage: 'deleted'
     };
   }
 

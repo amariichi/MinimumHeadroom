@@ -6,33 +6,18 @@ import {
 } from '../../face-app/public/agent_dashboard_action_feedback.js';
 
 test('summarizeAgentActionSuccess returns generic ok feedback', () => {
-  const feedback = summarizeAgentActionSuccess('agent-a', 'pause', {
-    ok: true,
-    result: {
-      noop: false
-    }
-  });
-  assert.equal(feedback.statusTone, 'ok');
-  assert.equal(feedback.statusText, 'agent-a: pause ok');
-  assert.equal(feedback.tileMessage, 'pause ok');
-});
-
-test('summarizeAgentActionSuccess returns warning for stop partial pane kill', () => {
-  const feedback = summarizeAgentActionSuccess('agent-a', 'stop', {
+  const feedback = summarizeAgentActionSuccess('agent-a', 'delete-worktree', {
     ok: true,
     result: {
       noop: false,
-      orchestration: {
-        pane_killed: false
-      },
       agent: {
-        pane_id: '%21'
+        last_message: 'worktree deleted'
       }
     }
   });
-  assert.equal(feedback.statusTone, 'warn');
-  assert.match(feedback.statusText, /stop partial/);
-  assert.equal(feedback.tileMessage, 'stopped; pane is still attached');
+  assert.equal(feedback.statusTone, 'ok');
+  assert.equal(feedback.statusText, 'agent-a: delete-worktree ok');
+  assert.equal(feedback.tileMessage, 'worktree deleted');
 });
 
 test('summarizeAgentActionSuccess handles focus and delete-worktree noop', () => {
@@ -55,35 +40,32 @@ test('summarizeAgentActionSuccess handles focus and delete-worktree noop', () =>
   assert.equal(deleteNoop.tileMessage, 'worktree already absent');
 });
 
-test('summarizeAgentActionSuccess warns for restore partial pane availability', () => {
-  const feedback = summarizeAgentActionSuccess('agent-a', 'restore', {
+test('summarizeAgentActionSuccess handles delete success', () => {
+  const feedback = summarizeAgentActionSuccess('agent-a', 'delete', {
     ok: true,
     result: {
-      noop: false,
-      restore: {
-        pane_available: false
-      }
+      noop: false
     }
   });
-  assert.equal(feedback.statusTone, 'warn');
-  assert.equal(feedback.statusText, 'agent-a: restore partial (pane unavailable)');
-  assert.equal(feedback.tileMessage, 'restored; pane unavailable');
+  assert.equal(feedback.statusTone, 'ok');
+  assert.equal(feedback.statusText, 'agent-a: deleted');
+  assert.equal(feedback.tileMessage, 'deleted');
 });
 
 test('summarizeAgentActionFailure prefers error.detail', () => {
   const error = new Error('delete-worktree failed (409): should not be shown');
-  error.detail = 'delete-worktree requires removed/stopped status (current=active)';
+  error.detail = 'delete-worktree requires pane to be detached first';
   const feedback = summarizeAgentActionFailure('agent-a', 'delete-worktree', error);
   assert.equal(feedback.statusTone, 'warn');
-  assert.match(feedback.statusText, /removed\/stopped status/);
+  assert.match(feedback.statusText, /pane to be detached first/);
   assert.match(feedback.tileMessage, /delete-worktree failed/);
-  assert.match(feedback.tileMessage, /removed\/stopped status/);
+  assert.match(feedback.tileMessage, /pane to be detached first/);
 });
 
 test('summarizeAgentActionFailure falls back to error message detail parsing', () => {
-  const error = new Error('resume failed (409): cannot resume from status=parked');
-  const feedback = summarizeAgentActionFailure('agent-a', 'resume', error);
+  const error = new Error('focus failed (409): focus target pane is unavailable: %3');
+  const feedback = summarizeAgentActionFailure('agent-a', 'focus', error);
   assert.equal(feedback.statusTone, 'warn');
-  assert.match(feedback.statusText, /cannot resume from status=parked/);
-  assert.match(feedback.tileMessage, /resume failed: cannot resume from status=parked/);
+  assert.match(feedback.statusText, /focus target pane is unavailable/);
+  assert.match(feedback.tileMessage, /focus failed: focus target pane is unavailable/);
 });

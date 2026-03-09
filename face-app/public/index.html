@@ -73,7 +73,7 @@
         <header class="agent-dashboard-header">
           <h2 class="agent-dashboard-title">Agents</h2>
           <div class="agent-dashboard-actions">
-            <button id="agent-dashboard-refresh" type="button" class="operator-btn">Refresh</button>
+            <button id="agent-dashboard-close" type="button" class="operator-btn">Close</button>
             <button id="agent-dashboard-add-toggle" type="button" class="operator-btn">+Agent</button>
           </div>
         </header>
@@ -120,9 +120,31 @@
           </div>
         </header>
 
+        <p id="operator-status" class="operator-status">idle</p>
+
+        <button
+          id="operator-agent-current"
+          class="operator-agent-current"
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded="false"
+          aria-controls="operator-agent-list"
+        >
+          <span id="operator-agent-current-label" class="operator-agent-current-label">operator</span>
+          <span id="operator-agent-current-meta" class="operator-agent-current-meta">active</span>
+        </button>
+
+        <section id="operator-agent-list" class="operator-agent-list hidden" aria-label="Mobile agent monitor">
+          <div class="operator-agent-list-header">
+            <h3 class="operator-agent-list-title">Agents</h3>
+            <button id="operator-agent-list-add" type="button" class="operator-btn">+Agent</button>
+          </div>
+          <div id="operator-agent-list-items" class="operator-agent-list-items"></div>
+        </section>
+
         <div id="operator-keyboard-help" class="operator-keyboard-help" aria-label="Keyboard shortcuts" hidden>
-          <div class="operator-keyboard-help-row"><kbd>Space</kbd><span>PTT JA</span></div>
-          <div class="operator-keyboard-help-row"><kbd>Shift</kbd><span>+</span><kbd>Space</kbd><span>PTT EN</span></div>
+          <div class="operator-keyboard-help-row"><kbd>Space</kbd><span>hold 1s PTT JA</span></div>
+          <div class="operator-keyboard-help-row"><kbd>Shift</kbd><span>+</span><kbd>Space</kbd><span>hold 1s PTT EN</span></div>
           <div class="operator-keyboard-help-row"><kbd>↑</kbd><span>/</span><kbd>↓</kbd><span>Move choice</span></div>
           <div class="operator-keyboard-help-row"><kbd>Enter</kbd><span>Select</span></div>
           <div class="operator-keyboard-help-row"><kbd>Shift</kbd><span>+</span><kbd>Enter</kbd><span>Send text</span></div>
@@ -132,13 +154,7 @@
           <div class="operator-keyboard-help-row"><kbd>Ctrl</kbd><span>PTT JA alt</span><span class="operator-keyboard-help-divider">•</span><kbd>Alt</kbd><span>PTT EN alt</span></div>
         </div>
 
-        <p id="operator-status" class="operator-status">idle</p>
         <p id="operator-prompt" class="operator-prompt">No active prompt.</p>
-
-        <section id="operator-agent-list" class="operator-agent-list hidden" aria-label="Mobile agent monitor">
-          <h3 class="operator-agent-list-title">Agents</h3>
-          <div id="operator-agent-list-items" class="operator-agent-list-items"></div>
-        </section>
 
         <div id="operator-approval-meta" class="operator-approval-meta hidden"></div>
         <div id="operator-choice-buttons" class="operator-choice-buttons"></div>
@@ -172,10 +188,7 @@
           <button id="operator-key-down" type="button" class="operator-key-btn" aria-label="Down">↓</button>
         </div>
 
-        <div class="operator-mirror-row">
-          <button id="operator-mirror-toggle" type="button" class="operator-btn">Terminal</button>
-        </div>
-        <pre id="operator-mirror" class="operator-mirror hidden" aria-label="Read only terminal mirror"></pre>
+        <pre id="operator-mirror" class="operator-mirror" aria-label="Read only terminal mirror"></pre>
         <p id="operator-ack" class="operator-ack">ack: -</p>
       </section>
 

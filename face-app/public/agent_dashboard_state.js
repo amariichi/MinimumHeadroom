@@ -1,4 +1,4 @@
-const KNOWN_AGENT_STATUSES = new Set(['active', 'paused', 'parked', 'stopped', 'removed']);
+const KNOWN_AGENT_STATUSES = new Set(['active', 'missing']);
 
 function asNonEmptyString(value) {
   if (typeof value !== 'string') {
@@ -40,13 +40,6 @@ export function normalizeDashboardAgent(rawAgent = {}, index = 0) {
 export function sortDashboardAgents(agents) {
   const list = Array.isArray(agents) ? [...agents] : [];
   list.sort((left, right) => {
-    if (left.status === 'removed' && right.status !== 'removed') {
-      return 1;
-    }
-    if (left.status !== 'removed' && right.status === 'removed') {
-      return -1;
-    }
-
     const leftSlot = Number.isInteger(left.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
     const rightSlot = Number.isInteger(right.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
     if (leftSlot !== rightSlot) {
@@ -62,7 +55,10 @@ export function deriveDashboardMode(agents, options = {}) {
   if (options.isMobileUi === true) {
     return 'single';
   }
-  const activeCount = (Array.isArray(agents) ? agents : []).filter((agent) => agent.status !== 'removed').length;
+  const additionalActiveCount = Number.isFinite(options.additionalActiveCount)
+    ? Math.max(0, Math.floor(options.additionalActiveCount))
+    : 0;
+  const activeCount = (Array.isArray(agents) ? agents : []).length + additionalActiveCount;
   return activeCount > 1 ? 'multi' : 'single';
 }
 
@@ -85,16 +81,9 @@ export function summarizeAgentTileMessage(agent, transientMessage = null) {
   switch (normalizeAgentStatus(agent?.status)) {
     case 'active':
       return 'working';
-    case 'paused':
-      return 'paused';
-    case 'parked':
-      return 'parked';
-    case 'stopped':
-      return 'stopped';
-    case 'removed':
-      return 'removed';
+    case 'missing':
+      return 'missing';
     default:
       return 'idle';
   }
 }
-

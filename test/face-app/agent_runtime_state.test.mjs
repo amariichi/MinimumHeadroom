@@ -68,7 +68,7 @@ test('agent runtime store backs up malformed state file and resets', () => {
   cleanup(rootDir);
 });
 
-test('agent runtime store enforces hard cap only for non-removed agents', () => {
+test('agent runtime store enforces hard cap for all tracked agents', () => {
   const { rootDir, statePath } = createTempStatePath('mh-agent-state-cap-');
   const store = createAgentRuntimeStateStore({
     statePath,
@@ -86,14 +86,46 @@ test('agent runtime store enforces hard cap only for non-removed agents', () => 
     (error) => error?.code === 'hard_cap_reached'
   );
 
-  store.removeAgent('a');
-  const added = store.addAgent({ id: 'c' });
-  assert.equal(added.ok, true);
+  cleanup(rootDir);
+});
+
+test('agent runtime store normalizes legacy removed entries away on load', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-state-legacy-');
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      schema_version: 1,
+      updated_at: 1,
+      policy: { default_cap: 4, hard_cap: 8 },
+      agents: [
+        { id: 'a', status: 'removed', slot: 0 },
+        { id: 'b', status: 'paused', slot: 1 },
+        { id: 'c', status: 'active', slot: 2 }
+      ]
+    }),
+    'utf8'
+  );
+
+  const store = createAgentRuntimeStateStore({
+    statePath,
+    now: createClock(),
+    log: quietLog
+  });
+  const state = store.load();
+
+  assert.deepEqual(
+    state.agents.map((agent) => [agent.id, agent.status]),
+    [
+      ['b', 'active'],
+      ['c', 'active']
+    ]
+  );
 
   cleanup(rootDir);
 });
 
-test('agent runtime pause/resume/remove/restore transitions are idempotent and keep slot safety', () => {
+test('agent runtime setAgentStatus updates to missing with noop detection', () => {
   const { rootDir, statePath } = createTempStatePath('mh-agent-state-transitions-');
   const store = createAgentRuntimeStateStore({
     statePath,
@@ -103,39 +135,20 @@ test('agent runtime pause/resume/remove/restore transitions are idempotent and k
   store.load();
 
   store.addAgent({ id: 'a', slot: 0 });
-  store.addAgent({ id: 'b', slot: 1 });
 
-  const pause1 = store.pauseAgent('a');
-  const pause2 = store.pauseAgent('a');
-  assert.equal(pause1.noop, false);
-  assert.equal(pause2.noop, true);
-  const afterPause = store.getState().agents.find((agent) => agent.id === 'a');
-  assert.equal(afterPause?.status, 'paused');
-  assert.equal(afterPause?.last_message, 'paused');
+  const setMissing = store.setAgentStatus('a', 'missing', {
+    message: 'pane missing'
+  });
+  const setMissingAgain = store.setAgentStatus('a', 'missing', {
+    message: 'pane missing'
+  });
 
-  const resume1 = store.resumeAgent('a');
-  const resume2 = store.resumeAgent('a');
-  assert.equal(resume1.noop, false);
-  assert.equal(resume2.noop, true);
-  const afterResume = store.getState().agents.find((agent) => agent.id === 'a');
-  assert.equal(afterResume?.status, 'active');
-  assert.equal(afterResume?.last_message, 'active');
+  assert.equal(setMissing.noop, false);
+  assert.equal(setMissingAgain.noop, true);
 
-  store.removeAgent('a');
-  const afterRemove = store.getState().agents.find((agent) => agent.id === 'a');
-  assert.equal(afterRemove?.status, 'removed');
-  assert.equal(afterRemove?.slot, null);
-  assert.equal(afterRemove?.removed_slot, 0);
-  assert.equal(afterRemove?.last_message, 'removed');
-
-  store.addAgent({ id: 'c', slot: 0 });
-  const restore = store.restoreAgent('a');
-  assert.equal(restore.noop, false);
-
-  const afterRestore = store.getState().agents.find((agent) => agent.id === 'a');
-  assert.equal(afterRestore?.status, 'active');
-  assert.equal(afterRestore?.slot, 2);
-  assert.equal(afterRestore?.last_message, 'restored');
+  const afterMissing = store.getState().agents.find((agent) => agent.id === 'a');
+  assert.equal(afterMissing?.status, 'missing');
+  assert.equal(afterMissing?.last_message, 'pane missing');
 
   cleanup(rootDir);
 });
@@ -161,6 +174,25 @@ test('agent runtime stores per-agent short message with noop detection', () => {
   const agent = store.getState().agents.find((item) => item.id === 'a');
   assert.equal(agent?.last_message, 'tests passed');
   assert.equal(agent?.message_source, 'speech');
+
+  cleanup(rootDir);
+});
+
+test('agent runtime purge removes fully detached agent records', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-state-purge-');
+  const store = createAgentRuntimeStateStore({
+    statePath,
+    now: createClock(),
+    log: quietLog
+  });
+  store.load();
+  store.addAgent({ id: 'a', slot: 0, pane_id: null, worktree_path: null });
+
+  const purged = store.purgeAgent('a');
+  assert.equal(purged.ok, true);
+  assert.equal(purged.action, 'purge');
+  assert.equal(purged.agent?.id, 'a');
+  assert.equal(store.getState().agents.some((agent) => agent.id === 'a'), false);
 
   cleanup(rootDir);
 });

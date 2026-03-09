@@ -302,6 +302,7 @@ append_env() {
 }
 append_env "MH_BRIDGE_TMUX_PANE" "$bridge_pane"
 append_env "MH_BRIDGE_RECOVERY_TMUX_PANE" "$agent_pane"
+append_env "MH_AGENT_DEFAULT_CMD" "$AGENT_CMD"
 if [[ -n "$FACE_UI_MODE" ]]; then
   append_env "FACE_UI_MODE" "$FACE_UI_MODE"
 fi

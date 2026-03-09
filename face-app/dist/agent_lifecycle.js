@@ -279,6 +279,10 @@ export function createAgentLifecycleRuntime(options = {}) {
     return runCommand('git', ['-C', repoPath, ...args]);
   }
 
+  async function pruneGitWorktrees(repoPath) {
+    await runGit(repoPath, ['worktree', 'prune', '--expire', 'now']);
+  }
+
   async function nextWindowName(baseName) {
     const result = await runTmux(['list-windows', '-t', `${tmuxSession}:`, '-F', '#{window_name}']);
     const existing = new Set(
@@ -363,6 +367,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     const sessionId = asNonEmptyString(input.session_id) ?? agentId;
     const sourceRepoPath = resolveRepoPath(input.source_repo_path);
     const worktreePath = resolveWorktreePath(input.worktree_path, agentId);
+    const explicitWorktreePath = asNonEmptyString(input.worktree_path);
     const branch = resolveBranchName(agentId, input.branch);
     const slot = parseInteger(input.slot, null, 0);
     const createWorktree = normalizeBoolean(input.create_worktree, true);
@@ -414,7 +419,7 @@ export function createAgentLifecycleRuntime(options = {}) {
         status: 'active',
         slot,
         source_repo_path: sourceRepoPath,
-        worktree_path: runCwd,
+        worktree_path: createWorktree ? worktreePath : explicitWorktreePath ? worktreePath : null,
         branch,
         pane_id: paneId,
         last_message: 'agent created',
@@ -446,14 +451,25 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
   }
 
-  async function stopAgent(agentId, input = {}) {
+  async function detachAgentPane(agentId, input = {}) {
     const agent = getAgentStateOrThrow(agentId);
     const killPane = normalizeBoolean(input.kill_pane, true);
     let paneKilled = false;
     let paneKillError = null;
-    const result = stateStore.stopAgent(agent.id);
+    if (!asNonEmptyString(agent.pane_id)) {
+      return {
+        ok: true,
+        action: 'detach',
+        noop: true,
+        agent,
+        state: stateStore.getState(),
+        orchestration: {
+          pane_killed: false
+        }
+      };
+    }
 
-    if (!result.noop && killPane && tmuxEnabled && asNonEmptyString(agent.pane_id)) {
+    if (killPane && tmuxEnabled && asNonEmptyString(agent.pane_id)) {
       try {
         await runTmux(['kill-pane', '-t', agent.pane_id]);
         paneKilled = true;
@@ -462,7 +478,7 @@ export function createAgentLifecycleRuntime(options = {}) {
         });
         return {
           ...patched,
-          action: 'stop',
+          action: 'detach',
           noop: false,
           orchestration: {
             pane_killed: paneKilled
@@ -470,11 +486,11 @@ export function createAgentLifecycleRuntime(options = {}) {
         };
       } catch (error) {
         paneKillError = asNonEmptyString(error?.message);
-        log.warn(`[agent-lifecycle] stop kill-pane failed (${agent.pane_id}): ${error.message}`);
-        const patched = stateStore.setAgentMessage(agent.id, 'stopped; pane still attached', 'status');
+        log.warn(`[agent-lifecycle] detach kill-pane failed (${agent.pane_id}): ${error.message}`);
+        const patched = stateStore.setAgentMessage(agent.id, 'pane still attached', 'status');
         return {
           ...patched,
-          action: 'stop',
+          action: 'detach',
           noop: false,
           orchestration: {
             pane_killed: false,
@@ -484,8 +500,13 @@ export function createAgentLifecycleRuntime(options = {}) {
       }
     }
 
+    const patched = stateStore.updateAgentMetadata(agent.id, {
+      pane_id: null
+    });
+
     const response = {
-      ...result,
+      ...patched,
+      action: 'detach',
       orchestration: {
         pane_killed: paneKilled
       }
@@ -510,54 +531,31 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
   }
 
-  async function restoreAgent(agentId) {
-    const agent = getAgentStateOrThrow(agentId);
-    if (agent.status !== 'removed') {
-      return stateStore.restoreAgent(agent.id);
-    }
-
-    const worktreePath = asNonEmptyString(agent.worktree_path);
-    if (worktreePath && !fs.existsSync(path.resolve(worktreePath))) {
-      throw createLifecycleError('invalid_state', `restore requires existing worktree path: ${worktreePath}`);
-    }
-
-    const hasPane = asNonEmptyString(agent.pane_id);
-    const availablePane = hasPane ? await paneExists(agent.pane_id) : false;
-    const restored = stateStore.restoreAgent(agent.id);
-    if (restored.noop) {
-      return restored;
-    }
-    if (!hasPane || availablePane) {
-      return {
-        ...restored,
-        action: 'restore',
-        restore: {
-          pane_available: true
-        }
-      };
-    }
-
-    stateStore.updateAgentMetadata(agent.id, {
-      pane_id: null
+  function markAgentMissing(agentId, message, metadata = {}) {
+    stateStore.updateAgentMetadata(agentId, metadata);
+    return stateStore.setAgentStatus(agentId, 'missing', {
+      message,
+      message_source: 'status'
     });
-    const patched = stateStore.setAgentMessage(agent.id, 'restored; pane unavailable', 'status');
-    return {
-      ...patched,
-      action: 'restore',
-      noop: false,
-      restore: {
-        pane_available: false
-      }
-    };
   }
 
   async function focusAgent(agentId, input = {}) {
     const agent = getAgentStateOrThrow(agentId);
     const paneId = asNonEmptyString(agent.pane_id);
     if (!paneId) {
+      markAgentMissing(agent.id, 'pane missing', {
+        pane_id: null
+      });
       throw createLifecycleError('invalid_state', 'focus requires pane_id');
     }
     const sessionId = asNonEmptyString(input.session_id) ?? 'default';
+    const paneAvailable = await paneExists(paneId);
+    if (!paneAvailable) {
+      markAgentMissing(agent.id, 'pane missing', {
+        pane_id: null
+      });
+      throw createLifecycleError('invalid_state', `focus target pane is unavailable: ${paneId}`);
+    }
 
     if (onFocus) {
       await onFocus({
@@ -579,18 +577,149 @@ export function createAgentLifecycleRuntime(options = {}) {
     };
   }
 
+  async function reconcileAgents(input = {}) {
+    const recreateMissingPanes = normalizeBoolean(input.recreate_missing_panes, true);
+    const agents = stateStore.listAgents();
+    const results = [];
+
+    for (const listedAgent of agents) {
+      const agentId = listedAgent.id;
+      const worktreePath = asNonEmptyString(listedAgent.worktree_path);
+      const paneId = asNonEmptyString(listedAgent.pane_id);
+      const worktreeExists = worktreePath ? fs.existsSync(path.resolve(worktreePath)) : false;
+      const paneAvailable = paneId ? await paneExists(paneId) : false;
+
+      if (paneAvailable) {
+        const result = listedAgent.status === 'active'
+          ? {
+              ok: true,
+              action: 'reconcile',
+              noop: true,
+              agent: getAgentStateOrThrow(agentId)
+            }
+          : stateStore.setAgentStatus(agentId, 'active', {
+              message: 'agent ready',
+              message_source: 'status'
+            });
+        results.push({
+          agent_id: agentId,
+          disposition: 'kept',
+          pane_id: paneId,
+          result
+        });
+        continue;
+      }
+
+      if (paneId) {
+        stateStore.updateAgentMetadata(agentId, {
+          pane_id: null
+        });
+      }
+
+      if (!worktreeExists) {
+        const result = markAgentMissing(agentId, worktreePath ? 'worktree missing' : 'worktree unavailable', {
+          pane_id: null
+        });
+        results.push({
+          agent_id: agentId,
+          disposition: 'missing',
+          reason: worktreePath ? 'worktree_missing' : 'worktree_unavailable',
+          result
+        });
+        continue;
+      }
+
+      if (!recreateMissingPanes || !tmuxEnabled) {
+        const result = markAgentMissing(agentId, 'pane missing', {
+          pane_id: null
+        });
+        results.push({
+          agent_id: agentId,
+          disposition: 'missing',
+          reason: 'pane_missing',
+          result
+        });
+        continue;
+      }
+
+      try {
+        const pane = await startTmuxAgentPane({
+          agentId,
+          cwd: worktreePath,
+          command: defaultAgentCommand
+        });
+        stateStore.updateAgentMetadata(agentId, {
+          pane_id: pane.paneId
+        });
+        const result = stateStore.setAgentStatus(agentId, 'active', {
+          message: 'agent restored after startup',
+          message_source: 'status'
+        });
+        results.push({
+          agent_id: agentId,
+          disposition: 'recreated',
+          pane_id: pane.paneId,
+          result
+        });
+      } catch (error) {
+        const result = markAgentMissing(agentId, `recreate failed: ${error.message}`, {
+          pane_id: null
+        });
+        results.push({
+          agent_id: agentId,
+          disposition: 'missing',
+          reason: 'recreate_failed',
+          error: error.message,
+          result
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      action: 'reconcile',
+      results,
+      state: stateStore.getState()
+    };
+  }
+
+  async function deleteAgent(agentId) {
+    let agent = getAgentStateOrThrow(agentId);
+
+    if (asNonEmptyString(agent.pane_id)) {
+      const paneAvailable = await paneExists(agent.pane_id);
+      if (paneAvailable) {
+        const detached = await detachAgentPane(agent.id, { kill_pane: true });
+        if (asNonEmptyString(detached?.agent?.pane_id)) {
+          throw createLifecycleError('invalid_state', 'delete requires pane to be detached first');
+        }
+      } else {
+        markAgentMissing(agent.id, 'stale pane detached', {
+          pane_id: null
+        });
+      }
+    }
+
+    agent = getAgentStateOrThrow(agent.id);
+    let deletedPath = null;
+    if (asNonEmptyString(agent.worktree_path)) {
+      const deleteResult = await deleteWorktree(agent.id);
+      deletedPath = asNonEmptyString(deleteResult?.deleted_path);
+    }
+
+    agent = getAgentStateOrThrow(agent.id);
+    const purged = stateStore.purgeAgent(agent.id);
+    return {
+      ...purged,
+      action: 'delete',
+      deleted_path: deletedPath
+    };
+  }
+
   async function deleteWorktree(agentId, input = {}) {
     const agent = getAgentStateOrThrow(agentId);
     const worktreePath = asNonEmptyString(agent.worktree_path);
     const sourceRepoPath = resolveRepoPath(agent.source_repo_path);
-    const requireStopped = normalizeBoolean(input.require_stopped, true);
-
-    if (requireStopped && agent.status !== 'removed' && agent.status !== 'stopped') {
-      throw createLifecycleError(
-        'invalid_state',
-        `delete-worktree requires removed/stopped status (current=${agent.status})`
-      );
-    }
     if (asNonEmptyString(agent.pane_id)) {
       throw createLifecycleError('invalid_state', 'delete-worktree requires pane to be detached first');
     }
@@ -616,6 +745,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
 
     if (!fs.existsSync(resolved)) {
+      await pruneGitWorktrees(sourceRepoPath);
       stateStore.updateAgentMetadata(agent.id, {
         worktree_path: null
       });
@@ -629,6 +759,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
 
     await runGit(sourceRepoPath, ['worktree', 'remove', '--force', resolved]);
+    await pruneGitWorktrees(sourceRepoPath);
     stateStore.updateAgentMetadata(agent.id, {
       worktree_path: null
     });
@@ -643,20 +774,10 @@ export function createAgentLifecycleRuntime(options = {}) {
 
   async function dispatchAgentAction(agentId, action, input = {}) {
     switch (action) {
-      case 'pause':
-        return stateStore.pauseAgent(agentId);
-      case 'resume':
-        return stateStore.resumeAgent(agentId);
-      case 'park':
-        return stateStore.parkAgent(agentId);
-      case 'stop':
-        return stopAgent(agentId, input);
-      case 'remove':
-        return stateStore.removeAgent(agentId);
-      case 'restore':
-        return restoreAgent(agentId);
       case 'focus':
         return focusAgent(agentId, input);
+      case 'delete':
+        return deleteAgent(agentId);
       case 'delete-worktree':
       case 'delete_worktree':
         return deleteWorktree(agentId, input);
@@ -671,7 +792,8 @@ export function createAgentLifecycleRuntime(options = {}) {
     },
     listAgents,
     addAgent,
-    dispatchAgentAction
+    dispatchAgentAction,
+    reconcileAgents
   };
 }
 
@@ -699,10 +821,9 @@ export function createAgentLifecycleApi(options = {}) {
             });
             return true;
           }
-          const includeRemoved = parsedUrl.searchParams.get('include_removed') === '1';
           writeJson(response, 200, {
             ok: true,
-            agents: runtime.listAgents({ includeRemoved })
+            agents: runtime.listAgents()
           });
           return true;
         }
