@@ -13,7 +13,7 @@ Usage: ./scripts/run-face-app.sh [--audio-target local|browser|both] [--ui-mode 
 
 Options:
   --audio-target  Select speech output destination.
-  --ui-mode       Select UI layout mode.
+  --ui-mode       Select UI layout mode: auto, desktop, or mobile.
   -h, --help      Show this help.
 EOF
 }

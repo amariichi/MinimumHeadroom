@@ -6,6 +6,7 @@
 </p>
 <p>
   <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/07930388-e991-4686-8a3c-f2e7e1c64b89" />
+  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/793cae8f-e177-4d1a-93bb-0816fe77f735" />
 </p>
 
 [English](#english) | [日本語](#japanese)
@@ -368,6 +369,7 @@ npm run asr-worker:smoke
 - 入力経路は3つです: 端末の直接入力、フロントエンドPTT（JA/EN -> ASR）、フロントエンドのテキスト入力。
 - 承認・送信された入力は `operator-bridge` が `tmux send-keys` でエージェントペインへ投入します。
 - 端末出力は 500ms 間隔（差分があるときのみ）でミラー配信されます。
+- `./scripts/run-operator-once.sh --ui-mode pc` はデスクトップ向けUI、`--ui-mode mobile` はモバイル向けUI、`--ui-mode auto` は自動選択です。
 - エージェント状態は MCP イベント/発話とフェイスUI（表情・音声）でユーザーへ通知されます。
 - Tailscale Serve を使うとスマホ/タブレットからリモートアクセスできます。
 
