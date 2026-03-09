@@ -42,8 +42,9 @@ All launchers accept the same `FACE_AUDIO_TARGET` values:
 - `browser`: send audio to connected browser clients only
 - `both`: play on both
 
-All launchers also accept the same `FACE_UI_MODE` values:
+All launchers also accept `--ui-mode <auto|pc|mobile>` (the CLI form of `FACE_UI_MODE`):
 
+- `auto`: choose the layout automatically
 - `pc`: desktop-oriented operator layout (the right-side `Debug Values` panel is hidden by default)
 - `mobile`: mobile-focused operator overlay
 
@@ -283,8 +284,9 @@ Wrong pane is mirrored on mobile:
 - `browser`: ブラウザクライアントのみ
 - `both`: 両方
 
-`FACE_UI_MODE`:
+`--ui-mode <auto|pc|mobile>` / `FACE_UI_MODE`:
 
+- `auto`: 画面条件に応じて自動選択
 - `pc`: デスクトップ向け（右側 `Debug Values` パネルは既定で非表示）
 - `mobile`: モバイル向けオーバーレイ
 

@@ -98,7 +98,7 @@ Options:
                            tmux pane mirrored/controlled by operator bridge (default: agent)
   --stack-cmd <command>     stack launcher command (default: ./scripts/run-operator-stack.sh)
   --ui-mode <auto|pc|mobile>
-                            FACE_UI_MODE override for stack launch
+                            UI layout for the stack launch: auto, desktop, or mobile
   --audio-target <local|browser|both>
                             FACE_AUDIO_TARGET override for stack launch
   --asr-base-url <url>      MH_OPERATOR_ASR_BASE_URL override for stack launch

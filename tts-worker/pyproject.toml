@@ -1,6 +1,6 @@
 [project]
 name = "minimum-headroom-tts-worker"
-version = "1.9.0"
+version = "1.9.1"
 description = "Minimum Headroom phase3 tts worker"
 readme = "README.md"
 requires-python = ">=3.12"
