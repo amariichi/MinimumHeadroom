@@ -83,6 +83,9 @@ class KokoroEngine:
       voices_path=str(self.model_paths.voices_path),
     )
 
+  def prepare_text(self, text: str) -> str:
+    return text
+
   def chunk_text(self, text: str) -> list[TextChunk]:
     return split_text_chunks(text)
 

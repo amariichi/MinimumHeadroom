@@ -277,7 +277,7 @@ body.boot-pending #operator-handle {
 .audio-replay {
   position: absolute;
   z-index: 4;
-  right: 14px;
+  right: 82px;
   top: 14px;
   border-radius: 999px;
   border: 1px solid rgba(255, 138, 61, 0.52);

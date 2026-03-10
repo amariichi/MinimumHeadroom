@@ -71,13 +71,15 @@ class Qwen3TtsEngine:
       ),
     )
 
+  def prepare_text(self, text: str) -> str:
+    return prepare_qwen3_text(text, ascii_mode=self.config.ascii_mode, language=self.config.language)
+
   def synthesize_text(self, text: str, *, voice_override: str | None = None) -> Tuple[np.ndarray, int]:
     model = self._ensure_model()
-    prepared = prepare_qwen3_text(text, ascii_mode=self.config.ascii_mode, language=self.config.language)
     instruction = build_qwen3_instruction(self.config.style, language=self.config.language)
     speaker = voice_override.strip() if isinstance(voice_override, str) and voice_override.strip() != '' else self.config.speaker
     wavs, sample_rate = model.generate_custom_voice(
-      text=prepared,
+      text=text,
       language=self.config.language,
       speaker=speaker,
       instruct=instruction,
