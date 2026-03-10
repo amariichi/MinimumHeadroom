@@ -65,17 +65,17 @@ async function speakOnce(payload) {
   return { worker, result };
 }
 
-test('tts controller rewrites Japanese decimal separators into spoken 点', async () => {
+test('tts controller forwards Japanese text without doing speech rewriting', async () => {
   const { worker, result } = await speakOnce({
     text: '外の温度計は一・八度です。'
   });
 
   assert.equal(result.accepted, true);
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, '外の温度計は一点八度です。');
+  assert.equal(speaks(worker)[0].text, '外の温度計は一・八度です。');
 });
 
-test('tts controller keeps dotted version numbers unchanged in Japanese text', async () => {
+test('tts controller keeps Japanese version sentence unchanged before worker prep', async () => {
   const { worker, result } = await speakOnce({
     text: '現在のバージョンは1.2.3です。'
   });
@@ -85,24 +85,24 @@ test('tts controller keeps dotted version numbers unchanged in Japanese text', a
   assert.equal(speaks(worker)[0].text, '現在のバージョンは1.2.3です。');
 });
 
-test('tts controller rewrites v-prefixed semver tokens into spoken Japanese', async () => {
+test('tts controller keeps v-prefixed semver raw before worker prep', async () => {
   const { worker, result } = await speakOnce({
     text: 'v1.1 と v1.7.0 を公開しました。'
   });
 
   assert.equal(result.accepted, true);
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, 'バージョン1点1 と バージョン1点7点0 を公開しました。');
+  assert.equal(speaks(worker)[0].text, 'v1.1 と v1.7.0 を公開しました。');
 });
 
-test('tts controller prefixes unknown leading ascii token with はい in Japanese route', async () => {
+test('tts controller keeps leading ascii token raw before worker prep', async () => {
   const { worker, result } = await speakOnce({
     text: 'execplanを作成しました。'
   });
 
   assert.equal(result.accepted, true);
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, 'はい、execplanを作成しました。');
+  assert.equal(speaks(worker)[0].text, 'execplanを作成しました。');
 });
 
 test('tts controller keeps known leading ascii token without extra はい', async () => {
@@ -115,14 +115,14 @@ test('tts controller keeps known leading ascii token without extra はい', asyn
   assert.equal(speaks(worker)[0].text, 'GitHub承認申請をお願いします。');
 });
 
-test('tts controller prefixes leading numeric+japanese token with はい', async () => {
+test('tts controller keeps leading numeric+japanese token raw before worker prep', async () => {
   const { worker, result } = await speakOnce({
     text: '23日までに完了します。'
   });
 
   assert.equal(result.accepted, true);
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, 'はい、23日までに完了します。');
+  assert.equal(speaks(worker)[0].text, '23日までに完了します。');
 });
 
 test('tts controller does not prefix semver-like dotted number at sentence start', async () => {
@@ -564,41 +564,41 @@ test('tts controller does not relay worker audio payload in local-only mode', as
   assert.equal(relayed, undefined);
 });
 
-test('tts controller normalizes smart apostrophe and keeps hyphen normalization', async () => {
+test('tts controller leaves english punctuation normalization to worker', async () => {
   const { worker, result } = await speakOnce({
     text: 'That’s a 9-to-5 role.'
   });
 
   assert.equal(result.accepted, true);
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, "That's a 9 to 5 role.");
+  assert.equal(speaks(worker)[0].text, 'That’s a 9-to-5 role.');
 });
 
-test('tts controller normalizes smart quotes, ellipsis, and no-break spaces', async () => {
+test('tts controller leaves smart quotes and nbsp normalization to worker', async () => {
   const { worker } = await speakOnce({
     text: 'He said, “Hello”… A\u00A0B\u202FC'
   });
 
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, 'He said, "Hello" A B C');
+  assert.equal(speaks(worker)[0].text, 'He said, “Hello”… A\u00A0B\u202FC');
 });
 
-test('tts controller normalizes latin diacritics', async () => {
+test('tts controller leaves latin diacritic normalization to worker', async () => {
   const { worker } = await speakOnce({
     text: 'café naïve rôle'
   });
 
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, 'cafe naive role');
+  assert.equal(speaks(worker)[0].text, 'café naïve rôle');
 });
 
-test('tts controller keeps japanese intact while normalizing latin letters', async () => {
+test('tts controller leaves mixed japanese and latin cleanup to worker', async () => {
   const { worker } = await speakOnce({
     text: '日本語が café'
   });
 
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, '日本語が cafe');
+  assert.equal(speaks(worker)[0].text, '日本語が café');
 });
 
 test('tts controller keeps full-width symbols untouched', async () => {
@@ -610,13 +610,13 @@ test('tts controller keeps full-width symbols untouched', async () => {
   assert.equal(speaks(worker)[0].text, 'ＡＢＣ！');
 });
 
-test('tts controller normalizes punctuation and latin diacritics without language hint', async () => {
+test('tts controller leaves punctuation cleanup without language hint to worker', async () => {
   const { worker } = await speakOnce({
     text: 'That’s fine… café'
   });
 
   assert.equal(speaks(worker).length, 1);
-  assert.equal(speaks(worker)[0].text, "That's fine cafe");
+  assert.equal(speaks(worker)[0].text, 'That’s fine… café');
 });
 
 test('tts controller keeps japanese punctuation inside regular text', async () => {

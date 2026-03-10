@@ -11,44 +11,11 @@ const DEFAULT_WORKER_COMMAND = {
 const DEFAULT_QWEN_BOUNDARY_SPEAKER = 'Ono_Anna';
 const QWEN_ENGINE_NAME = 'qwen3-tts-0.6b-customvoice';
 const KANJI_SCRIPT_CLASS = '㐀-䶿一-龯々〆ヵヶ豈-﫿';
-const JAPANESE_SCRIPT_RE = new RegExp(`[\\p{Script=Hiragana}\\p{Script=Katakana}${KANJI_SCRIPT_CLASS}]`, 'u');
-const JAPANESE_NUMERIC_CLASS = '0-9０-９〇零一二三四五六七八九十百千万億兆';
-const JAPANESE_NUMERIC_CHAIN_RE = new RegExp(
-  `([${JAPANESE_NUMERIC_CLASS}]+(?:\\s*[.．・･]\\s*[${JAPANESE_NUMERIC_CLASS}]+)+)`,
-  'gu'
-);
-const JAPANESE_SEMVER_RE = /(?<![A-Za-z0-9])[vV](\d+(?:\.\d+){1,2})(?![A-Za-z0-9])/gu;
-const LEADING_DECORATION_RE = /^(\s*[「『（([{'"“‘]*)/u;
-const LEADING_ASCII_TOKEN_RE = /^([A-Za-z][A-Za-z0-9./:+_-]{0,31})/u;
-const LEADING_NUMERIC_TOKEN_RE = /^([0-9０-９]+(?:[.．・･点][0-9０-９]+)?)(?![0-9０-９.．・･点])/u;
-const LEADING_JAPANESE_RE = new RegExp(`^\\s*[\\p{Script=Hiragana}\\p{Script=Katakana}${KANJI_SCRIPT_CLASS}]`, 'u');
 const QWEN_BOUNDARY_SPEAKER_RE = new RegExp(
   `(?:[A-Za-z0-9][A-Za-z0-9./:+_-]{0,31})(?:\\s*[.,;:!?]\\s*)?(?=[${KANJI_SCRIPT_CLASS}])`,
   'u'
 );
-const KNOWN_LEADING_ASCII_TOKENS = new Set([
-  'ai',
-  'api',
-  'http',
-  'https',
-  'url',
-  'ci/cd',
-  'github',
-  'nodejs',
-  'node.js',
-  'readme',
-  'request',
-  'pull',
-  'pr',
-  'ci',
-  'cd',
-  'ssh',
-  'cli',
-  'json',
-  'yaml',
-  'gpu',
-  'cpu'
-]);
+const HAS_SPEAKABLE_CONTENT_RE = /[\p{L}\p{N}]/u;
 
 function toLogger(log) {
   if (!log) {
@@ -107,120 +74,15 @@ function parseTimestamp(value, fallbackMs) {
   return fallbackMs;
 }
 
-function normalizeEnglishTtsText(text) {
-  let normalized = text
-    // Normalize common English smart punctuation into ASCII equivalents.
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    // Turn ellipsis into a pause-like separator instead of spoken dots.
-    .replace(/\s*…\s*/g, ' ')
-    .replace(/\s*\.{3,}\s*/g, ' ')
-    // Silence Japanese punctuation-only utterances by converting to separators.
-    .replace(/[。、・]+/g, ' ')
-    // Normalize no-break spaces that often appear in copied English text.
-    .replace(/[\u00A0\u202F]/g, ' ');
-
-  // Strip combining diacritics attached to Latin letters only.
-  normalized = normalized
-    .normalize('NFD')
-    .replace(/([\p{Script=Latin}])\p{M}+/gu, '$1')
-    .normalize('NFC');
-
-  // Keep existing dash-to-space normalization for clearer English TTS.
-  normalized = normalized.replace(/([A-Za-z0-9])[-‐‑‒–—−]([A-Za-z0-9])/g, '$1 $2');
-  return normalized.replace(/\s+/g, ' ').trim();
-}
-
-function replaceJapaneseDecimalSeparators(text) {
-  return text.replace(JAPANESE_NUMERIC_CHAIN_RE, (segment) => {
-    const separators = segment.match(/[.．・･]/gu) ?? [];
-    if (separators.length !== 1) {
-      return segment;
-    }
-    return segment.replace(/\s*[.．・･]\s*/u, '点');
-  });
-}
-
-function replaceJapaneseSemverTokens(text) {
-  return text.replace(JAPANESE_SEMVER_RE, (_, version) => `バージョン${version.replaceAll('.', '点')}`);
-}
-
-function isKnownLeadingAsciiToken(token) {
-  return KNOWN_LEADING_ASCII_TOKENS.has(token.toLowerCase());
-}
-
-function applyJapaneseLeadingUnknownAsciiFiller(text) {
-  const leadingMatch = LEADING_DECORATION_RE.exec(text);
-  const leading = leadingMatch?.[1] ?? '';
-  const rest = text.slice(leading.length);
-  const tokenMatch = LEADING_ASCII_TOKEN_RE.exec(rest);
-  if (!tokenMatch) {
-    return text;
-  }
-
-  const token = tokenMatch[1];
-  if (isKnownLeadingAsciiToken(token)) {
-    return text;
-  }
-
-  const trailing = rest.slice(token.length);
-  if (!JAPANESE_SCRIPT_RE.test(trailing)) {
-    return text;
-  }
-
-  return `${leading}はい、${rest}`;
-}
-
-function applyJapaneseLeadingNumericFiller(text) {
-  const leadingMatch = LEADING_DECORATION_RE.exec(text);
-  const leading = leadingMatch?.[1] ?? '';
-  const rest = text.slice(leading.length);
-  const tokenMatch = LEADING_NUMERIC_TOKEN_RE.exec(rest);
-  if (!tokenMatch) {
-    return text;
-  }
-
-  const trailing = rest.slice(tokenMatch[1].length);
-  if (!LEADING_JAPANESE_RE.test(trailing)) {
-    return text;
-  }
-
-  return `${leading}はい、${rest}`;
-}
-
-function normalizeJapaneseTtsText(text) {
-  let normalized = text
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/\s*…\s*/g, '、')
-    .replace(/\s*\.{3,}\s*/g, '、')
-    .replace(/[\u00A0\u202F]/g, ' ');
-
-  normalized = normalized
-    .normalize('NFD')
-    .replace(/([\p{Script=Latin}])\p{M}+/gu, '$1')
-    .normalize('NFC');
-
-  normalized = replaceJapaneseSemverTokens(normalized);
-  normalized = replaceJapaneseDecimalSeparators(normalized);
-  normalized = applyJapaneseLeadingNumericFiller(normalized);
-  normalized = applyJapaneseLeadingUnknownAsciiFiller(normalized);
-  return normalized.replace(/[ \t]+/g, ' ').trim();
-}
-
-function normalizeSpeechText(text) {
-  if (JAPANESE_SCRIPT_RE.test(text)) {
-    return normalizeJapaneseTtsText(text);
-  }
-  return normalizeEnglishTtsText(text);
-}
-
 function normalizeText(value) {
   if (typeof value !== 'string') {
     return null;
   }
   const trimmed = value.trim();
-  return trimmed === '' ? null : trimmed;
+  if (trimmed === '') {
+    return null;
+  }
+  return HAS_SPEAKABLE_CONTENT_RE.test(trimmed) ? trimmed : null;
 }
 
 function normalizeMessageId(value, fallback) {
@@ -443,11 +305,6 @@ export function createTtsController(options = {}) {
       return null;
     }
 
-    const text = normalizeSpeechText(rawText);
-    if (!text) {
-      return null;
-    }
-
     const sessionId = normalizeSessionId(payload?.session_id);
     const policy = normalizePolicy(payload?.policy);
     const priority = clampPriority(payload?.priority ?? 0);
@@ -456,7 +313,7 @@ export function createTtsController(options = {}) {
 
     const fallbackMessageId = `${sessionId}:${currentGeneration}`;
     const revision = normalizeRevision(payload?.revision, createdAt);
-    const speaker = selectQwenSpeakerForText(text, {
+    const speaker = selectQwenSpeakerForText(rawText, {
       engine: workerEngine,
       defaultVoice: workerVoice,
       boundarySpeaker: qwenBoundarySpeaker
@@ -467,7 +324,7 @@ export function createTtsController(options = {}) {
       utteranceId: typeof payload?.utterance_id === 'string' && payload.utterance_id.trim() !== '' ? payload.utterance_id : `${sessionId}:${currentGeneration}`,
       messageId: normalizeMessageId(payload?.message_id, fallbackMessageId),
       revision,
-      text,
+      text: rawText,
       speaker,
       priority,
       policy,

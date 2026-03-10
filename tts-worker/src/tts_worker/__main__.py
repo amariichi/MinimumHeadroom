@@ -15,6 +15,7 @@ from .kokoro_engine import KokoroEngine, resolve_model_paths
 from .playback import PlaybackEngine, encode_wav_base64
 from .protocol import ParsedCommand, ProtocolWriter, parse_command
 from .qwen3_engine import Qwen3TtsEngine
+from .shared_text import normalize_shared_tts_text
 
 
 AUDIO_TARGETS = {'local', 'browser', 'both'}
@@ -294,7 +295,25 @@ class WorkerRuntime:
     )
 
     try:
-      audio, sample_rate = await asyncio.to_thread(self.engine.synthesize_text, request.text, voice_override=request.speaker)
+      shared_text = normalize_shared_tts_text(request.text)
+      prepared_text = self.engine.prepare_text(shared_text)
+      if prepared_text.strip() == '':
+        self.writer.event(
+          phase='dropped',
+          generation=generation,
+          session_id=session_id,
+          utterance_id=utterance_id,
+          reason='empty_after_preparation',
+        )
+        self.writer.mouth(
+          generation=generation,
+          session_id=session_id,
+          utterance_id=utterance_id,
+          open_value=0.0,
+        )
+        self._clear_current(generation)
+        return
+      audio, sample_rate = await asyncio.to_thread(self.engine.synthesize_text, prepared_text, voice_override=request.speaker)
     except asyncio.CancelledError:
       self.playback.stop()
       self.writer.event(
