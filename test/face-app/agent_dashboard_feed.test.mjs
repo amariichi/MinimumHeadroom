@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   deriveAgentTransientUpdate,
+  resolveAgentIdForPane,
   resolveAgentIdForPayload,
-  summarizeAgentEventMessage
+  shouldCountPayloadAsAgentActivity,
+  summarizeAgentEventMessage,
+  summarizeSpeechBubbleText
 } from '../../face-app/public/agent_dashboard_feed.js';
 
 test('resolveAgentIdForPayload matches explicit agent_id first', () => {
@@ -24,6 +27,26 @@ test('resolveAgentIdForPayload falls back to session_id mapping', () => {
   assert.equal(resolveAgentIdForPayload({ session_id: 'missing' }, agents), null);
 });
 
+test('resolveAgentIdForPane maps helper panes and falls back to operator', () => {
+  const agents = [
+    { id: 'a', pane_id: '%2' },
+    { id: 'b', pane_id: '%9' }
+  ];
+  assert.equal(resolveAgentIdForPane('%9', agents, { operatorAgentId: '__operator__' }), 'b');
+  assert.equal(resolveAgentIdForPane('%404', agents, { operatorAgentId: '__operator__' }), '__operator__');
+  assert.equal(resolveAgentIdForPane(null, agents, { operatorAgentId: '__operator__' }), '__operator__');
+});
+
+test('shouldCountPayloadAsAgentActivity ignores control-plane state chatter', () => {
+  assert.equal(shouldCountPayloadAsAgentActivity({ type: 'say' }), true);
+  assert.equal(shouldCountPayloadAsAgentActivity({ type: 'event' }), true);
+  assert.equal(shouldCountPayloadAsAgentActivity({ type: 'operator_prompt' }), true);
+  assert.equal(shouldCountPayloadAsAgentActivity({ type: 'operator_set_pane_result', ok: true }), false);
+  assert.equal(shouldCountPayloadAsAgentActivity({ type: 'operator_terminal_snapshot' }), false);
+  assert.equal(shouldCountPayloadAsAgentActivity({ type: 'operator_state' }), false);
+  assert.equal(shouldCountPayloadAsAgentActivity({ type: 'say_result', spoken: true }), false);
+});
+
 test('summarizeAgentEventMessage normalizes key events', () => {
   assert.equal(
     summarizeAgentEventMessage({ name: 'cmd_started', meta: { action: 'run tests' } }),
@@ -31,12 +54,17 @@ test('summarizeAgentEventMessage normalizes key events', () => {
   );
   assert.equal(summarizeAgentEventMessage({ name: 'tests_passed' }), 'completed successfully');
   assert.equal(summarizeAgentEventMessage({ name: 'permission_required' }), 'approval required');
+  assert.equal(summarizeAgentEventMessage({ name: 'prompt_idle' }), 'ready for next prompt');
 });
 
 test('deriveAgentTransientUpdate maps say and say_result payloads', () => {
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'say', text: 'hello world' }), {
     message: 'hello world',
-    speaking: true
+    speaking: true,
+    needsAttention: false,
+    promptIdle: false,
+    speechBubble: 'hello world',
+    speechBubbleTtlMs: 5000
   });
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'say_result', spoken: false, reason: 'dropped' }), {
     message: 'speech skipped: dropped',
@@ -44,11 +72,79 @@ test('deriveAgentTransientUpdate maps say and say_result payloads', () => {
   });
 });
 
+test('summarizeSpeechBubbleText prefers whole sentences when possible', () => {
+  assert.equal(
+    summarizeSpeechBubbleText('最初の文です。次の文は少し長めですが、ここでは省略されます。', 18),
+    '最初の文です。'
+  );
+  assert.equal(
+    summarizeSpeechBubbleText('one sentence ends here. second sentence keeps going for a while.', 22),
+    'one sentence ends here.'
+  );
+});
+
 test('deriveAgentTransientUpdate maps tts_state and focus results', () => {
-  assert.deepEqual(deriveAgentTransientUpdate({ type: 'tts_state', phase: 'play_start' }), { speaking: true });
-  assert.deepEqual(deriveAgentTransientUpdate({ type: 'tts_state', phase: 'play_stop' }), { speaking: false });
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'tts_state', phase: 'play_start' }), {
+    speaking: true,
+    needsAttention: false,
+    promptIdle: false
+  });
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'tts_state', phase: 'play_stop' }), {
+    speaking: false,
+    promptIdle: false
+  });
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'tts_state', phase: 'error' }), {
+    speaking: false,
+    promptIdle: false,
+    error: true
+  });
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'operator_set_pane_result', ok: true }), {
     message: 'focused in operator'
   });
 });
 
+test('deriveAgentTransientUpdate maps attention, prompt-idle, and error oriented events', () => {
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'permission_required' }), {
+    message: 'approval required',
+    needsAttention: true,
+    needsAttentionTtlMs: 300000,
+    promptIdle: false
+  });
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'needs_attention', meta: { action: 'approval' } }), {
+    message: 'attention: approval',
+    needsAttention: true,
+    needsAttentionTtlMs: 300000,
+    promptIdle: false
+  });
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'prompt_idle' }), {
+    message: 'ready for next prompt',
+    needsAttention: false,
+    promptIdle: true,
+    speaking: false
+  });
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'cmd_failed' }), {
+    message: 'task failed',
+    needsAttention: false,
+    error: true,
+    promptIdle: false
+  });
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'operator_prompt', state: 'awaiting_input' }), {
+    message: 'attention needed',
+    needsAttention: true,
+    needsAttentionTtlMs: 300000,
+    promptIdle: false
+  });
+});
+
+test('deriveAgentTransientUpdate clears attention when work resumes or completes', () => {
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'cmd_started', meta: { action: 'run tests' } }), {
+    message: 'running: run tests',
+    needsAttention: false,
+    promptIdle: false
+  });
+  assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'cmd_succeeded' }), {
+    message: 'completed successfully',
+    needsAttention: false,
+    promptIdle: false
+  });
+});

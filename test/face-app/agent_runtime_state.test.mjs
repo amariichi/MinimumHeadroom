@@ -43,7 +43,7 @@ test('agent runtime store bootstraps missing state file', () => {
 
   assert.equal(fs.existsSync(statePath), true);
   assert.equal(state.schema_version, 1);
-  assert.equal(state.policy.hard_cap, 8);
+  assert.equal(state.policy.hard_cap, 7);
   assert.deepEqual(state.agents, []);
 
   cleanup(rootDir);
@@ -97,7 +97,7 @@ test('agent runtime store normalizes legacy removed entries away on load', () =>
     JSON.stringify({
       schema_version: 1,
       updated_at: 1,
-      policy: { default_cap: 4, hard_cap: 8 },
+      policy: { default_cap: 4, hard_cap: 7 },
       agents: [
         { id: 'a', status: 'removed', slot: 0 },
         { id: 'b', status: 'paused', slot: 1 },

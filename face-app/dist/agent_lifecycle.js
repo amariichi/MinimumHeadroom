@@ -565,10 +565,11 @@ export function createAgentLifecycleRuntime(options = {}) {
       });
     }
 
-    const message = asNonEmptyString(input.message) ?? 'focused in operator';
-    const patched = stateStore.setAgentMessage(agent.id, message, 'status');
     return {
-      ...patched,
+      ok: true,
+      noop: true,
+      agent: getAgentStateOrThrow(agent.id),
+      state: stateStore.getState(),
       action: 'focus',
       focus: {
         pane_id: paneId,

@@ -8,11 +8,14 @@ Paste this into your project `AGENTS.md` and customize.
 - Send `face_event` at major boundaries (`cmd_started`, `cmd_failed`, `cmd_succeeded`, `tests_failed`, `tests_passed`, `permission_required`, `retrying`, `idle`).
 - Prefer `face_say` for key state changes (start, failure, permission, success, completion), not visuals only.
 - Before any approval prompt, send `face_event(permission_required)` and then `face_say(priority=3, policy=interrupt)`.
+- Never ask for approval before those two signals are sent.
+- Treat approval wait as attention, not idle.
 
 ## Compatibility baseline (recommended)
 
 - Depend only on baseline MCP calls (`face_ping`, `face_event`, `face_say`).
 - Avoid tool-specific notify/hook features as hard dependencies.
+- If user action is required and there is no richer product event, prefer `permission_required` over silent waiting.
 
 ## Speech defaults
 

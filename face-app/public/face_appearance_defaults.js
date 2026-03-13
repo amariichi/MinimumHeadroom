@@ -1,0 +1,22 @@
+export const DEFAULT_FACE_APPEARANCE = Object.freeze({
+  skin: 0xc9905a,
+  hair: 0x2c1d16,
+  brow: 0x1a110c,
+  eyeWhite: 0xeef6ff,
+  pupil: 0x111722,
+  nose: 0x8e5933,
+  mouthOuter: 0x4a1b14,
+  mouthInner: 0xe37f62,
+  rootScale: 0.8,
+  headScaleX: 1.25,
+  headScaleY: 1.42,
+  headScaleZ: 1.08,
+  hairScaleX: 1.08,
+  hairScaleY: 0.54,
+  hairScaleZ: 0.9,
+  hairLift: 1.1,
+  hairOffsetZ: -0.04,
+  browWidth: 1,
+  eyeWidth: 1.45,
+  eyeDepth: 0.8
+});

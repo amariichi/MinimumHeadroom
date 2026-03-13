@@ -3,10 +3,8 @@ import {
   AXIS_CONVENTION,
   FEATURE_ANCHORS,
   applyDragEmotionBias,
-  applyEventToFaceState,
   createInitialFaceState,
   deriveFaceControls,
-  stepFaceState,
   validateFeatureAnchors,
   validateFeatureDepth
 } from './state_engine.js';
@@ -28,6 +26,9 @@ import {
   deriveAgentTileTone,
   deriveDashboardMode,
   normalizeDashboardAgent,
+  resolveAgentQuietActivityAt,
+  shouldRefreshAgentActivityFromState,
+  shouldUseAgentQuietPromptIdle,
   sortDashboardAgents,
   summarizeAgentTileMessage
 } from './agent_dashboard_state.js';
@@ -36,8 +37,28 @@ import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_da
 import { summarizeAgentActionFailure, summarizeAgentActionSuccess } from './agent_dashboard_action_feedback.js';
 import {
   deriveAgentTransientUpdate,
-  resolveAgentIdForPayload as resolveFeedAgentIdForPayload
+  resolveAgentIdForPane,
+  shouldCountPayloadAsAgentActivity
 } from './agent_dashboard_feed.js';
+import { createAgentDashboardFaceRenderer } from './agent_dashboard_face_renderer.js';
+import { deriveAgentFaceIdentity, faceAccentCss } from './agent_face_identity.js';
+import { applyIdleMotionToControls } from './face_idle_motion.js';
+import {
+  applyAgentFaceRuntimeDragDelta,
+  applyAgentFaceRuntimeDragToControls,
+  applyPayloadToAgentFaceRuntime,
+  createAgentFaceRuntime,
+  resolveFaceAgentId,
+  setAgentFaceRuntimeDragActive,
+  stepAgentFaceRuntime
+} from './agent_face_store.js';
+import {
+  addFaceLights,
+  applyAppearanceToRig,
+  applyControlsToRig,
+  createFaceCamera,
+  createFaceRig
+} from './face_rig.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -92,6 +113,7 @@ const operatorHelpToggleEl = document.getElementById('operator-help-toggle');
 const operatorKeyboardHelpEl = document.getElementById('operator-keyboard-help');
 const operatorMirrorEl = document.getElementById('operator-mirror');
 const agentDashboardEl = document.getElementById('agent-dashboard');
+const agentDashboardFaceCanvasEl = document.getElementById('agent-dashboard-face-canvas');
 const agentDashboardStatusEl = document.getElementById('agent-dashboard-status');
 const agentDashboardGridEl = document.getElementById('agent-dashboard-grid');
 const agentDashboardCloseButtonEl = document.getElementById('agent-dashboard-close');
@@ -104,11 +126,6 @@ const agentDashboardAddBranchEl = document.getElementById('agent-dashboard-branc
 const agentDashboardAddSubmitEl = document.getElementById('agent-dashboard-add-submit');
 
 const LOOKING_GLASS_ENABLED_KEY = 'mh_lg_webxr_enabled';
-const HEAD_LIMITS = {
-  yaw: (28 * Math.PI) / 180,
-  pitch: (38 * Math.PI) / 180,
-  roll: (23 * Math.PI) / 180
-};
 const XR_SESSION_TYPE = 'immersive-vr';
 const LG_POLYFILL_SOURCES = [
   'https://unpkg.com/@lookingglass/webxr@0.6.0/dist/bundle/webxr.js',
@@ -129,7 +146,6 @@ const DRAG_OFFSET_MAX = 0.8;
 const DRAG_OFFSET_DECAY_PER_SECOND = 6;
 const DRAG_INTENSITY_DECAY_PER_SECOND = 7.5;
 const DRAG_SPEED_FOR_FULL_INTENSITY_PX_PER_SEC = 780;
-const FACE_ROOT_BASE_Y = 0.56;
 const OPERATOR_ASR_MAX_RECORDING_MS = 30_000;
 const OPERATOR_MIN_AUDIO_BLOB_BYTES = 900;
 const OPERATOR_REALTIME_ASR_DEFAULT_SAMPLE_RATE = 16_000;
@@ -141,6 +157,7 @@ const OPERATOR_ESC_RECOVERY_REQUIRED_TAPS = 4;
 const OPERATOR_ESC_RECOVERY_WINDOW_MS = 1_600;
 const OPERATOR_RECOVER_PENDING_TIMEOUT_MS = 3_000;
 const OPERATOR_FOCUS_PENDING_TIMEOUT_MS = 3_000;
+const OPERATOR_MIRROR_ACTIVITY_SUPPRESS_MS = 1_500;
 const OPERATOR_UI_MODE_AUTO = 'auto';
 const OPERATOR_UI_MODE_PC = 'pc';
 const OPERATOR_UI_MODE_MOBILE = 'mobile';
@@ -151,6 +168,15 @@ const OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX = 24;
 const AGENT_DASHBOARD_POLL_INTERVAL_MS = 2_400;
 const AGENT_TILE_MESSAGE_TTL_MS = 11_000;
 const AGENT_TILE_SPEAKING_TTL_MS = 6_000;
+const AGENT_TILE_PROMPT_IDLE_TTL_MS = 90_000;
+const AGENT_TILE_PROMPT_IDLE_QUIET_MS = 8_000;
+const AGENT_TILE_MIRROR_ACTIVITY_RETENTION_MS = 10 * 60_000;
+const AGENT_DASHBOARD_RERENDER_INTERVAL_MS = 750;
+const AGENT_TILE_DRAG_START_THRESHOLD_PX = 8;
+const AGENT_TILE_DRAG_FOCUS_SUPPRESS_MS = 260;
+const DESKTOP_DASHBOARD_BASELINE_HEIGHT_PX = 1_080;
+const DESKTOP_DASHBOARD_MAX_UPSCALE = 1.16;
+const DESKTOP_DASHBOARD_WIDTH_RESERVE_PX = 430;
 const OPERATOR_DASHBOARD_AGENT_ID = '__operator__';
 const OPERATOR_DASHBOARD_AGENT_LABEL = 'operator';
 const OPERATOR_BRIDGE_SESSION_ID_DEFAULT = 'default';
@@ -211,203 +237,10 @@ function writeLookingGlassEnabled(value) {
   localStorage.setItem(LOOKING_GLASS_ENABLED_KEY, value ? '1' : '0');
 }
 
-function enforceSideX(value, side) {
-  if (side === 'left') {
-    return Math.min(value, -0.08);
-  }
-  return Math.max(value, 0.08);
-}
-
-function enforceFrontZ(value) {
-  return Math.max(1.01, value);
-}
-
-function createFaceRig(scene) {
-  const root = new THREE.Group();
-  root.position.set(0, FACE_ROOT_BASE_Y, 0);
-  root.scale.setScalar(0.8);
-  scene.add(root);
-
-  const neckPivot = new THREE.Group();
-  neckPivot.position.set(0, -0.35, 0);
-  root.add(neckPivot);
-
-  const materials = {
-    skin: new THREE.MeshStandardMaterial({ color: 0xc9905a, roughness: 0.56, metalness: 0.06 }),
-    hair: new THREE.MeshStandardMaterial({ color: 0x2c1d16, roughness: 0.82, metalness: 0.02 }),
-    brow: new THREE.MeshStandardMaterial({ color: 0x1a110c, roughness: 0.9, metalness: 0 }),
-    eyeWhite: new THREE.MeshStandardMaterial({ color: 0xeef6ff, roughness: 0.2, metalness: 0 }),
-    pupil: new THREE.MeshStandardMaterial({ color: 0x111722, roughness: 0.4, metalness: 0.04 }),
-    nose: new THREE.MeshStandardMaterial({ color: 0x8e5933, roughness: 0.58, metalness: 0.05 }),
-    mouthOuter: new THREE.MeshStandardMaterial({ color: 0x4a1b14, roughness: 0.66, metalness: 0.02 }),
-    mouthInner: new THREE.MeshStandardMaterial({ color: 0xe37f62, roughness: 0.36, metalness: 0.02 })
-  };
-
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.31, 0.78, 18), materials.skin);
-  neck.position.set(FEATURE_ANCHORS.neck.x, FEATURE_ANCHORS.neck.y + 0.28, FEATURE_ANCHORS.neck.z - 0.08);
-  neck.renderOrder = 1;
-  root.add(neck);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(1, 52, 38), materials.skin);
-  head.scale.set(1.25, 1.42, 1.08);
-  head.position.set(0, 0.16, 0);
-  head.renderOrder = 2;
-  neckPivot.add(head);
-
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.9, 40, 22, 0, Math.PI * 2, 0, Math.PI * 0.44), materials.hair);
-  hair.scale.set(1.08, 0.54, 0.9);
-  hair.position.set(0, 1.1, -0.04);
-  hair.renderOrder = 3;
-  neckPivot.add(hair);
-
-  const browGeometry = new THREE.BoxGeometry(0.68, 0.11, 0.1);
-  const browLeft = new THREE.Mesh(browGeometry, materials.brow);
-  const browRight = new THREE.Mesh(browGeometry, materials.brow);
-  browLeft.renderOrder = 4;
-  browRight.renderOrder = 4;
-  neckPivot.add(browLeft);
-  neckPivot.add(browRight);
-
-  const eyeWhiteGeometry = new THREE.SphereGeometry(0.25, 28, 20);
-  const pupilGeometry = new THREE.SphereGeometry(0.094, 20, 16);
-
-  const eyeWhiteLeft = new THREE.Mesh(eyeWhiteGeometry, materials.eyeWhite);
-  const eyeWhiteRight = new THREE.Mesh(eyeWhiteGeometry, materials.eyeWhite);
-  const pupilLeft = new THREE.Mesh(pupilGeometry, materials.pupil);
-  const pupilRight = new THREE.Mesh(pupilGeometry, materials.pupil);
-
-  eyeWhiteLeft.scale.set(1.45, 1, 0.8);
-  eyeWhiteRight.scale.set(1.45, 1, 0.8);
-
-  eyeWhiteLeft.renderOrder = 5;
-  eyeWhiteRight.renderOrder = 5;
-  pupilLeft.renderOrder = 6;
-  pupilRight.renderOrder = 6;
-
-  neckPivot.add(eyeWhiteLeft);
-  neckPivot.add(eyeWhiteRight);
-  neckPivot.add(pupilLeft);
-  neckPivot.add(pupilRight);
-
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.36, 4), materials.nose);
-  nose.rotation.x = Math.PI / 2;
-  nose.renderOrder = 6;
-  neckPivot.add(nose);
-
-  const mouthOuter = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.13, 0.12), materials.mouthOuter);
-  const mouthInner = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.09, 0.1), materials.mouthInner);
-  mouthOuter.renderOrder = 6;
-  mouthInner.renderOrder = 7;
-  neckPivot.add(mouthOuter);
-  neckPivot.add(mouthInner);
-
-  return {
-    root,
-    neckPivot,
-    hair,
-    browLeft,
-    browRight,
-    eyeWhiteLeft,
-    eyeWhiteRight,
-    pupilLeft,
-    pupilRight,
-    nose,
-    mouthOuter,
-    mouthInner
-  };
-}
-
-function applyControlsToRig(rig, controls) {
-  const swayX = clamp(controls.head.sway_x ?? controls.head.yaw * 0.5, -1, 1);
-  const swayY = clamp(controls.head.sway_y ?? controls.head.pitch * 0.5, -1, 1);
-  const pushZ = clamp(controls.head.push_z ?? 0, -1, 1);
-
-  rig.root.position.set(swayX * 0.2, FACE_ROOT_BASE_Y + swayY * 0.33, pushZ * 0.12);
-  rig.root.rotation.y = controls.head.yaw * 0.08;
-
-  rig.neckPivot.rotation.y = controls.head.yaw * HEAD_LIMITS.yaw;
-  rig.neckPivot.rotation.x = controls.head.pitch * HEAD_LIMITS.pitch;
-  rig.neckPivot.rotation.z = controls.head.roll * HEAD_LIMITS.roll;
-
-  const furrowOffset = controls.brows.furrow * 0.14;
-  const browTilt = controls.brows.tilt;
-
-  const browLeftX = enforceSideX(FEATURE_ANCHORS.brow_l.x + furrowOffset, 'left');
-  const browRightX = enforceSideX(FEATURE_ANCHORS.brow_r.x - furrowOffset, 'right');
-  const browZ = enforceFrontZ(FEATURE_ANCHORS.brow_l.z + 0.03 + controls.brows.furrow * 0.03);
-
-  rig.browLeft.position.set(browLeftX, FEATURE_ANCHORS.brow_l.y + (controls.brows.left.raise - 0.5) * 0.46, browZ);
-  rig.browRight.position.set(browRightX, FEATURE_ANCHORS.brow_r.y + (controls.brows.right.raise - 0.5) * 0.46, browZ);
-
-  rig.browLeft.rotation.z = browTilt * 0.56;
-  rig.browRight.rotation.z = -browTilt * 0.56;
-
-  const browScaleBase = 1.08 + controls.brows.furrow * 0.2;
-  const browThickness = 1 - controls.brows.furrow * 0.12;
-  rig.browLeft.scale.set(browScaleBase, browThickness, 1);
-  rig.browRight.scale.set(browScaleBase, browThickness, 1);
-
-  const eyeOpenLeft = clamp(controls.eyes.left.open, 0.02, 1);
-  const eyeOpenRight = clamp(controls.eyes.right.open, 0.02, 1);
-
-  const eyeLeftX = enforceSideX(FEATURE_ANCHORS.eye_l.x + controls.eyes.gaze_x * 0.04, 'left');
-  const eyeRightX = enforceSideX(FEATURE_ANCHORS.eye_r.x + controls.eyes.gaze_x * 0.04, 'right');
-  const eyeY = FEATURE_ANCHORS.eye_l.y + controls.eyes.gaze_y * 0.045;
-  const eyeZ = enforceFrontZ(FEATURE_ANCHORS.eye_l.z + controls.brows.furrow * 0.01);
-
-  rig.eyeWhiteLeft.position.set(eyeLeftX, eyeY, eyeZ);
-  rig.eyeWhiteRight.position.set(eyeRightX, eyeY, eyeZ);
-
-  rig.eyeWhiteLeft.scale.set(1.45, Math.max(0.02, eyeOpenLeft), 0.8);
-  rig.eyeWhiteRight.scale.set(1.45, Math.max(0.02, eyeOpenRight), 0.8);
-
-  const pupilYOffset = controls.eyes.gaze_y * 0.08;
-  const pupilZ = enforceFrontZ(FEATURE_ANCHORS.eye_l.z + 0.19);
-
-  rig.pupilLeft.position.set(eyeLeftX + controls.eyes.gaze_x * 0.11, eyeY + pupilYOffset, pupilZ);
-  rig.pupilRight.position.set(eyeRightX + controls.eyes.gaze_x * 0.11, eyeY + pupilYOffset, pupilZ);
-
-  rig.nose.position.set(FEATURE_ANCHORS.nose.x, FEATURE_ANCHORS.nose.y + controls.eyes.gaze_y * 0.03, enforceFrontZ(FEATURE_ANCHORS.nose.z));
-
-  const mouthOpen = clamp(controls.mouth.open, 0, 1);
-  const mouthWide = clamp(controls.mouth.wide, 0, 1);
-
-  rig.mouthOuter.position.set(FEATURE_ANCHORS.mouth.x, FEATURE_ANCHORS.mouth.y - mouthOpen * 0.03, enforceFrontZ(FEATURE_ANCHORS.mouth.z));
-  rig.mouthInner.position.set(
-    FEATURE_ANCHORS.mouth.x,
-    FEATURE_ANCHORS.mouth.y + 0.01 - mouthOpen * 0.045,
-    enforceFrontZ(FEATURE_ANCHORS.mouth.z + 0.02)
-  );
-
-  rig.mouthOuter.scale.set(0.86 + mouthWide * 0.78, 0.26 + mouthOpen * 2.12, 1);
-  rig.mouthInner.scale.set(0.78 + mouthWide * 0.68, 0.16 + mouthOpen * 1.94, 1);
-
-  const hairLift = 1.1 + controls.debug.jank * 0.016;
-  rig.hair.position.set(0, hairLift, -0.04);
-}
-
 function createScene(renderer) {
   const scene = new THREE.Scene();
-
-  const ambientLight = new THREE.AmbientLight(0xd8ecff, 0.64);
-  scene.add(ambientLight);
-
-  const keyLight = new THREE.DirectionalLight(0xfff2df, 0.95);
-  keyLight.position.set(2.8, 2.7, 3.8);
-  scene.add(keyLight);
-
-  const fillLight = new THREE.DirectionalLight(0x8ac9ff, 0.5);
-  fillLight.position.set(-2.4, 0.4, 2.8);
-  scene.add(fillLight);
-
-  const rimLight = new THREE.DirectionalLight(0xff8f58, 0.34);
-  rimLight.position.set(0.7, 2.2, -2.5);
-  scene.add(rimLight);
-
-  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 35);
-  camera.position.set(0, 0.1, 5.55);
-  camera.lookAt(0, 0.3, 0);
-
+  addFaceLights(scene);
+  const camera = createFaceCamera();
   const rig = createFaceRig(scene);
 
   renderer.xr.enabled = true;
@@ -436,8 +269,21 @@ let targetControls = deriveFaceControls(faceState, performance.now());
 let renderedControls = JSON.parse(JSON.stringify(targetControls));
 let lastFrameMs = performance.now();
 let utteranceExpiresAt = 0;
-let speechMouthOpen = 0;
-let speechActive = false;
+const agentFaceRuntimeById = new Map();
+const agentDashboardFaceRenderer = agentDashboardFaceCanvasEl ? createAgentDashboardFaceRenderer(agentDashboardFaceCanvasEl) : null;
+let agentDashboardFaceDescriptors = [];
+const agentTileFocusSuppressUntilById = new Map();
+const agentTileDragState = {
+  pointerId: null,
+  agentId: null,
+  slotEl: null,
+  startX: 0,
+  startY: 0,
+  lastX: 0,
+  lastY: 0,
+  lastTimeMs: 0,
+  dragging: false
+};
 
 const events = [];
 let reconnectAttempts = 0;
@@ -519,8 +365,10 @@ let operatorBridgeSessionId = OPERATOR_BRIDGE_SESSION_ID_DEFAULT;
 let operatorMirrorPaneId = null;
 let operatorRecoverPending = false;
 let operatorRecoverPendingTimer = null;
+let lastAgentDashboardRerenderAt = 0;
 let operatorFocusPending = null;
 let operatorFocusPendingTimer = null;
+let operatorMirrorActivitySuppression = null;
 let agentDashboardPollTimer = null;
 let agentDashboardLoadInFlight = null;
 let agentDashboardAddFormOpen = false;
@@ -710,6 +558,14 @@ function truncateAgentText(value, maxLength = 84) {
   return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
+function createAgentTileSpeechBubble(text) {
+  const bubble = document.createElement('div');
+  bubble.className = 'agent-tile-speech-bubble';
+  bubble.textContent = text;
+  bubble.setAttribute('aria-hidden', 'true');
+  return bubble;
+}
+
 function setAgentDashboardStatus(text, tone = 'default') {
   if (!agentDashboardStatusEl) {
     return;
@@ -785,6 +641,12 @@ function handleCompletedOperatorFocusResult(options = {}) {
     typeof options.statusPrefix === 'string' && options.statusPrefix.trim() !== '' ? options.statusPrefix.trim() : 'pane switched';
 
   operatorMirrorPaneId = paneId ?? operatorMirrorPaneId;
+  if (paneId) {
+    operatorMirrorActivitySuppression = {
+      paneId,
+      expiresAt: Date.now() + OPERATOR_MIRROR_ACTIVITY_SUPPRESS_MS
+    };
+  }
   if (operatorFocusPending) {
     const pending = operatorFocusPending;
     applyCompletedOperatorFocus(pending.agentId, pending.closePicker);
@@ -873,6 +735,51 @@ function formatDashboardVisibleCount() {
   return `${count} agent${count === 1 ? '' : 's'}`;
 }
 
+function computeDesktopAgentGridColumns(count) {
+  if (count <= 1) {
+    return 1;
+  }
+  if (count === 2) {
+    return 2;
+  }
+  if (count === 3) {
+    return 3;
+  }
+  return 4;
+}
+
+function resolveDesktopDashboardWidth(columns) {
+  const viewportWidth = Math.max(320, window.innerWidth || 0);
+  const viewportHeight = Math.max(640, window.innerHeight || 0);
+  let baseWidth = 1240;
+  if (columns <= 1) {
+    baseWidth = 360;
+  } else if (columns === 2) {
+    baseWidth = 760;
+  } else if (columns === 3) {
+    baseWidth = 1080;
+  }
+
+  const availableWidth = Math.max(320, viewportWidth - DESKTOP_DASHBOARD_WIDTH_RESERVE_PX);
+  const heightScale = clamp(viewportHeight / DESKTOP_DASHBOARD_BASELINE_HEIGHT_PX, 1, DESKTOP_DASHBOARD_MAX_UPSCALE);
+  const widthScale = clamp(availableWidth / baseWidth, 1, DESKTOP_DASHBOARD_MAX_UPSCALE);
+  const scale = Math.min(heightScale, widthScale);
+  return `${Math.round(baseWidth * scale)}px`;
+}
+
+function resolveDesktopFaceSlotAspect(columns) {
+  if (columns <= 1) {
+    return '1 / 0.98';
+  }
+  if (columns === 2) {
+    return '1 / 0.84';
+  }
+  if (columns === 3) {
+    return '1 / 0.76';
+  }
+  return '1 / 0.72';
+}
+
 function closeDesktopAgentDashboardSurface() {
   agentDashboardSurfaceOpen = false;
 }
@@ -921,6 +828,198 @@ function ensureSelectedDashboardAgent() {
   agentDashboardState.selectedAgentId = fallback?.id ?? null;
 }
 
+function getAgentFaceIdentitySource(agentId) {
+  if (isOperatorDashboardAgentId(agentId)) {
+    return {
+      id: OPERATOR_DASHBOARD_AGENT_ID,
+      session_id: resolveOperatorSessionId()
+    };
+  }
+  return agentDashboardState.agents.find((agent) => agent.id === agentId) ?? { id: agentId };
+}
+
+function getOrCreateAgentFaceRuntime(agentId, nowMs = Date.now()) {
+  const source = getAgentFaceIdentitySource(agentId);
+  const identity = deriveAgentFaceIdentity(source);
+  const existing = agentFaceRuntimeById.get(agentId);
+  if (existing) {
+    existing.identity = identity;
+    existing.appearance = identity.appearance;
+    existing.motion = identity.motion;
+    return existing;
+  }
+  const runtime = createAgentFaceRuntime({
+    nowMs,
+    appearance: identity.appearance,
+    motion: identity.motion
+  });
+  runtime.identity = identity;
+  agentFaceRuntimeById.set(agentId, runtime);
+  return runtime;
+}
+
+function syncKnownAgentFaceRuntimes(nowMs = Date.now()) {
+  getOrCreateAgentFaceRuntime(OPERATOR_DASHBOARD_AGENT_ID, nowMs);
+  for (const agent of agentDashboardState.agents) {
+    getOrCreateAgentFaceRuntime(agent.id, nowMs);
+  }
+}
+
+function resolvePayloadAgentIdForFace(payload) {
+  return resolveFaceAgentId(payload, agentDashboardState.agents, {
+    operatorAgentId: OPERATOR_DASHBOARD_AGENT_ID,
+    operatorSessionId: resolveOperatorSessionId()
+  });
+}
+
+function applyPayloadToFaceRuntimeStore(payload, nowMs = Date.now()) {
+  const agentId = resolvePayloadAgentIdForFace(payload);
+  if (!agentId) {
+    return null;
+  }
+  const runtime = getOrCreateAgentFaceRuntime(agentId, nowMs);
+  applyPayloadToAgentFaceRuntime(runtime, payload, nowMs);
+  return agentId;
+}
+
+function getCurrentFaceRuntime(nowMs = Date.now()) {
+  ensureSelectedDashboardAgent();
+  const selectedAgentId = agentDashboardState.selectedAgentId ?? OPERATOR_DASHBOARD_AGENT_ID;
+  return getOrCreateAgentFaceRuntime(selectedAgentId, nowMs);
+}
+
+function shouldSuppressAgentTileFocus(agentId, nowMs = Date.now()) {
+  const until = agentTileFocusSuppressUntilById.get(agentId) ?? 0;
+  if (until <= nowMs) {
+    agentTileFocusSuppressUntilById.delete(agentId);
+    return false;
+  }
+  return true;
+}
+
+function resetAgentTileDragState() {
+  if (agentTileDragState.slotEl) {
+    agentTileDragState.slotEl.classList.remove('is-dragging');
+  }
+  agentTileDragState.pointerId = null;
+  agentTileDragState.agentId = null;
+  agentTileDragState.slotEl = null;
+  agentTileDragState.startX = 0;
+  agentTileDragState.startY = 0;
+  agentTileDragState.lastX = 0;
+  agentTileDragState.lastY = 0;
+  agentTileDragState.lastTimeMs = 0;
+  agentTileDragState.dragging = false;
+}
+
+function beginAgentTileDrag(event, agentId, slotEl) {
+  if (!event || !agentId || !slotEl) {
+    return;
+  }
+  if (event.isPrimary === false || event.pointerType !== 'mouse' || event.button !== 0) {
+    return;
+  }
+  const runtime = getOrCreateAgentFaceRuntime(agentId, Date.now());
+  setAgentFaceRuntimeDragActive(runtime, true);
+  agentTileDragState.pointerId = event.pointerId;
+  agentTileDragState.agentId = agentId;
+  agentTileDragState.slotEl = slotEl;
+  agentTileDragState.startX = event.clientX;
+  agentTileDragState.startY = event.clientY;
+  agentTileDragState.lastX = event.clientX;
+  agentTileDragState.lastY = event.clientY;
+  agentTileDragState.lastTimeMs = event.timeStamp;
+  agentTileDragState.dragging = false;
+  if (typeof slotEl.setPointerCapture === 'function') {
+    try {
+      slotEl.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore capture failures.
+    }
+  }
+}
+
+function updateAgentTileDrag(event) {
+  if (!event || agentTileDragState.pointerId === null || event.pointerId !== agentTileDragState.pointerId) {
+    return;
+  }
+  const runtime = getOrCreateAgentFaceRuntime(agentTileDragState.agentId, Date.now());
+  const deltaX = event.clientX - agentTileDragState.lastX;
+  const deltaY = event.clientY - agentTileDragState.lastY;
+  const elapsedMs = Math.max(1, event.timeStamp - agentTileDragState.lastTimeMs);
+  const movementFromStartPx = Math.hypot(event.clientX - agentTileDragState.startX, event.clientY - agentTileDragState.startY);
+  if (!agentTileDragState.dragging && movementFromStartPx >= AGENT_TILE_DRAG_START_THRESHOLD_PX) {
+    agentTileDragState.dragging = true;
+    agentTileDragState.slotEl?.classList.add('is-dragging');
+  }
+  if (agentTileDragState.dragging) {
+    const modeHint = deriveFaceControls(runtime.faceState, performance.now()).debug.mode;
+    const speedPxPerSecond = Math.hypot(deltaX, deltaY) / (elapsedMs / 1000);
+    applyAgentFaceRuntimeDragDelta(runtime, {
+      deltaX,
+      deltaY,
+      speedPxPerSecond,
+      modeHint
+    });
+  }
+  agentTileDragState.lastX = event.clientX;
+  agentTileDragState.lastY = event.clientY;
+  agentTileDragState.lastTimeMs = event.timeStamp;
+}
+
+function endAgentTileDrag(event, canceled = false) {
+  if (!event || agentTileDragState.pointerId === null || event.pointerId !== agentTileDragState.pointerId) {
+    return;
+  }
+  const runtime = getOrCreateAgentFaceRuntime(agentTileDragState.agentId, Date.now());
+  setAgentFaceRuntimeDragActive(runtime, false);
+  const wasDragging = agentTileDragState.dragging;
+  const agentId = agentTileDragState.agentId;
+  const slotEl = agentTileDragState.slotEl;
+  if (slotEl && typeof slotEl.releasePointerCapture === 'function') {
+    try {
+      slotEl.releasePointerCapture(event.pointerId);
+    } catch {
+      // Ignore release failures.
+    }
+  }
+  resetAgentTileDragState();
+  if (canceled || !wasDragging) {
+    return;
+  }
+  agentTileFocusSuppressUntilById.set(agentId, Date.now() + AGENT_TILE_DRAG_FOCUS_SUPPRESS_MS);
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function bindAgentTileFaceDrag(faceSlot, agentId) {
+  if (!faceSlot || !agentId) {
+    return;
+  }
+  faceSlot.dataset.agentId = agentId;
+  faceSlot.addEventListener('pointerdown', (event) => {
+    beginAgentTileDrag(event, agentId, faceSlot);
+  });
+  faceSlot.addEventListener('pointermove', (event) => {
+    updateAgentTileDrag(event);
+  });
+  faceSlot.addEventListener('pointerup', (event) => {
+    endAgentTileDrag(event, false);
+  });
+  faceSlot.addEventListener('pointercancel', (event) => {
+    endAgentTileDrag(event, true);
+  });
+}
+
+function hasActiveAgentSpeech() {
+  for (const runtime of agentFaceRuntimeById.values()) {
+    if (runtime?.speech?.active || (runtime?.speech?.mouthOpen ?? 0) > 0.01) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function getAgentTransientState(agentId) {
   const existing = agentTransientStateById.get(agentId);
   if (existing) {
@@ -929,7 +1028,14 @@ function getAgentTransientState(agentId) {
   const next = {
     message: null,
     messageExpiresAt: 0,
-    speakingUntil: 0
+    speechBubble: null,
+    speechBubbleExpiresAt: 0,
+    speakingUntil: 0,
+    needsAttentionUntil: 0,
+    promptIdleUntil: 0,
+    errorUntil: 0,
+    lastActivityAt: 0,
+    lastMirrorActivityAt: 0
   };
   agentTransientStateById.set(agentId, next);
   return next;
@@ -938,8 +1044,29 @@ function getAgentTransientState(agentId) {
 function pruneAgentTransientState(nowMs = Date.now()) {
   for (const [agentId, state] of agentTransientStateById.entries()) {
     const messageExpired = !state.message || state.messageExpiresAt <= nowMs;
+    const speechBubbleExpired = !state.speechBubble || state.speechBubbleExpiresAt <= nowMs;
     const speakingExpired = state.speakingUntil <= nowMs;
-    if (messageExpired && speakingExpired) {
+    const attentionExpired = state.needsAttentionUntil <= nowMs;
+    const promptIdleExpired = state.promptIdleUntil <= nowMs;
+    const errorExpired = state.errorUntil <= nowMs;
+    const activityExpired =
+      !Number.isFinite(state.lastActivityAt) ||
+      state.lastActivityAt <= 0 ||
+      nowMs - state.lastActivityAt > AGENT_TILE_MIRROR_ACTIVITY_RETENTION_MS;
+    const mirrorActivityExpired =
+      !Number.isFinite(state.lastMirrorActivityAt) ||
+      state.lastMirrorActivityAt <= 0 ||
+      nowMs - state.lastMirrorActivityAt > AGENT_TILE_MIRROR_ACTIVITY_RETENTION_MS;
+    if (
+      messageExpired &&
+      speechBubbleExpired &&
+      speakingExpired &&
+      attentionExpired &&
+      promptIdleExpired &&
+      errorExpired &&
+      activityExpired &&
+      mirrorActivityExpired
+    ) {
       agentTransientStateById.delete(agentId);
     }
   }
@@ -955,15 +1082,91 @@ function setAgentTransientMessage(agentId, message, ttlMs = AGENT_TILE_MESSAGE_T
   transient.messageExpiresAt = Date.now() + Math.max(600, ttlMs);
 }
 
+function setAgentSpeechBubble(agentId, message, ttlMs = 5_000) {
+  const text = typeof message === 'string' ? message.trim() : '';
+  if (text === '') {
+    return;
+  }
+  const transient = getAgentTransientState(agentId);
+  transient.speechBubble = text;
+  transient.speechBubbleExpiresAt = Date.now() + Math.max(1_200, Math.min(8_000, ttlMs));
+}
+
 function markAgentSpeaking(agentId, active) {
   const transient = getAgentTransientState(agentId);
   transient.speakingUntil = active ? Date.now() + AGENT_TILE_SPEAKING_TTL_MS : 0;
 }
 
+function markAgentNeedsAttention(agentId, active, ttlMs = AGENT_TILE_MESSAGE_TTL_MS) {
+  const transient = getAgentTransientState(agentId);
+  transient.needsAttentionUntil = active ? Date.now() + Math.max(900, ttlMs) : 0;
+  if (active) {
+    transient.promptIdleUntil = 0;
+  }
+}
+
+function markAgentPromptIdle(agentId, active, ttlMs = AGENT_TILE_PROMPT_IDLE_TTL_MS) {
+  const transient = getAgentTransientState(agentId);
+  transient.promptIdleUntil = active ? Date.now() + Math.max(2_500, ttlMs) : 0;
+}
+
+function markAgentActivity(agentId, nowMs = Date.now()) {
+  const transient = getAgentTransientState(agentId);
+  transient.lastActivityAt = nowMs;
+  transient.promptIdleUntil = 0;
+}
+
+function markAgentMirrorActivity(agentId, nowMs = Date.now()) {
+  const transient = getAgentTransientState(agentId);
+  transient.lastActivityAt = nowMs;
+  transient.lastMirrorActivityAt = nowMs;
+  transient.promptIdleUntil = 0;
+}
+
+function markAgentError(agentId, active, ttlMs = AGENT_TILE_MESSAGE_TTL_MS) {
+  const transient = getAgentTransientState(agentId);
+  transient.errorUntil = active ? Date.now() + Math.max(900, ttlMs) : 0;
+  if (active) {
+    transient.promptIdleUntil = 0;
+  }
+}
+
+function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
+  const transient = agentTransientStateById.get(agentId) ?? null;
+  const speaking = Boolean(transient && transient.speakingUntil > nowMs);
+  const needsAttention = Boolean(transient && transient.needsAttentionUntil > nowMs);
+  const explicitPromptIdle = Boolean(transient && transient.promptIdleUntil > nowMs);
+  const error = Boolean(transient && transient.errorUntil > nowMs);
+  const promptNeedsAttention =
+    agentId === agentDashboardState.selectedAgentId &&
+    operatorActivePrompt &&
+    (operatorActivePrompt.state === 'awaiting_input' || operatorActivePrompt.state === 'awaiting_approval');
+  const lastActivityAt = resolveAgentQuietActivityAt(agent, transient);
+  const quietPromptIdle = shouldUseAgentQuietPromptIdle({
+    agentStatus: agent?.status ?? 'active',
+    nowMs,
+    lastActivityAt,
+    quietMs: AGENT_TILE_PROMPT_IDLE_QUIET_MS,
+    speaking,
+    needsAttention,
+    promptNeedsAttention,
+    error
+  });
+  return {
+    speaking,
+    needsAttention: needsAttention || promptNeedsAttention,
+    promptIdle: (explicitPromptIdle || quietPromptIdle) && !speaking && !needsAttention && !promptNeedsAttention && !error,
+    error
+  };
+}
+
 function trackAgentTileFromPayload(payload) {
-  const agentId = resolveFeedAgentIdForPayload(payload, agentDashboardState.agents);
+  const agentId = resolvePayloadAgentIdForFace(payload);
   if (!agentId) {
     return;
+  }
+  if (shouldCountPayloadAsAgentActivity(payload)) {
+    markAgentActivity(agentId);
   }
   const update = deriveAgentTransientUpdate(payload);
   if (!update) {
@@ -972,8 +1175,23 @@ function trackAgentTileFromPayload(payload) {
   if (typeof update.message === 'string' && update.message.trim() !== '') {
     setAgentTransientMessage(agentId, update.message);
   }
+  if (typeof update.speechBubble === 'string' && update.speechBubble.trim() !== '') {
+    setAgentSpeechBubble(agentId, update.speechBubble, update.speechBubbleTtlMs);
+  }
   if (typeof update.speaking === 'boolean') {
     markAgentSpeaking(agentId, update.speaking);
+  }
+  if (typeof update.needsAttention === 'boolean') {
+    markAgentNeedsAttention(agentId, update.needsAttention, update.needsAttentionTtlMs);
+  }
+  if (typeof update.attention === 'boolean') {
+    markAgentNeedsAttention(agentId, update.attention, update.needsAttentionTtlMs);
+  }
+  if (typeof update.promptIdle === 'boolean') {
+    markAgentPromptIdle(agentId, update.promptIdle);
+  }
+  if (typeof update.error === 'boolean') {
+    markAgentError(agentId, update.error);
   }
 }
 
@@ -990,6 +1208,18 @@ async function readAgentDashboardState() {
     throw new Error('agent state response is invalid');
   }
   return normalizeDashboardAgentList(payload.state.agents);
+}
+
+function syncAgentActivityFromDashboardState(previousAgents, nextAgents, nowMs = Date.now()) {
+  const previousById = new Map((Array.isArray(previousAgents) ? previousAgents : []).map((agent) => [agent.id, agent]));
+  for (const agent of Array.isArray(nextAgents) ? nextAgents : []) {
+    const transient = agentTransientStateById.get(agent.id) ?? null;
+    const hasTrackedActivity = Boolean(transient && Number.isFinite(transient.lastActivityAt) && transient.lastActivityAt > 0);
+    if (!hasTrackedActivity || shouldRefreshAgentActivityFromState(previousById.get(agent.id) ?? null, agent)) {
+      const stateActivityAt = Number.isFinite(agent.updated_at) && agent.updated_at > 0 ? agent.updated_at : nowMs;
+      markAgentActivity(agent.id, stateActivityAt);
+    }
+  }
 }
 
 function updateAgentDashboardMode() {
@@ -1145,33 +1375,56 @@ function renderAgentDashboard() {
   }
 
   updateAgentDashboardMode();
+  lastAgentDashboardRerenderAt = Date.now();
   const isMobileUi = operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE;
   const showDashboard = !isMobileUi && operatorPanelEnabled && agentDashboardSurfaceOpen;
   document.body.classList.toggle('agent-dashboard-open', showDashboard);
   agentDashboardEl.classList.toggle('hidden', !showDashboard);
   if (!showDashboard) {
+    agentDashboardFaceDescriptors = [];
     renderOperatorMobileAgentList();
     return;
   }
 
   pruneAgentTransientState(Date.now());
   ensureSelectedDashboardAgent();
+  syncKnownAgentFaceRuntimes(Date.now());
   agentDashboardAddFormEl.classList.add('hidden');
   agentDashboardAddFormOpen = false;
 
+  const visibleCount = getDashboardVisibleCount();
+  const gridColumns = computeDesktopAgentGridColumns(visibleCount);
+  agentDashboardEl.style.setProperty('--agent-dashboard-width', resolveDesktopDashboardWidth(gridColumns));
+  agentDashboardGridEl.style.setProperty('--agent-grid-columns', String(gridColumns));
+  agentDashboardGridEl.style.setProperty('--agent-face-slot-aspect', resolveDesktopFaceSlotAspect(gridColumns));
+  agentDashboardGridEl.dataset.columns = String(gridColumns);
+  agentDashboardGridEl.dataset.count = String(visibleCount);
+
   agentDashboardGridEl.innerHTML = '';
+  agentDashboardFaceDescriptors = [];
   const operatorTile = document.createElement('article');
   operatorTile.className = 'agent-tile';
-  operatorTile.dataset.tone = operatorRecoverPending ? 'speaking' : 'working';
+  const operatorToneOptions = resolveAgentTransientToneOptions(OPERATOR_DASHBOARD_AGENT_ID, null);
+  operatorTile.dataset.tone = deriveAgentTileTone(
+    { status: operatorRecoverPending ? 'active' : 'active' },
+    operatorToneOptions
+  );
   if (agentDashboardState.selectedAgentId === OPERATOR_DASHBOARD_AGENT_ID) {
     operatorTile.classList.add('is-selected');
   }
+  const operatorRuntime = getOrCreateAgentFaceRuntime(OPERATOR_DASHBOARD_AGENT_ID);
+  operatorTile.style.setProperty('--agent-accent', faceAccentCss(operatorRuntime.identity));
 
   const operatorFocusButton = document.createElement('button');
   operatorFocusButton.type = 'button';
   operatorFocusButton.className = 'agent-tile-focus';
   operatorFocusButton.setAttribute('aria-label', 'Focus operator');
-  operatorFocusButton.addEventListener('click', () => {
+  operatorFocusButton.addEventListener('click', (event) => {
+    if (shouldSuppressAgentTileFocus(OPERATOR_DASHBOARD_AGENT_ID)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     void focusDashboardAgent(OPERATOR_DASHBOARD_AGENT_ID).catch((error) => {
       setAgentDashboardStatus(error.message, 'warn');
       renderAgentDashboard();
@@ -1180,6 +1433,10 @@ function renderAgentDashboard() {
 
   const operatorHeader = document.createElement('header');
   operatorHeader.className = 'agent-tile-header';
+  const operatorFaceSlot = document.createElement('div');
+  operatorFaceSlot.className = 'agent-tile-face-slot';
+  operatorFaceSlot.setAttribute('aria-hidden', 'true');
+  bindAgentTileFaceDrag(operatorFaceSlot, OPERATOR_DASHBOARD_AGENT_ID);
   const operatorIdEl = document.createElement('span');
   operatorIdEl.className = 'agent-tile-id';
   operatorIdEl.textContent = OPERATOR_DASHBOARD_AGENT_LABEL;
@@ -1196,27 +1453,51 @@ function renderAgentDashboard() {
   operatorMessageEl.className = 'agent-tile-message';
   operatorMessageEl.textContent = operatorRecoverPending ? 'recovering operator...' : 'primary operator';
 
-  operatorFocusButton.append(operatorHeader, operatorSessionEl, operatorMessageEl);
+  const operatorTransient = agentTransientStateById.get(OPERATOR_DASHBOARD_AGENT_ID) ?? null;
+  const operatorSpeechBubble =
+    operatorTransient && operatorTransient.speechBubbleExpiresAt > Date.now() ? operatorTransient.speechBubble : null;
+  if (operatorSpeechBubble) {
+    operatorFaceSlot.appendChild(createAgentTileSpeechBubble(operatorSpeechBubble));
+  }
+
+  operatorFocusButton.append(operatorFaceSlot, operatorHeader, operatorSessionEl, operatorMessageEl);
   operatorTile.append(operatorFocusButton);
   agentDashboardGridEl.appendChild(operatorTile);
+  agentDashboardFaceDescriptors.push({
+    key: OPERATOR_DASHBOARD_AGENT_ID,
+    slotEl: operatorFaceSlot,
+    tone: operatorTile.dataset.tone,
+    appearance: operatorRuntime.appearance,
+    faceState: operatorRuntime.faceState,
+    speech: operatorRuntime.speech,
+    motion: operatorRuntime.motion,
+    drag: operatorRuntime.drag
+  });
 
   for (const agent of agentDashboardState.agents) {
-    const transient = agentTransientStateById.get(agent.id) ?? null;
     const nowMs = Date.now();
-    const speaking = Boolean(transient && transient.speakingUntil > nowMs);
+    const transient = agentTransientStateById.get(agent.id) ?? null;
+    const toneOptions = resolveAgentTransientToneOptions(agent.id, agent, nowMs);
     const transientMessage = transient && transient.messageExpiresAt > nowMs ? transient.message : null;
+    const runtime = getOrCreateAgentFaceRuntime(agent.id, nowMs);
     const tile = document.createElement('article');
     tile.className = 'agent-tile';
     if (agent.id === agentDashboardState.selectedAgentId) {
       tile.classList.add('is-selected');
     }
-    tile.dataset.tone = deriveAgentTileTone(agent, { speaking });
+    tile.dataset.tone = deriveAgentTileTone(agent, toneOptions);
+    tile.style.setProperty('--agent-accent', faceAccentCss(runtime.identity));
 
     const focusButton = document.createElement('button');
     focusButton.type = 'button';
     focusButton.className = 'agent-tile-focus';
     focusButton.setAttribute('aria-label', `Focus ${agent.id}`);
-    focusButton.addEventListener('click', () => {
+    focusButton.addEventListener('click', (event) => {
+      if (shouldSuppressAgentTileFocus(agent.id)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       void focusDashboardAgent(agent.id).catch((error) => {
         setAgentDashboardStatus(error.message, 'warn');
         renderAgentDashboard();
@@ -1225,6 +1506,10 @@ function renderAgentDashboard() {
 
     const header = document.createElement('header');
     header.className = 'agent-tile-header';
+    const faceSlot = document.createElement('div');
+    faceSlot.className = 'agent-tile-face-slot';
+    faceSlot.setAttribute('aria-hidden', 'true');
+    bindAgentTileFaceDrag(faceSlot, agent.id);
     const idEl = document.createElement('span');
     idEl.className = 'agent-tile-id';
     idEl.textContent = agent.id;
@@ -1241,6 +1526,11 @@ function renderAgentDashboard() {
     messageEl.className = 'agent-tile-message';
     messageEl.textContent = summarizeAgentTileMessage(agent, transientMessage);
 
+    const speechBubble = transient && transient.speechBubbleExpiresAt > nowMs ? transient.speechBubble : null;
+    if (speechBubble) {
+      faceSlot.appendChild(createAgentTileSpeechBubble(speechBubble));
+    }
+
     const actions = document.createElement('div');
     actions.className = 'agent-tile-actions';
     for (const item of listAgentLifecycleActions(agent)) {
@@ -1249,9 +1539,19 @@ function renderAgentDashboard() {
       actions.appendChild(button);
     }
 
-    focusButton.append(header, sessionEl, messageEl);
+    focusButton.append(faceSlot, header, sessionEl, messageEl);
     tile.append(focusButton, actions);
     agentDashboardGridEl.appendChild(tile);
+    agentDashboardFaceDescriptors.push({
+      key: agent.id,
+      slotEl: faceSlot,
+      tone: tile.dataset.tone,
+      appearance: runtime.appearance,
+      faceState: runtime.faceState,
+      speech: runtime.speech,
+      motion: runtime.motion,
+      drag: runtime.drag
+    });
   }
   renderOperatorMobileAgentList();
 }
@@ -1367,7 +1667,9 @@ async function refreshAgentDashboardState(options = {}) {
   }
   const silentStatus = options.silentStatus === true;
   agentDashboardLoadInFlight = (async () => {
+    const previousAgents = agentDashboardState.agents;
     const agents = await readAgentDashboardState();
+    syncAgentActivityFromDashboardState(previousAgents, agents, Date.now());
     agentDashboardState.agents = agents;
     agentDashboardState.loaded = true;
     ensureSelectedDashboardAgent();
@@ -2467,6 +2769,25 @@ function handleOperatorTerminalSnapshot(payload) {
   }
   rememberOperatorBridgeSessionId(payload);
   operatorMirrorPaneId = typeof payload.pane === 'string' && payload.pane.trim() !== '' ? payload.pane.trim() : null;
+  const agentId = resolveAgentIdForPane(operatorMirrorPaneId, agentDashboardState.agents, {
+    operatorAgentId: OPERATOR_DASHBOARD_AGENT_ID
+  });
+  const nowMs = Date.now();
+  const suppressMirrorActivity = Boolean(
+    operatorMirrorActivitySuppression &&
+      operatorMirrorPaneId &&
+      operatorMirrorActivitySuppression.paneId === operatorMirrorPaneId &&
+      operatorMirrorActivitySuppression.expiresAt > nowMs
+  );
+  if (operatorMirrorActivitySuppression && (!suppressMirrorActivity || operatorMirrorActivitySuppression.expiresAt <= nowMs)) {
+    operatorMirrorActivitySuppression = null;
+  }
+  if (agentId && !suppressMirrorActivity) {
+    markAgentMirrorActivity(agentId);
+  }
+  if (suppressMirrorActivity) {
+    operatorMirrorActivitySuppression = null;
+  }
   syncSelectedDashboardAgentToMirrorPane();
   operatorTerminalSnapshotLines = payload.lines.map((line) => String(line));
   renderOperatorTerminalSnapshot();
@@ -3252,15 +3573,12 @@ function handleTtsState(payload) {
   if (phase === 'worker_unavailable' || phase === 'worker_error') {
     setTtsStatus('unavailable', 'warn');
     setTtsPhase(phase, 'warn');
-    speechActive = false;
-    speechMouthOpen = 0;
     return;
   }
 
   if (phase === 'play_start') {
     setTtsStatus('speaking', 'ok');
     setTtsPhase(phase, 'ok');
-    speechActive = true;
     return;
   }
 
@@ -3270,8 +3588,6 @@ function handleTtsState(payload) {
     }
     setTtsStatus('ready', 'ok');
     setTtsPhase(phase, 'default');
-    speechActive = false;
-    speechMouthOpen = 0;
     return;
   }
 
@@ -3291,7 +3607,7 @@ function handleTtsState(payload) {
   if (phase === 'dropped') {
     stopActiveBrowserAudio(payload.generation, sessionId);
     setTtsPhase(`dropped:${payload.reason ?? '-'}`, 'warn');
-    if (!speechActive) {
+    if (!hasActiveAgentSpeech()) {
       setTtsStatus('ready', 'default');
     }
     return;
@@ -3301,8 +3617,6 @@ function handleTtsState(payload) {
     stopActiveBrowserAudio(payload.generation, sessionId);
     setTtsStatus('error', 'warn');
     setTtsPhase(`error:${payload.reason ?? '-'}`, 'warn');
-    speechActive = false;
-    speechMouthOpen = 0;
     return;
   }
 
@@ -3310,21 +3624,14 @@ function handleTtsState(payload) {
 }
 
 function handleTtsMouth(payload) {
-  if (typeof payload.open !== 'number' || !Number.isFinite(payload.open)) {
-    return;
-  }
-
-  speechMouthOpen = clamp(payload.open, 0, 1);
-  if (speechMouthOpen > 0.02) {
-    speechActive = true;
-  }
+  void payload;
 }
 
 function handleSayResult(payload) {
   const spoken = payload.spoken === true;
   if (!spoken) {
     setTtsPhase(`dropped:${payload.reason ?? '-'}`, 'warn');
-    if (!speechActive) {
+    if (!hasActiveAgentSpeech()) {
       setTtsStatus('ready', 'default');
     }
     return;
@@ -3412,17 +3719,11 @@ function handlePayload(payload) {
     return;
   }
 
-  if (typeof payload.session_id === 'string' && payload.session_id.trim() !== '' && payload.session_id !== '-') {
-    faceState.session_id = payload.session_id;
-    sessionIdEl.textContent = payload.session_id;
-  }
-
   appendEvent(payload);
   trackAgentTileFromPayload(payload);
+  applyPayloadToFaceRuntimeStore(payload, Date.now());
 
-  if (payload.type === 'event') {
-    faceState = applyEventToFaceState(faceState, payload, Date.now());
-  } else if (payload.type === 'say' && typeof payload.text === 'string' && payload.text.trim() !== '') {
+  if (payload.type === 'say' && typeof payload.text === 'string' && payload.text.trim() !== '') {
     if (shouldDisplaySay(payload)) {
       showUtterance(payload.text, payload.ttl_ms);
     }
@@ -4245,32 +4546,51 @@ function tick(nowMs) {
   const dtSeconds = Math.min(0.12, Math.max(0.001, (nowMs - lastFrameMs) / 1000));
   lastFrameMs = nowMs;
 
-  faceState = stepFaceState(faceState, dtSeconds, Date.now());
-  targetControls = deriveFaceControls(faceState, nowMs);
+  const wallClockMs = Date.now();
+  syncKnownAgentFaceRuntimes(wallClockMs);
+  for (const runtime of agentFaceRuntimeById.values()) {
+    stepAgentFaceRuntime(runtime, dtSeconds, wallClockMs);
+  }
+
+  const currentRuntime = getCurrentFaceRuntime(wallClockMs);
+  faceState = currentRuntime.faceState;
+  applyAppearanceToRig(rig, currentRuntime.appearance);
+
+  if (typeof faceState.session_id === 'string' && faceState.session_id.trim() !== '') {
+    sessionIdEl.textContent = faceState.session_id;
+  } else {
+    const currentAgent = getCurrentDashboardAgent();
+    sessionIdEl.textContent = currentAgent?.session_id ?? '-';
+  }
+
+  targetControls = deriveFaceControls(faceState, nowMs + (currentRuntime.motion?.timeOffsetMs ?? 0));
   decayDragOffsets(dtSeconds);
 
   if (dragState.intensity > 0.01) {
-    faceState = applyDragEmotionBias(
-      faceState,
+    currentRuntime.faceState = applyDragEmotionBias(
+      currentRuntime.faceState,
       {
         intensity: dragState.intensity,
         modeHint: dragState.modeHint
       },
       dtSeconds,
-      Date.now()
+      wallClockMs
     );
-    targetControls = deriveFaceControls(faceState, nowMs);
+    faceState = currentRuntime.faceState;
+    targetControls = deriveFaceControls(faceState, nowMs + (currentRuntime.motion?.timeOffsetMs ?? 0));
   }
 
   applyDragOffsetsToControls(targetControls);
+  applyAgentFaceRuntimeDragToControls(currentRuntime, targetControls);
+  targetControls = applyIdleMotionToControls(targetControls, nowMs, currentRuntime.motion, {
+    strength: operatorEffectiveUiMode === OPERATOR_UI_MODE_PC ? 0.8 : 1
+  });
 
-  const speechBlendOpen = clamp(speechMouthOpen, 0, 1);
-  if (speechActive || speechBlendOpen > 0.01) {
+  const speechBlendOpen = clamp(currentRuntime.speech.mouthOpen, 0, 1);
+  if (currentRuntime.speech.active || speechBlendOpen > 0.01) {
     targetControls.mouth.open = clamp(Math.max(targetControls.mouth.open * 0.46, speechBlendOpen * 1.08), 0, 1);
     targetControls.mouth.wide = clamp(Math.max(targetControls.mouth.wide, 0.44 + speechBlendOpen * 0.58), 0, 1);
   }
-
-  speechMouthOpen = Math.max(0, speechMouthOpen - dtSeconds * 1.2);
 
   blendControls(renderedControls, targetControls, Math.min(1, dtSeconds * 11.8));
   applyControlsToRig(rig, renderedControls);
@@ -4280,14 +4600,41 @@ function tick(nowMs) {
     utteranceExpiresAt = 0;
   }
 
+  if (wallClockMs - lastAgentDashboardRerenderAt >= AGENT_DASHBOARD_RERENDER_INTERVAL_MS) {
+    renderAgentDashboard();
+  }
+
   updateHud();
-  renderer.render(scene, camera);
+  if (operatorEffectiveUiMode !== OPERATOR_UI_MODE_PC) {
+    renderer.render(scene, camera);
+  } else {
+    renderer.clear();
+  }
+  if (agentDashboardFaceRenderer && agentDashboardSurfaceOpen && operatorEffectiveUiMode === OPERATOR_UI_MODE_PC) {
+    agentDashboardFaceRenderer.render(agentDashboardFaceDescriptors, {
+      containerEl: agentDashboardEl,
+      nowMs
+    });
+  } else if (agentDashboardFaceRenderer) {
+    agentDashboardFaceRenderer.render([], {
+      containerEl: agentDashboardEl,
+      nowMs
+    });
+  }
 }
 
 let resizeObserver;
 
 function markOperatorUiBootReady() {
   document.body.classList.remove('boot-pending');
+}
+
+function resetStartupOperatorFocus() {
+  operatorMirrorPaneId = null;
+  clearPendingOperatorFocus();
+  if (operatorPanelEnabled) {
+    agentDashboardState.selectedAgentId = OPERATOR_DASHBOARD_AGENT_ID;
+  }
 }
 
 async function bootstrap() {
@@ -4308,6 +4655,12 @@ async function bootstrap() {
   }
   installAgentDashboardControls();
   await refreshAgentDashboardState({ silentStatus: false });
+  if (operatorPanelEnabled) {
+    resetStartupOperatorFocus();
+    renderAgentDashboard();
+    updateOperatorUi();
+    await requestOperatorRecoverDefault();
+  }
   scheduleAgentDashboardPoll(AGENT_DASHBOARD_POLL_INTERVAL_MS);
   markOperatorUiBootReady();
 
@@ -4365,4 +4718,5 @@ window.addEventListener('beforeunload', () => {
   stopActiveBrowserAudio();
   renderer.setAnimationLoop(null);
   renderer.dispose();
+  agentDashboardFaceRenderer?.dispose();
 });

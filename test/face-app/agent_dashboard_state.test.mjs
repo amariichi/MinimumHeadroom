@@ -5,6 +5,9 @@ import {
   deriveDashboardMode,
   normalizeAgentStatus,
   normalizeDashboardAgent,
+  resolveAgentQuietActivityAt,
+  shouldRefreshAgentActivityFromState,
+  shouldUseAgentQuietPromptIdle,
   sortDashboardAgents,
   summarizeAgentTileMessage
 } from '../../face-app/public/agent_dashboard_state.js';
@@ -65,12 +68,111 @@ test('deriveDashboardMode supports additional active tiles on desktop', () => {
   assert.equal(deriveDashboardMode(agents, { isMobileUi: true, additionalActiveCount: 1 }), 'single');
 });
 
-test('deriveAgentTileTone prioritizes speaking state', () => {
+test('shouldRefreshAgentActivityFromState seeds new agents and tracks state changes', () => {
+  const previous = normalizeDashboardAgent({
+    id: 'agent-a',
+    status: 'active',
+    session_id: 'agent-a',
+    last_message: 'working',
+    updated_at: 100
+  });
+  const same = normalizeDashboardAgent({
+    id: 'agent-a',
+    status: 'active',
+    session_id: 'agent-a',
+    last_message: 'working',
+    updated_at: 100
+  });
+  const updated = normalizeDashboardAgent({
+    id: 'agent-a',
+    status: 'active',
+    session_id: 'agent-a',
+    last_message: 'finished',
+    updated_at: 120
+  });
+
+  assert.equal(shouldRefreshAgentActivityFromState(null, same), true);
+  assert.equal(shouldRefreshAgentActivityFromState(previous, same), false);
+  assert.equal(shouldRefreshAgentActivityFromState(previous, updated), true);
+});
+
+test('deriveAgentTileTone maps the simplified visible tone model', () => {
   const active = normalizeDashboardAgent({ status: 'active' });
   const missing = normalizeDashboardAgent({ status: 'missing' });
-  assert.equal(deriveAgentTileTone(active, { speaking: false }), 'working');
-  assert.equal(deriveAgentTileTone(missing, { speaking: false }), 'idle');
-  assert.equal(deriveAgentTileTone(missing, { speaking: true }), 'speaking');
+  assert.equal(deriveAgentTileTone(active, { speaking: false }), 'active');
+  assert.equal(deriveAgentTileTone(active, { speaking: true }), 'active');
+  assert.equal(deriveAgentTileTone(active, { promptIdle: true }), 'prompt_idle');
+  assert.equal(deriveAgentTileTone(active, { needsAttention: true }), 'needs_attention');
+  assert.equal(deriveAgentTileTone(active, { error: true }), 'error');
+  assert.equal(deriveAgentTileTone(missing, { speaking: false }), 'missing');
+  assert.equal(deriveAgentTileTone(missing, { promptIdle: true }), 'missing');
+});
+
+test('shouldUseAgentQuietPromptIdle requires quiet time without attention or speech', () => {
+  assert.equal(
+    shouldUseAgentQuietPromptIdle({
+      agentStatus: 'active',
+      nowMs: 20_000,
+      lastActivityAt: 10_000,
+      quietMs: 8_000
+    }),
+    true
+  );
+  assert.equal(
+    shouldUseAgentQuietPromptIdle({
+      agentStatus: 'active',
+      nowMs: 17_000,
+      lastActivityAt: 10_000,
+      quietMs: 8_000
+    }),
+    false
+  );
+  assert.equal(
+    shouldUseAgentQuietPromptIdle({
+      agentStatus: 'active',
+      nowMs: 20_000,
+      lastActivityAt: 10_000,
+      quietMs: 8_000,
+      needsAttention: true
+    }),
+    false
+  );
+  assert.equal(
+    shouldUseAgentQuietPromptIdle({
+      agentStatus: 'missing',
+      nowMs: 20_000,
+      lastActivityAt: 10_000,
+      quietMs: 8_000
+    }),
+    false
+  );
+});
+
+test('resolveAgentQuietActivityAt falls back to persisted agent updated_at when transient activity is absent', () => {
+  const agent = normalizeDashboardAgent({
+    id: 'agent-a',
+    status: 'active',
+    updated_at: 12_345
+  });
+  assert.equal(resolveAgentQuietActivityAt(agent, null), 12_345);
+  assert.equal(resolveAgentQuietActivityAt(agent, { lastActivityAt: 10_000, lastMirrorActivityAt: 11_000 }), 12_345);
+  assert.equal(resolveAgentQuietActivityAt(agent, { lastActivityAt: 20_000, lastMirrorActivityAt: 19_000 }), 20_000);
+});
+
+test('shouldUseAgentQuietPromptIdle can succeed from persisted activity alone', () => {
+  assert.equal(
+    shouldUseAgentQuietPromptIdle({
+      agentStatus: 'active',
+      nowMs: 30_000,
+      lastActivityAt: 12_000,
+      quietMs: 8_000,
+      speaking: false,
+      needsAttention: false,
+      promptNeedsAttention: false,
+      error: false
+    }),
+    true
+  );
 });
 
 test('summarizeAgentTileMessage prefers transient then persisted text', () => {
