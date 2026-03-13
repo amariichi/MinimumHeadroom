@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_CAP = 4;
-const HARD_CAP = 8;
+const HARD_CAP = 7;
 const TRACKED_STATUSES = new Set(['active', 'missing']);
 
 function toLogger(log) {

@@ -31,6 +31,8 @@ Purpose: provide a practical baseline so coding agents continuously report inten
 
 - `face_event(name="permission_required", severity=0.9, meta={action, ...})`
 - `face_say(..., priority=3, policy="interrupt")` immediately before requesting approval
+- Do not ask for approval in chat before those two signals are emitted.
+- Treat approval wait as `needs_attention`, not as `idle` or `prompt_idle`.
 
 5. Retry after failure
 
@@ -49,6 +51,7 @@ Use this profile when you want behavior that survives agent feature churn.
 - Do not depend on product-specific hook systems (`notify`, `hooks`, custom event buses).
 - Treat permission speech as an agent-side behavior: emit it before any approval prompt.
 - Keep `permission_required` as the event contract; put concrete action details in `meta.action`.
+- If a user response is required and no explicit product event exists, prefer `permission_required` over silent waiting.
 
 ## 4. Speech policy (prefer voice on key states)
 

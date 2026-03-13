@@ -204,11 +204,21 @@ export function applyEventToFaceState(previousState, payload, nowMs = Date.now()
       const confidenceBoost = clamp((next.metrics.confidence - 0.6) / 0.34, 0, 1);
       startGesture(next, 'nod', nowMs, 0.56 + 0.32 * next.metrics.confidence + 0.14 * confidenceBoost, 1260 + confidenceBoost * 900);
     }
-  } else if (name === 'permission_required') {
-    next.metrics.urgency += 0.55;
-    next.metrics.confidence -= 0.18;
-    next.metrics.confused += 0.12;
+  } else if (name === 'permission_required' || name === 'needs_attention') {
+    const urgencyBoost = name === 'permission_required' ? 0.55 : 0.42;
+    const confidencePenalty = name === 'permission_required' ? 0.18 : 0.12;
+    const confusedBoost = name === 'permission_required' ? 0.12 : 0.08;
+    next.metrics.urgency += urgencyBoost;
+    next.metrics.confidence -= confidencePenalty;
+    next.metrics.confused += confusedBoost;
     startGesture(next, 'tilt', nowMs, 0.56 + 0.32 * next.metrics.confused, 1800, 1);
+  } else if (name === 'prompt_idle') {
+    next.metrics.urgency *= 0.3;
+    next.metrics.confused *= 0.36;
+    next.metrics.frustration *= 0.44;
+    next.metrics.stuckness *= 0.42;
+    next.metrics.confidence = 0.54 + (next.metrics.confidence - 0.54) * 0.18;
+    clearGesture(next, nowMs);
   } else if (name === 'retrying') {
     next.metrics.urgency += 0.13;
     next.metrics.confused *= 0.86;
@@ -245,7 +255,7 @@ export function stepFaceState(previousState, dtSeconds, nowMs = Date.now()) {
   next.metrics.frustration *= Math.exp(-dt / 20);
   next.metrics.urgency *= Math.exp(-dt / 18);
   next.metrics.stuckness *= Math.exp(-dt / 25);
-  const confidenceTauSeconds = state.last_event === 'idle' ? 5 : 30;
+  const confidenceTauSeconds = state.last_event === 'idle' ? 5 : state.last_event === 'prompt_idle' ? 9 : 30;
   const confidenceBlend = clamp(dt / confidenceTauSeconds, 0, 1);
   next.metrics.confidence += (0.5 - next.metrics.confidence) * confidenceBlend;
 

@@ -50,7 +50,7 @@ test('dashboard flow integration: say -> missing transition -> persisted state t
   );
 
   assert.equal(transientMessageFor('agent-b', transientById), 'running tests now');
-  assert.equal(deriveAgentTileTone(agents[1], { speaking: transientSpeakingFor('agent-b', transientById) }), 'speaking');
+  assert.equal(deriveAgentTileTone(agents[1], { speaking: transientSpeakingFor('agent-b', transientById) }), 'active');
   assert.equal(summarizeAgentTileMessage(agents[1], transientMessageFor('agent-b', transientById)), 'running tests now');
 
   const missingFeedback = summarizeAgentActionFailure(

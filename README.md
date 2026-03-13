@@ -2,11 +2,11 @@
 
 <p>
   <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/b3b0a1dd-ef19-49d0-bdaf-5068ee1a376c" />
-  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/fa7f65d5-f314-4118-90c7-3853fddd6668" />
+  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/60905c13-7c4b-4321-bfe3-f343a85c974f" />
 </p>
 <p>
+  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/fa7f65d5-f314-4118-90c7-3853fddd6668" />
   <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/07930388-e991-4686-8a3c-f2e7e1c64b89" />
-  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/793cae8f-e177-4d1a-93bb-0816fe77f735" />
 </p>
 
 [English](#english) | [日本語](#japanese)
@@ -52,6 +52,8 @@ A face and operator companion app for coding agents.
 - Multi-agent operator control:
   - desktop current-agent bar opens the Agents surface from the normal one-agent view
   - mobile current-agent bar opens the agent list without displacing `Esc`
+  - desktop currently renders `operator + up to 7 helper agents` at once (`8` tiles total)
+  - each desktop face tile keeps its own identity, speech bubble, idle/attention tone, and direct mouse-drag head steering
   - `+Agent` uses safe auto-generated id/branch/worktree defaults
   - selecting a tile or list row changes the real operator focus target
   - `Delete` removes the helper agent pane, worktree, and runtime record together
@@ -283,6 +285,20 @@ Then tools are published as:
 - `face_say`
 - `face_ping`
 
+Optional and experimental: if you want an explicit `prompt_idle` event immediately
+after a completed Codex turn, add the checked-in notify helper to your Codex config
+and verify it on your Codex version/runtime:
+
+```toml
+notify = ["node", "/ABS/PATH/minimum-headroom/scripts/codex-notify-to-face.mjs"]
+```
+
+The helper only reacts to Codex `agent-turn-complete` notifications and emits an
+explicit `prompt_idle` face event to the default operator session. This is not part of
+the baseline signaling contract; `needs_attention` still comes from explicit face
+events such as `permission_required`. Without the helper, the UI still infers
+`prompt_idle` from per-agent activity silence, but the transition is less immediate.
+
 ### Antigravity example
 
 Use `doc/examples/antigravity/mcp_config.json` as a template with your own absolute path.
@@ -383,6 +399,14 @@ npm run asr-worker:smoke
 - ターミナルミラー:
   - tmux末尾出力の読み取り専用スナップショット
   - 500ms 発行（変更があった場合のみ）
+- マルチエージェントオペレーター制御:
+  - Desktop の現在エージェントバーから `Agents` サーフェスを開く
+  - Mobile の現在エージェントバーから agent list を開く
+  - Desktop は現在 `operator + helper 最大 7 体` を同時表示します（合計 `8` タイル）
+  - 各 Desktop 顔タイルは固有の見た目、speech bubble、idle/attention 色、個別のマウスドラッグ頭部操作を持ちます
+  - タイルや行の選択で operator pane の接続先を切り替えます
+  - `Delete` は helper agent の pane / worktree / runtime record をまとめて削除します
+  - `tmux` session 全体を落として再起動した場合も、helper の worktree が残っていれば再生成され、無ければ `missing` として戻ります
 - MCPシグナリングツール:
   - `face.event` / `face.say` / `face.ping`
 - ブラウザ3Dフェイス描画:
@@ -562,6 +586,7 @@ tailscale serve --bg 8765
 
 - Desktop: 現在エージェントバーを押して `Agents` を開き、`+Agent` で helper を追加し、タイルを押して operator pane の接続先を切り替え、完了した helper は `Delete` で削除します。
 - Mobile: タイトル行の下にある現在エージェントバーを押して agent list を開き、`+Agent`、行タップでの切り替え、`Delete` による helper 削除を行います。
+- Desktop は現在 `operator + helper 最大 7 体` を同時表示します（合計 `8` タイル）。
 - `tmux` session 全体を落としてから `./scripts/run-operator-once.sh` で再起動した場合も、helper の worktree が残っていれば再生成され、worktree が無ければ `missing` として戻ります。
 
 よく使う派生例:
@@ -607,6 +632,20 @@ env = { FACE_WS_URL = "ws://127.0.0.1:8765/ws", MCP_TOOL_NAME_STYLE = "underscor
 - `face_event`
 - `face_say`
 - `face_ping`
+
+任意かつ実験的ですが、Codex のターン完了直後に明示的な `prompt_idle` event を送りたい
+場合は、Codex 設定へ同梱の notify helper を追加し、利用中の Codex バージョンと
+実行モードで実地確認してください。
+
+```toml
+notify = ["node", "/ABS/PATH/minimum-headroom/scripts/codex-notify-to-face.mjs"]
+```
+
+この helper は Codex の `agent-turn-complete` 通知だけを受け取り、tmux bridge を通さずに
+default operator session へ明示的な `prompt_idle` face event を送ります。これは baseline
+契約ではないため、`needs_attention` は引き続き `permission_required` などの明示イベントから
+表現します。helper を使わない場合でも、UI は agent ごとの activity silence から
+`prompt_idle` を推定しますが、遷移はやや遅くなります。
 
 ### Antigravity 例
 

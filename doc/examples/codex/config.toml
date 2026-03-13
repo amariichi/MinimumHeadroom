@@ -9,3 +9,10 @@ env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws" }
 
 # If your MCP client rejects tool names with dots, switch to underscore names:
 # env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "MCP_TOOL_NAME_STYLE" = "underscore" }
+
+# Optional and experimental: tell the visible operator face when Codex has finished a
+# turn and is ready for the next prompt. Current Codex runtime behavior may differ by
+# version or execution mode, so verify locally before relying on this path. This helper
+# emits `event.name = "prompt_idle"` to the operator session instead of going through
+# the tmux bridge.
+# notify = ["node", "/ABS/PATH/minimum-headroom/scripts/codex-notify-to-face.mjs"]
