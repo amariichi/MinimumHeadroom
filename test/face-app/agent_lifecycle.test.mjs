@@ -593,8 +593,11 @@ test('agent lifecycle runtime can rescue buffered multiline submit with one extr
   assert.equal(result.ok, true);
   assert.equal(result.injection.rescue_submit.enabled, true);
   assert.equal(result.injection.rescue_submit.attempted, true);
+  assert.equal(result.injection.rescue_submit.attempt_count, 1);
   assert.equal(result.injection.rescue_submit.rescued, true);
   assert.equal(result.injection.rescue_submit.matched_line, 'Line two');
+  assert.deepEqual(result.injection.rescue_submit.matched_lines, ['Line two', 'Line one']);
+  assert.equal(result.injection.rescue_submit.buffered_still_visible, false);
   assert.equal(enterCount, 2);
   assert.equal(lineBuffer, '');
   assert.equal(
@@ -608,6 +611,192 @@ test('agent lifecycle runtime can rescue buffered multiline submit with one extr
     ).length,
     2
   );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime waits for buffered multiline submit to disappear after rescue enter', async () => {
+  let lineBuffer = '';
+  let enterCount = 0;
+  let captureCount = 0;
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        captureCount += 1;
+        if (enterCount >= 2 && captureCount >= 3) {
+          lineBuffer = '';
+        }
+        return { stdout: lineBuffer === '' ? '' : `${lineBuffer}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === '-l') {
+        lineBuffer += args[5] ?? '';
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === 'C-m') {
+        enterCount += 1;
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-rescue-submit-poll',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%97',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-rescue-submit-poll', {
+    text: 'Line one\nLine two',
+    submit: true,
+    reinforce_submit: false,
+    rescue_submit_if_buffered: true,
+    rescue_submit_delay_ms: 20,
+    rescue_submit_poll_ms: 20,
+    rescue_submit_timeout_ms: 140
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.rescue_submit.enabled, true);
+  assert.equal(result.injection.rescue_submit.attempted, true);
+  assert.equal(result.injection.rescue_submit.attempt_count, 1);
+  assert.equal(result.injection.rescue_submit.rescued, true);
+  assert.equal(result.injection.rescue_submit.buffered_still_visible, false);
+  assert.equal(enterCount, 2);
+  assert.equal(captureCount >= 3, true);
+  assert.equal(lineBuffer, '');
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime detects buffered assignment from structured markers when tail lines wrap', async () => {
+  let enterCount = 0;
+  let rescued = false;
+  const bufferedSnapshot = [
+    'Completion criteria: Return one finding or done if none.',
+    'Review policy: read_only',
+    'Timebox minutes: 2',
+    'Max findings this pass: 1',
+    '- After your f'
+  ].join('\n');
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return { stdout: rescued ? '' : `${bufferedSnapshot}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === 'C-m') {
+        enterCount += 1;
+        if (enterCount >= 2) {
+          rescued = true;
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-rescue-structured-markers',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%98',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-rescue-structured-markers', {
+    text: [
+      'Owner assignment for helper agent structured.',
+      'Completion criteria: Return one finding or done if none.',
+      'Review policy: read_only',
+      'Timebox minutes: 2',
+      'Max findings this pass: 1',
+      '- After your final done/review_findings report, stop and wait for the owner instead of continuing exploration on your own.',
+      'Begin now.'
+    ].join('\n'),
+    submit: true,
+    reinforce_submit: false,
+    rescue_submit_if_buffered: true,
+    rescue_submit_delay_ms: 20,
+    rescue_submit_poll_ms: 20,
+    rescue_submit_timeout_ms: 140
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.rescue_submit.enabled, true);
+  assert.equal(result.injection.rescue_submit.attempted, true);
+  assert.equal(result.injection.rescue_submit.attempt_count, 1);
+  assert.equal(result.injection.rescue_submit.rescued, true);
+  assert.equal(result.injection.rescue_submit.buffered_still_visible, false);
+  assert.equal(result.injection.rescue_submit.matched_lines.includes('Completion criteria:'), true);
+  assert.equal(result.injection.rescue_submit.matched_lines.includes('Review policy:'), true);
+  assert.equal(enterCount, 2);
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime can use a second rescue enter when buffered input still remains', async () => {
+  let lineBuffer = '';
+  let enterCount = 0;
+  let captureCount = 0;
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        captureCount += 1;
+        if (enterCount >= 3 && captureCount >= 4) {
+          lineBuffer = '';
+        }
+        return { stdout: lineBuffer === '' ? '' : `${lineBuffer}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === '-l') {
+        lineBuffer += args[5] ?? '';
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === 'C-m') {
+        enterCount += 1;
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-rescue-submit-second-attempt',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%99',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-rescue-submit-second-attempt', {
+    text: 'Line one\nLine two',
+    submit: true,
+    reinforce_submit: false,
+    rescue_submit_if_buffered: true,
+    rescue_submit_delay_ms: 20,
+    rescue_submit_poll_ms: 20,
+    rescue_submit_timeout_ms: 220,
+    rescue_submit_max_attempts: 2
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.rescue_submit.enabled, true);
+  assert.equal(result.injection.rescue_submit.attempted, true);
+  assert.equal(result.injection.rescue_submit.attempt_count, 2);
+  assert.equal(result.injection.rescue_submit.rescued, true);
+  assert.equal(result.injection.rescue_submit.buffered_still_visible, false);
+  assert.equal(enterCount, 3);
+  assert.equal(lineBuffer, '');
 
   cleanup(repoRoot);
 });

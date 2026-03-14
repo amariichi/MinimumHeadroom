@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  deriveAgentOperationalState,
+  deriveAssignmentToneOptions,
   deriveAgentTileTone,
   deriveDashboardMode,
   normalizeAgentStatus,
@@ -9,6 +11,7 @@ import {
   shouldRefreshAgentActivityFromState,
   shouldUseAgentQuietPromptIdle,
   sortDashboardAgents,
+  summarizeAgentOperationalState,
   summarizeAgentTileMessage
 } from '../../face-app/public/agent_dashboard_state.js';
 
@@ -180,4 +183,105 @@ test('summarizeAgentTileMessage prefers transient then persisted text', () => {
   assert.equal(summarizeAgentTileMessage(agent, 'transient'), 'transient');
   assert.equal(summarizeAgentTileMessage(agent, null), 'persisted');
   assert.equal(summarizeAgentTileMessage(normalizeDashboardAgent({ status: 'missing' })), 'missing');
+});
+
+test('deriveAssignmentToneOptions suppresses prompt idle for active missions and flags blocked delivery', () => {
+  assert.deepEqual(
+    deriveAssignmentToneOptions({
+      delivery_state: 'acked',
+      last_report_kind: 'progress'
+    }),
+    {
+      activeMission: true,
+      needsAttention: false,
+      suppressPromptIdle: true
+    }
+  );
+  assert.deepEqual(
+    deriveAssignmentToneOptions({
+      delivery_state: 'timeout',
+      last_report_kind: 'progress'
+    }),
+    {
+      activeMission: false,
+      needsAttention: true,
+      suppressPromptIdle: false
+    }
+  );
+});
+
+test('deriveAgentOperationalState distinguishes awaiting ack, thinking, review wait, and idle', () => {
+  const agent = normalizeDashboardAgent({ id: 'helper-a', status: 'active', updated_at: 1_000 });
+
+  assert.equal(
+    deriveAgentOperationalState(agent, {
+      assignment: {
+        delivery_state: 'sent_to_tmux'
+      }
+    }),
+    'awaiting_ack'
+  );
+
+  assert.equal(
+    deriveAgentOperationalState(agent, {
+      nowMs: 30_000,
+      lastActivityAt: 24_000,
+      promptIdle: false,
+      assignment: {
+        delivery_state: 'acked',
+        last_report_kind: 'progress',
+        last_report_at: 24_000
+      }
+    }),
+    'working'
+  );
+
+  assert.equal(
+    deriveAgentOperationalState(agent, {
+      nowMs: 30_000,
+      lastActivityAt: 10_000,
+      promptIdle: false,
+      recentActivityWindowMs: 5_000,
+      assignment: {
+        delivery_state: 'acked',
+        last_report_kind: 'progress',
+        last_report_at: 10_000
+      }
+    }),
+    'thinking'
+  );
+
+  assert.equal(
+    deriveAgentOperationalState(agent, {
+      promptIdle: true,
+      ownerInboxSummary: {
+        informational_count: 1
+      },
+      assignment: {
+        delivery_state: 'acked',
+        last_report_kind: 'review_findings',
+        last_report_at: 10_000
+      }
+    }),
+    'awaiting_review'
+  );
+
+  assert.equal(
+    deriveAgentOperationalState(agent, {
+      promptIdle: true
+    }),
+    'idle'
+  );
+});
+
+test('summaries expose the derived operational state text', () => {
+  assert.equal(summarizeAgentOperationalState('thinking'), 'thinking');
+  assert.equal(
+    summarizeAgentTileMessage(normalizeDashboardAgent({ status: 'active' }), null, null, 'thinking'),
+    'quiet, mission in progress'
+  );
+  assert.equal(
+    summarizeAgentTileMessage(normalizeDashboardAgent({ status: 'active' }), null, null, 'awaiting_ack'),
+    'awaiting first report'
+  );
 });

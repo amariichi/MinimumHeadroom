@@ -86,20 +86,21 @@ test('renderAssignmentPrompt prepends helper bootstrap guidance for generated pr
     max_findings: 1
   });
 
-  assert.match(prompt, /Bootstrap protocol \(follow in order\):/);
+  assert.match(prompt, /Immediate protocol:/);
   assert.match(prompt, /Before reading repo files, skills, or running broad exploration/);
   assert.match(prompt, /kind=progress, summary='Mission accepted'/);
-  assert.match(prompt, /After the first report succeeds, use the minimum-headroom-ops skill/);
-  assert.match(prompt, /inspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration/);
-  assert.match(prompt, /When the work is complete, send done or review_findings/);
-  assert.match(prompt, /send the final done\/review_findings report before any further prompts, \/skills, or extra exploration/);
+  assert.match(prompt, /[Ii]nspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration/);
+  assert.match(prompt, /Send done or review_findings as soon as the current completion criteria are satisfied/);
+  assert.match(prompt, /return the first qualifying finding immediately instead of hunting for more/);
+  assert.match(prompt, /If no qualifying finding appears within the stated scope or timebox, send done with a short no-findings summary/);
+  assert.match(prompt, /If max_findings is 1 or the completion criteria say "one finding or done", stop after the first qualifying result/);
+  assert.match(prompt, /After your final done\/review_findings report, stop and wait for the owner/);
   assert.match(prompt, /Stream root: \/tmp\/target/);
   assert.match(prompt, /Target paths \(stream-root anchored\): \/tmp\/target\/README\.md, \/tmp\/target\/doc\/examples\/AGENT_RULES\.md/);
   assert.match(prompt, /Completion criteria: Return one finding or done\./);
   assert.match(prompt, /Timebox minutes: 3/);
   assert.match(prompt, /Max findings this pass: 1/);
   assert.match(prompt, /Prefer returning one concrete result quickly/);
-  assert.match(prompt, /outside your helper worktree but under the stream root/);
   assert.match(prompt, /Goal: Review the patch/);
 });
 
@@ -114,13 +115,15 @@ test('renderAssignmentPrompt wraps explicit prompt_text with helper bootstrap gu
   });
 
   assert.match(prompt, /^Owner assignment for helper agent helper-b\./);
-  assert.match(prompt, /Bootstrap protocol \(follow in order\):/);
-  assert.match(prompt, /After the first report succeeds, use the minimum-headroom-ops skill/);
-  assert.match(prompt, /Keep the first pass narrow/);
-  assert.match(prompt, /inspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration/);
-  assert.match(prompt, /send the final done\/review_findings report before any further prompts, \/skills, or extra exploration/);
+  assert.match(prompt, /Immediate protocol:/);
+  assert.match(prompt, /[Ii]nspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration/);
+  assert.match(prompt, /Send done or review_findings as soon as the current completion criteria are satisfied/);
+  assert.match(prompt, /return the first qualifying finding immediately instead of hunting for more/);
+  assert.match(prompt, /send done with a short no-findings summary instead of lingering/);
+  assert.match(prompt, /After your final done\/review_findings report, stop and wait for the owner/);
   assert.match(prompt, /If the scope is still ambiguous after the first report, send question/);
-  assert.match(prompt, /Stream root for this mission: \/tmp\/target\./);
+  assert.match(prompt, /Stream root: \/tmp\/target\./);
+  assert.match(prompt, /Read the exact target path under the stream root even if it sits outside your helper worktree/);
   assert.match(prompt, /Mission body:/);
   assert.match(prompt, /Investigate the failure and patch the bug\./);
 });
@@ -206,7 +209,6 @@ test('agent assignment api handles assign, list, and inject flows', async () => 
   assert.match(runtimeCalls[0]?.input?.text ?? '', /Stream root: \/tmp\/target/);
   assert.match(runtimeCalls[0]?.input?.text ?? '', /Target paths \(stream-root anchored\): \/tmp\/target\/face-app\/dist\/agent_assignment_api\.js/);
   assert.match(runtimeCalls[0]?.input?.text ?? '', /Timebox minutes: 5/);
-  assert.match(runtimeCalls[0]?.input?.text ?? '', /outside your helper worktree but under the stream root/);
   assert.equal(runtimeCalls[0]?.input?.probe_before_send, false);
 
   const probeInjectRequest = createRequest({

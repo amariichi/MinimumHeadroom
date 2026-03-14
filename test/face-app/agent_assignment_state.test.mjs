@@ -175,3 +175,58 @@ test('agent assignment store lazily times out unacknowledged deliveries', () => 
 
   cleanup(rootDir);
 });
+
+test('agent assignment store promotes late reports after timeout to acked_late', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-late-ack-');
+  let tick = 1_700_450_000_000;
+  const store = createAgentAssignmentStateStore({
+    statePath,
+    now: () => tick,
+    log: quietLog
+  });
+  store.load();
+
+  const created = store.upsertAssignment({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-late-ack',
+    owner_agent_id: '__operator__',
+    agent_id: 'helper-late-ack',
+    goal: 'Return a late acknowledgment'
+  });
+  store.markDeliverySent({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-late-ack',
+    agent_id: 'helper-late-ack',
+    ack_timeout_ms: 1000
+  });
+
+  tick += 1500;
+  const timedOut = store.getAssignment({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-late-ack'
+  });
+  assert.equal(timedOut?.delivery_state, 'timeout');
+
+  tick += 250;
+  const acked = store.noteReport({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-late-ack',
+    from_agent_id: 'helper-late-ack',
+    kind: 'progress',
+    report_id: 'rpt-late-ack',
+    accepted_at: tick
+  });
+  assert.equal(created.assignment.delivery_state, 'pending');
+  assert.equal(acked.noop, false);
+  assert.equal(acked.assignment?.delivery_state, 'acked_late');
+  assert.equal(acked.assignment?.last_report_id, 'rpt-late-ack');
+
+  const view = store.getAssignmentsView({
+    stream_id: 'repo:/tmp/target'
+  });
+  assert.equal(view.summary.by_delivery_state.acked_late, 1);
+  assert.equal(view.summary.by_delivery_state.timeout, 0);
+  assert.equal(view.summary.by_agent_id['helper-late-ack']?.acked_late, 1);
+
+  cleanup(rootDir);
+});

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const SCHEMA_VERSION = 1;
-const DELIVERY_STATES = new Set(['pending', 'sent_to_tmux', 'acked', 'failed', 'timeout']);
+const DELIVERY_STATES = new Set(['pending', 'sent_to_tmux', 'acked', 'acked_late', 'failed', 'timeout']);
 
 function toLogger(log) {
   if (!log) {
@@ -219,6 +219,7 @@ function buildSummary(assignments) {
       pending: 0,
       sent_to_tmux: 0,
       acked: 0,
+      acked_late: 0,
       failed: 0,
       timeout: 0
     },
@@ -232,6 +233,7 @@ function buildSummary(assignments) {
         pending: 0,
         sent_to_tmux: 0,
         acked: 0,
+        acked_late: 0,
         failed: 0,
         timeout: 0
       };
@@ -548,7 +550,7 @@ export function createAgentAssignmentStateStore(options = {}) {
     assignment.last_report_kind = kind;
     assignment.last_report_at = ts;
     assignment.last_error = null;
-    assignment.delivery_state = 'acked';
+    assignment.delivery_state = assignment.delivery_state === 'timeout' ? 'acked_late' : 'acked';
     assignment.acked_at = ts;
     assignment.ack_deadline_at = 0;
     assignment.updated_at = ts;

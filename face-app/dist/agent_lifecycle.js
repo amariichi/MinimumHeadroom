@@ -665,60 +665,130 @@ export function createAgentLifecycleRuntime(options = {}) {
     };
   }
 
+  function buildBufferedTailNeedles(text) {
+    const lines = String(text ?? '')
+      .split('\n')
+      .map((line) => stripAnsi(String(line)).trim())
+      .filter((line) => line !== '');
+    const exactNeedles = [];
+    const markerNeedles = [];
+    const seenExact = new Set();
+    const seenMarkers = new Set();
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const candidate = lines[index];
+      if (seenExact.has(candidate)) {
+        continue;
+      }
+      seenExact.add(candidate);
+      exactNeedles.push(candidate);
+      if (exactNeedles.length >= 3) {
+        break;
+      }
+    }
+    for (let index = lines.length - 1; index >= Math.max(0, lines.length - 12); index -= 1) {
+      const candidate = lines[index];
+      let marker = null;
+      const colonIndex = candidate.indexOf(':');
+      if (colonIndex >= 6) {
+        marker = candidate.slice(0, colonIndex + 1).trim();
+      } else if (/^\d+\./.test(candidate) || candidate.startsWith('- ')) {
+        marker = candidate.slice(0, Math.min(candidate.length, 24)).trimEnd();
+      }
+      if (!marker || marker.length < 8 || seenMarkers.has(marker)) {
+        continue;
+      }
+      seenMarkers.add(marker);
+      markerNeedles.push(marker);
+    }
+    return [...exactNeedles, ...markerNeedles];
+  }
+
+  function paneContainsBufferedTail(lines, needles) {
+    if (!Array.isArray(lines) || lines.length === 0 || !Array.isArray(needles) || needles.length === 0) {
+      return false;
+    }
+    const normalizedLines = lines
+      .map((line) => stripAnsi(String(line)).trimEnd())
+      .filter((line) => line.trim() !== '');
+    if (normalizedLines.length === 0) {
+      return false;
+    }
+    const trailingWindow = normalizedLines.slice(-Math.max(8, needles.length * 4));
+    return needles.some((needle) => trailingWindow.some((line) => line.includes(needle)));
+  }
+
   async function maybeRescueBufferedSubmit(paneId, text, input = {}) {
     const enabled = normalizeBoolean(input.rescue_submit_if_buffered, text.includes('\n'));
     if (!enabled) {
       return {
         enabled: false,
         attempted: false,
+        attempt_count: 0,
         rescued: false,
         matched_line: null,
+        matched_lines: [],
+        buffered_still_visible: false,
         wait_ms: 0
       };
     }
 
-    const tailLine = text
-      .split('\n')
-      .map((line) => stripAnsi(String(line)).trim())
-      .filter((line) => line !== '')
-      .at(-1);
+    const tailLines = buildBufferedTailNeedles(text);
+    const tailLine = tailLines[0] ?? null;
     if (!tailLine) {
       return {
         enabled: true,
         attempted: false,
+        attempt_count: 0,
         rescued: false,
         matched_line: null,
+        matched_lines: [],
+        buffered_still_visible: false,
         wait_ms: 0
       };
     }
 
     const waitMs = parseInteger(input.rescue_submit_delay_ms, 140, 20);
-    const lineCount = parseInteger(input.rescue_submit_capture_lines, helperInjectProbeCaptureLines, 4);
+    const pollMs = parseInteger(input.rescue_submit_poll_ms, 60, 20);
+    const timeoutMs = parseInteger(input.rescue_submit_timeout_ms, 520, waitMs);
+    const maxAttempts = parseInteger(input.rescue_submit_max_attempts, 2, 1);
+    const lineCount = parseInteger(input.rescue_submit_capture_lines, Math.max(helperInjectProbeCaptureLines, 16), 8);
+    const startedAt = now();
+    const deadline = startedAt + timeoutMs;
+    let attemptCount = 0;
+
     await delayMs(waitMs);
 
-    const lines = await capturePaneTail(paneId, lineCount);
-    const nonEmptyLines = lines
-      .map((line) => stripAnsi(String(line)).trimEnd())
-      .filter((line) => line.trim() !== '');
-    const trailingWindow = nonEmptyLines.slice(-3);
-    const appearsBuffered = trailingWindow.some((line) => line.includes(tailLine));
-    if (!appearsBuffered) {
-      return {
-        enabled: true,
-        attempted: false,
-        rescued: false,
-        matched_line: tailLine,
-        wait_ms: waitMs
-      };
+    while (now() <= deadline) {
+      const lines = await capturePaneTail(paneId, lineCount);
+      const appearsBuffered = paneContainsBufferedTail(lines, tailLines);
+      if (!appearsBuffered) {
+        return {
+          enabled: true,
+          attempted: attemptCount > 0,
+          attempt_count: attemptCount,
+          rescued: attemptCount > 0,
+          matched_line: tailLine,
+          matched_lines: tailLines,
+          buffered_still_visible: false,
+          wait_ms: Math.max(0, now() - startedAt)
+        };
+      }
+      if (attemptCount < maxAttempts) {
+        await runTmux(['send-keys', '-t', paneId, 'C-m']);
+        attemptCount += 1;
+      }
+      await delayMs(pollMs);
     }
 
-    await runTmux(['send-keys', '-t', paneId, 'C-m']);
     return {
       enabled: true,
-      attempted: true,
-      rescued: true,
+      attempted: attemptCount > 0,
+      attempt_count: attemptCount,
+      rescued: false,
       matched_line: tailLine,
-      wait_ms: waitMs
+      matched_lines: tailLines,
+      buffered_still_visible: true,
+      wait_ms: Math.max(0, now() - startedAt)
     };
   }
 

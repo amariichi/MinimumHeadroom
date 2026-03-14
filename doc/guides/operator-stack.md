@@ -15,6 +15,13 @@ Use `./scripts/run-operator-once.sh --profile qwen3-realtime` when you want the 
 
 Use `./scripts/run-operator-stack.sh` directly only when you intentionally want to manage tmux pane targeting and startup wiring yourself.
 
+Profile shorthand for `run-operator-once.sh`:
+
+- `--profile default`: Kokoro TTS + batch ASR only
+- `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
+- `--profile qwen3`: Qwen3 TTS + batch ASR only
+- `--profile qwen3-realtime`: Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback
+
 ### Quick start
 
 Minimal face-only path:
@@ -322,6 +329,13 @@ Wrong pane is mirrored on mobile:
 </details>
 
 `run-operator-once.sh` を使うと、これらのうち重要な接続先は自動で安全に埋まります。
+
+`run-operator-once.sh` の profile 対応:
+
+- `--profile default`: Kokoro TTS + batch ASR のみ
+- `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
+- `--profile qwen3`: Qwen3 TTS + batch ASR のみ
+- `--profile qwen3-realtime`: Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback
 
 ### ASR モード
 
