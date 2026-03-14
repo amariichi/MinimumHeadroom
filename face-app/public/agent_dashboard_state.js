@@ -123,10 +123,38 @@ export function deriveAgentTileTone(agent, options = {}) {
   return normalizeAgentStatus(agent?.status) === 'active' ? 'active' : 'missing';
 }
 
-export function summarizeAgentTileMessage(agent, transientMessage = null) {
+export function deriveOwnerInboxToneOptions(summary) {
+  const blockingCount = asInteger(summary?.blocking_count, 0, 0) ?? 0;
+  const errorCount = asInteger(summary?.error_count, 0, 0) ?? 0;
+  return {
+    needsAttention: blockingCount > 0,
+    error: errorCount > 0
+  };
+}
+
+export function summarizeOwnerInboxSummary(summary) {
+  const explicit = asNonEmptyString(summary?.summary) ?? asNonEmptyString(summary?.top_report?.summary);
+  if (explicit) {
+    return explicit;
+  }
+  const unresolvedCount = asInteger(summary?.unresolved_count, 0, 0) ?? 0;
+  if (unresolvedCount > 1) {
+    return `${unresolvedCount} unresolved reports`;
+  }
+  if (unresolvedCount === 1) {
+    return '1 unresolved report';
+  }
+  return null;
+}
+
+export function summarizeAgentTileMessage(agent, transientMessage = null, ownerInboxMessage = null) {
   const transient = asNonEmptyString(transientMessage);
   if (transient) {
     return transient;
+  }
+  const inboxMessage = asNonEmptyString(ownerInboxMessage);
+  if (inboxMessage) {
+    return inboxMessage;
   }
   const persisted = asNonEmptyString(agent?.last_message);
   if (persisted) {

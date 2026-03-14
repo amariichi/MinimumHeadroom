@@ -22,6 +22,23 @@ function asNonEmptyString(value) {
   return trimmed === '' ? null : trimmed;
 }
 
+function normalizeRepoPath(value) {
+  const candidate = asNonEmptyString(value);
+  if (!candidate) {
+    return null;
+  }
+  return path.resolve(candidate);
+}
+
+function deriveStableStreamId(rawStreamId, targetRepoRoot, fallbackRoot = '') {
+  const explicit = asNonEmptyString(rawStreamId);
+  if (explicit) {
+    return explicit;
+  }
+  const resolvedRoot = normalizeRepoPath(targetRepoRoot) ?? normalizeRepoPath(fallbackRoot);
+  return resolvedRoot ? `repo:${resolvedRoot}` : 'repo:default';
+}
+
 function parseInteger(value, fallback, minValue = Number.MIN_SAFE_INTEGER) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (Number.isNaN(parsed) || parsed < minValue) {
@@ -58,6 +75,15 @@ function normalizeBoolean(value, fallback = false) {
 function sanitizeBranchSegment(value, fallback) {
   const source = asNonEmptyString(value) ?? fallback;
   return source.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+/, '').replace(/-+$/, '') || fallback;
+}
+
+function stripAnsi(value) {
+  if (typeof value !== 'string' || value === '') {
+    return '';
+  }
+  return value
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
 }
 
 function timestampStamp(nowFn) {
@@ -234,6 +260,11 @@ export function createAgentLifecycleRuntime(options = {}) {
   const log = toLogger(options.log ?? console);
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const repoRoot = path.resolve(asNonEmptyString(options.repoRoot) ?? process.cwd());
+  const activeTargetRepoRoot = normalizeRepoPath(options.activeTargetRepoRoot)
+    ?? normalizeRepoPath(options.defaultSourceRepoPath)
+    ?? repoRoot;
+  const activeStreamId = deriveStableStreamId(options.activeStreamId, activeTargetRepoRoot, repoRoot);
+  const defaultSourceRepoPath = path.resolve(asNonEmptyString(options.defaultSourceRepoPath) ?? activeTargetRepoRoot);
   const worktreesRoot = path.resolve(asNonEmptyString(options.worktreesRoot) ?? path.join(repoRoot, '.agent/worktrees'));
   const tmuxSession = asNonEmptyString(options.tmuxSession) ?? 'agent';
   const defaultAgentCommand = asNonEmptyString(options.defaultAgentCommand) ?? 'codex';
@@ -243,6 +274,14 @@ export function createAgentLifecycleRuntime(options = {}) {
   const worktreeEnabled = normalizeBoolean(options.worktreeEnabled, true);
   const allowExternalDelete = normalizeBoolean(options.allowExternalDelete, false);
   const allowExternalWorktreeAdd = normalizeBoolean(options.allowExternalWorktreeAdd, false);
+  const helperInjectWaitForReady = normalizeBoolean(options.helperInjectWaitForReady, true);
+  const helperInjectReadyTimeoutMs = parseInteger(options.helperInjectReadyTimeoutMs, 4000, 0);
+  const helperInjectReadyPollMs = parseInteger(options.helperInjectReadyPollMs, 150, 20);
+  const helperInjectReadyCaptureLines = parseInteger(options.helperInjectReadyCaptureLines, 80, 10);
+  const helperInjectReadyStablePolls = parseInteger(options.helperInjectReadyStablePolls, 2, 1);
+  const helperInjectProbeTimeoutMs = parseInteger(options.helperInjectProbeTimeoutMs, 1500, 100);
+  const helperInjectProbePollMs = parseInteger(options.helperInjectProbePollMs, 75, 20);
+  const helperInjectProbeCaptureLines = parseInteger(options.helperInjectProbeCaptureLines, helperInjectReadyCaptureLines, 10);
   const onFocus = typeof options.onFocus === 'function' ? options.onFocus : null;
 
   function listAgents(optionsInput = {}) {
@@ -265,6 +304,12 @@ export function createAgentLifecycleRuntime(options = {}) {
     return commandRunner(command, args, {
       timeoutMs: commandTimeoutMs,
       ...optionsInput
+    });
+  }
+
+  async function delayMs(ms) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, ms);
     });
   }
 
@@ -340,7 +385,7 @@ export function createAgentLifecycleRuntime(options = {}) {
   }
 
   function resolveRepoPath(inputPath) {
-    return path.resolve(asNonEmptyString(inputPath) ?? repoRoot);
+    return path.resolve(asNonEmptyString(inputPath) ?? defaultSourceRepoPath);
   }
 
   function resolveWorktreePath(inputPath, agentId) {
@@ -366,6 +411,8 @@ export function createAgentLifecycleRuntime(options = {}) {
     const agentId = asNonEmptyString(input.id) ?? randomUUID();
     const sessionId = asNonEmptyString(input.session_id) ?? agentId;
     const sourceRepoPath = resolveRepoPath(input.source_repo_path);
+    const targetRepoRoot = normalizeRepoPath(input.target_repo_root) ?? sourceRepoPath ?? activeTargetRepoRoot;
+    const streamId = deriveStableStreamId(input.stream_id, targetRepoRoot, activeTargetRepoRoot);
     const worktreePath = resolveWorktreePath(input.worktree_path, agentId);
     const explicitWorktreePath = asNonEmptyString(input.worktree_path);
     const branch = resolveBranchName(agentId, input.branch);
@@ -418,7 +465,9 @@ export function createAgentLifecycleRuntime(options = {}) {
         session_id: sessionId,
         status: 'active',
         slot,
+        stream_id: streamId,
         source_repo_path: sourceRepoPath,
+        target_repo_root: targetRepoRoot,
         worktree_path: createWorktree ? worktreePath : explicitWorktreePath ? worktreePath : null,
         branch,
         pane_id: paneId,
@@ -531,6 +580,356 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
   }
 
+  async function capturePaneTail(paneId, lineCount = helperInjectReadyCaptureLines) {
+    const safeLineCount = parseInteger(lineCount, helperInjectReadyCaptureLines, 1);
+    const result = await runTmux(['capture-pane', '-t', paneId, '-p', '-e', '-S', `-${safeLineCount}`]);
+    const normalized = result.stdout.replace(/\r/g, '');
+    return normalized
+      .split('\n')
+      .map((line) => stripAnsi(line))
+      .filter((line, index, source) => !(index === source.length - 1 && line === ''));
+  }
+
+  function createProbeToken() {
+    return `MHPRB${randomUUID().replaceAll('-', '').slice(0, 8).toUpperCase()}`;
+  }
+
+  async function waitForTokenVisibility(paneId, token, expectedVisible, input = {}) {
+    const timeoutMs = parseInteger(input.probe_timeout_ms, helperInjectProbeTimeoutMs, 100);
+    const pollMs = parseInteger(input.probe_poll_ms, helperInjectProbePollMs, 20);
+    const lineCount = parseInteger(input.probe_capture_lines, helperInjectProbeCaptureLines, 10);
+    const startedAt = now();
+    const deadline = startedAt + timeoutMs;
+
+    while (now() <= deadline) {
+      const lines = await capturePaneTail(paneId, lineCount);
+      const joined = lines.join('\n');
+      const visible = joined.includes(token);
+      if (visible === expectedVisible) {
+        return {
+          ok: true,
+          visible,
+          waited_ms: Math.max(0, now() - startedAt)
+        };
+      }
+      await delayMs(pollMs);
+    }
+
+    return {
+      ok: false,
+      visible: !expectedVisible,
+      waited_ms: Math.max(0, now() - startedAt)
+    };
+  }
+
+  async function runInputProbe(paneId, input = {}) {
+    const token = createProbeToken();
+    await runTmux(['send-keys', '-t', paneId, '-l', '--', token]);
+
+    const visibleResult = await waitForTokenVisibility(paneId, token, true, input);
+    if (!visibleResult.ok) {
+      return {
+        enabled: true,
+        ok: false,
+        stage: 'probe_not_visible',
+        token_length: token.length,
+        probe_wait_ms: visibleResult.waited_ms,
+        clear_wait_ms: 0,
+        message: 'input probe did not appear in helper pane'
+      };
+    }
+
+    const backspaces = Array.from({ length: token.length }, () => 'BSpace');
+    await runTmux(['send-keys', '-t', paneId, ...backspaces]);
+    const clearedResult = await waitForTokenVisibility(paneId, token, false, input);
+    if (!clearedResult.ok) {
+      return {
+        enabled: true,
+        ok: false,
+        stage: 'probe_not_cleared',
+        token_length: token.length,
+        probe_wait_ms: visibleResult.waited_ms,
+        clear_wait_ms: clearedResult.waited_ms,
+        message: 'input probe could not be cleared from helper pane'
+      };
+    }
+
+    return {
+      enabled: true,
+      ok: true,
+      stage: 'cleared',
+      token_length: token.length,
+      probe_wait_ms: visibleResult.waited_ms,
+      clear_wait_ms: clearedResult.waited_ms,
+      message: null
+    };
+  }
+
+  async function maybeRescueBufferedSubmit(paneId, text, input = {}) {
+    const enabled = normalizeBoolean(input.rescue_submit_if_buffered, text.includes('\n'));
+    if (!enabled) {
+      return {
+        enabled: false,
+        attempted: false,
+        rescued: false,
+        matched_line: null,
+        wait_ms: 0
+      };
+    }
+
+    const tailLine = text
+      .split('\n')
+      .map((line) => stripAnsi(String(line)).trim())
+      .filter((line) => line !== '')
+      .at(-1);
+    if (!tailLine) {
+      return {
+        enabled: true,
+        attempted: false,
+        rescued: false,
+        matched_line: null,
+        wait_ms: 0
+      };
+    }
+
+    const waitMs = parseInteger(input.rescue_submit_delay_ms, 140, 20);
+    const lineCount = parseInteger(input.rescue_submit_capture_lines, helperInjectProbeCaptureLines, 4);
+    await delayMs(waitMs);
+
+    const lines = await capturePaneTail(paneId, lineCount);
+    const nonEmptyLines = lines
+      .map((line) => stripAnsi(String(line)).trimEnd())
+      .filter((line) => line.trim() !== '');
+    const trailingWindow = nonEmptyLines.slice(-3);
+    const appearsBuffered = trailingWindow.some((line) => line.includes(tailLine));
+    if (!appearsBuffered) {
+      return {
+        enabled: true,
+        attempted: false,
+        rescued: false,
+        matched_line: tailLine,
+        wait_ms: waitMs
+      };
+    }
+
+    await runTmux(['send-keys', '-t', paneId, 'C-m']);
+    return {
+      enabled: true,
+      attempted: true,
+      rescued: true,
+      matched_line: tailLine,
+      wait_ms: waitMs
+    };
+  }
+
+  function detectStartupBlocker(cleanedLines) {
+    const joined = cleanedLines.join('\n');
+    if (/do you trust (this )?folder\?/i.test(joined) || /trust folder/i.test(joined)) {
+      return {
+        reason: 'trust_prompt',
+        message: 'startup blocked: trust prompt'
+      };
+    }
+    return null;
+  }
+
+  function analyzePaneReadiness(lines) {
+    const cleanedLines = Array.isArray(lines)
+      ? lines.map((line) => stripAnsi(line)).map((line) => line.trimEnd())
+      : [];
+    const nonEmptyLines = cleanedLines.filter((line) => line.trim() !== '');
+    const joined = cleanedLines.join('\n');
+    const blocker = detectStartupBlocker(cleanedLines);
+    const hasCodexCommand = /\bcodex(?:\s|$)/i.test(joined);
+    const hasCodexBanner = cleanedLines.some((line) => /OpenAI Codex/i.test(line));
+    const hasCodexPrompt = cleanedLines.some((line) => line.trimStart().startsWith('›'));
+    const hasCodexStatus = cleanedLines.some((line) => /gpt-[\w.-]+/i.test(line) && /left/i.test(line));
+    const hasGeminiBanner = cleanedLines.some((line) => /Gemini CLI/i.test(line));
+    const hasGeminiPrompt = cleanedLines.some((line) => /Type your message(?: or @path\/to\/file)?/i.test(line));
+    const hasGenericPrompt = cleanedLines.some((line) => {
+      const trimmed = line.trim();
+      return trimmed === '>' || trimmed === '›';
+    });
+    const snapshotSignature = nonEmptyLines.join('\n');
+    const observedAgent = hasCodexCommand || hasCodexBanner
+      ? 'codex'
+      : hasGeminiBanner || /logged in with google/i.test(joined)
+        ? 'gemini'
+        : 'generic';
+
+    if (blocker) {
+      return {
+        observed_agent: observedAgent,
+        ready: false,
+        should_wait: false,
+        blocked: true,
+        blocked_reason: blocker.reason,
+        blocked_message: blocker.message,
+        ready_reason: null,
+        snapshot_signature: snapshotSignature,
+        has_meaningful_output: nonEmptyLines.length > 0
+      };
+    }
+
+    if (hasCodexCommand || hasCodexBanner) {
+      const ready = hasCodexBanner && hasCodexPrompt && hasCodexStatus;
+      return {
+        observed_agent: 'codex',
+        ready,
+        should_wait: !ready,
+        blocked: false,
+        blocked_reason: null,
+        blocked_message: null,
+        ready_reason: ready ? 'prompt_hint' : null,
+        snapshot_signature: snapshotSignature,
+        has_meaningful_output: nonEmptyLines.length > 0
+      };
+    }
+
+    if (hasGeminiBanner && hasGeminiPrompt && hasGenericPrompt) {
+      return {
+        observed_agent: 'gemini',
+        ready: true,
+        should_wait: false,
+        blocked: false,
+        blocked_reason: null,
+        blocked_message: null,
+        ready_reason: 'prompt_hint',
+        snapshot_signature: snapshotSignature,
+        has_meaningful_output: nonEmptyLines.length > 0
+      };
+    }
+
+    return {
+      observed_agent: observedAgent,
+      ready: false,
+      should_wait: true,
+      blocked: false,
+      blocked_reason: null,
+      blocked_message: null,
+      ready_reason: null,
+      snapshot_signature: snapshotSignature,
+      has_meaningful_output: nonEmptyLines.length > 0
+    };
+  }
+
+  async function waitForPaneReady(paneId, input = {}) {
+    const timeoutMs = parseInteger(input.ready_timeout_ms, helperInjectReadyTimeoutMs, 0);
+    const pollMs = parseInteger(input.ready_poll_ms, helperInjectReadyPollMs, 20);
+    const lineCount = parseInteger(input.ready_capture_lines, helperInjectReadyCaptureLines, 10);
+    const stablePollsRequired = parseInteger(input.ready_stable_polls, helperInjectReadyStablePolls, 1);
+    if (timeoutMs <= 0) {
+      return {
+        waited_for_ready: false,
+        observed_agent: 'generic',
+        ready: false,
+        timed_out: false,
+        waited_ms: 0,
+        ready_reason: null,
+        blocked: false,
+        blocked_reason: null,
+        blocked_message: null
+      };
+    }
+
+    const startedAt = now();
+    const deadline = startedAt + timeoutMs;
+    let lastAnalysis = {
+      observed_agent: 'generic',
+      ready: false,
+      should_wait: true,
+      blocked: false,
+      blocked_reason: null,
+      blocked_message: null,
+      ready_reason: null,
+      snapshot_signature: '',
+      has_meaningful_output: false
+    };
+    let previousSignature = null;
+    let stablePolls = 0;
+
+    while (now() <= deadline) {
+      const lines = await capturePaneTail(paneId, lineCount);
+      lastAnalysis = analyzePaneReadiness(lines);
+      if (lastAnalysis.blocked) {
+        return {
+          waited_for_ready: true,
+          observed_agent: lastAnalysis.observed_agent,
+          ready: false,
+          timed_out: false,
+          waited_ms: Math.max(0, now() - startedAt),
+          ready_reason: null,
+          blocked: true,
+          blocked_reason: lastAnalysis.blocked_reason,
+          blocked_message: lastAnalysis.blocked_message
+        };
+      }
+      if (lastAnalysis.ready_reason === 'prompt_hint') {
+        return {
+          waited_for_ready: true,
+          observed_agent: lastAnalysis.observed_agent,
+          ready: true,
+          timed_out: false,
+          waited_ms: Math.max(0, now() - startedAt),
+          ready_reason: 'prompt_hint',
+          blocked: false,
+          blocked_reason: null,
+          blocked_message: null
+        };
+      }
+      if (lastAnalysis.has_meaningful_output) {
+        if (lastAnalysis.snapshot_signature !== '' && lastAnalysis.snapshot_signature === previousSignature) {
+          stablePolls += 1;
+        } else {
+          previousSignature = lastAnalysis.snapshot_signature;
+          stablePolls = 1;
+        }
+        if (stablePolls >= stablePollsRequired) {
+          return {
+            waited_for_ready: true,
+            observed_agent: lastAnalysis.observed_agent,
+            ready: true,
+            timed_out: false,
+            waited_ms: Math.max(0, now() - startedAt),
+            ready_reason: 'startup_quiet',
+            blocked: false,
+            blocked_reason: null,
+            blocked_message: null
+          };
+        }
+      } else {
+        previousSignature = null;
+        stablePolls = 0;
+      }
+      if (!lastAnalysis.should_wait) {
+        return {
+          waited_for_ready: true,
+          observed_agent: lastAnalysis.observed_agent,
+          ready: lastAnalysis.ready,
+          timed_out: false,
+          waited_ms: Math.max(0, now() - startedAt),
+          ready_reason: lastAnalysis.ready_reason,
+          blocked: false,
+          blocked_reason: null,
+          blocked_message: null
+        };
+      }
+      await delayMs(pollMs);
+    }
+
+    return {
+      waited_for_ready: true,
+      observed_agent: lastAnalysis.observed_agent,
+      ready: false,
+      timed_out: true,
+      waited_ms: Math.max(0, now() - startedAt),
+      ready_reason: null,
+      blocked: false,
+      blocked_reason: null,
+      blocked_message: null
+    };
+  }
+
   function markAgentMissing(agentId, message, metadata = {}) {
     stateStore.updateAgentMetadata(agentId, metadata);
     return stateStore.setAgentStatus(agentId, 'missing', {
@@ -578,9 +977,118 @@ export function createAgentLifecycleRuntime(options = {}) {
     };
   }
 
+  async function injectAgent(agentId, input = {}) {
+    const agent = getAgentStateOrThrow(agentId);
+    const paneId = asNonEmptyString(agent.pane_id);
+    if (!paneId) {
+      markAgentMissing(agent.id, 'pane missing', {
+        pane_id: null
+      });
+      throw createLifecycleError('invalid_state', 'inject requires pane_id');
+    }
+    const paneAvailable = await paneExists(paneId);
+    if (!paneAvailable) {
+      markAgentMissing(agent.id, 'pane missing', {
+        pane_id: null
+      });
+      throw createLifecycleError('invalid_state', `inject target pane is unavailable: ${paneId}`);
+    }
+
+    const text = asNonEmptyString(input.text);
+    if (!text) {
+      throw createLifecycleError('invalid_request', 'inject text is required');
+    }
+    const waitForReady = normalizeBoolean(input.wait_for_ready, helperInjectWaitForReady);
+    const submit = normalizeBoolean(input.submit, true);
+    const requestedReinforceSubmit = normalizeBoolean(input.reinforce_submit, false);
+    const probeBeforeSend = normalizeBoolean(input.probe_before_send, false);
+    const reinforceDelayMs = parseInteger(input.reinforce_delay_ms, 90, 20);
+    let readiness = {
+      waited_for_ready: false,
+      observed_agent: 'generic',
+      ready: false,
+      timed_out: false,
+      waited_ms: 0
+    };
+    let probe = {
+      enabled: false,
+      ok: false,
+      stage: null,
+      token_length: 0,
+      probe_wait_ms: 0,
+      clear_wait_ms: 0,
+      message: null
+    };
+
+    if (waitForReady) {
+      readiness = await waitForPaneReady(paneId, input);
+      if (readiness.blocked) {
+        stateStore.setAgentMessage(agent.id, readiness.blocked_message ?? 'startup blocked', 'status');
+        throw createLifecycleError(
+          'invalid_state',
+          `helper startup blocked: ${readiness.blocked_reason ?? 'startup_blocked'}`
+        );
+      }
+      if (readiness.timed_out) {
+        log.warn(`[agent-lifecycle] helper ${agent.id} did not reach a ready prompt before inject timeout`);
+      }
+    }
+
+    if (probeBeforeSend) {
+      probe = await runInputProbe(paneId, input);
+      if (!probe.ok) {
+        stateStore.setAgentMessage(agent.id, probe.message ?? 'input probe failed', 'status');
+        throw createLifecycleError(
+          'invalid_state',
+          `helper input probe failed: ${probe.stage ?? 'probe_failed'}`
+        );
+      }
+    }
+
+    const reinforceSubmit = requestedReinforceSubmit
+      || (submit && readiness.observed_agent === 'codex' && text.includes('\n'));
+    let rescueSubmit = {
+      enabled: false,
+      attempted: false,
+      rescued: false,
+      matched_line: null,
+      wait_ms: 0
+    };
+
+    await runTmux(['send-keys', '-t', paneId, '-l', '--', text]);
+    if (submit) {
+      await runTmux(['send-keys', '-t', paneId, 'C-m']);
+      if (reinforceSubmit) {
+        await delayMs(reinforceDelayMs);
+        await runTmux(['send-keys', '-t', paneId, 'C-m']);
+      }
+      rescueSubmit = await maybeRescueBufferedSubmit(paneId, text, input);
+    }
+
+    return {
+      ok: true,
+      noop: false,
+      action: 'inject',
+      agent: getAgentStateOrThrow(agent.id),
+      state: stateStore.getState(),
+      injection: {
+        pane_id: paneId,
+        text_length: text.length,
+        submit,
+        reinforce_submit: reinforceSubmit,
+        rescue_submit: rescueSubmit,
+        ready_wait: readiness,
+        probe
+      }
+    };
+  }
+
   async function reconcileAgents(input = {}) {
     const recreateMissingPanes = normalizeBoolean(input.recreate_missing_panes, true);
-    const agents = stateStore.listAgents();
+    const agents = stateStore.listAgents({
+      scope: asNonEmptyString(input.scope) ?? 'active',
+      stream_id: asNonEmptyString(input.stream_id)
+    });
     const results = [];
 
     for (const listedAgent of agents) {
@@ -788,12 +1296,15 @@ export function createAgentLifecycleRuntime(options = {}) {
   }
 
   return {
-    getState() {
-      return stateStore.getState();
+    activeStreamId,
+    activeTargetRepoRoot,
+    getState(optionsInput = {}) {
+      return stateStore.getState(optionsInput);
     },
     listAgents,
     addAgent,
     dispatchAgentAction,
+    injectAgent,
     reconcileAgents
   };
 }
@@ -824,7 +1335,12 @@ export function createAgentLifecycleApi(options = {}) {
           }
           writeJson(response, 200, {
             ok: true,
-            agents: runtime.listAgents()
+            active_stream_id: runtime.activeStreamId ?? null,
+            active_target_repo_root: runtime.activeTargetRepoRoot ?? null,
+            agents: runtime.listAgents({
+              scope: parsedUrl.searchParams.get('scope'),
+              stream_id: parsedUrl.searchParams.get('stream_id')
+            })
           });
           return true;
         }
@@ -839,7 +1355,10 @@ export function createAgentLifecycleApi(options = {}) {
           }
           writeJson(response, 200, {
             ok: true,
-            state: runtime.getState()
+            state: runtime.getState({
+              scope: parsedUrl.searchParams.get('scope'),
+              stream_id: parsedUrl.searchParams.get('stream_id')
+            })
           });
           return true;
         }

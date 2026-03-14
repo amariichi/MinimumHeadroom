@@ -10,6 +10,10 @@ import { createOperatorAsrProxy } from './operator_asr_proxy.js';
 import { createOperatorRealtimeAsrProxy } from './operator_realtime_asr_proxy.js';
 import { createAgentRuntimeStateStore } from './agent_runtime_state.js';
 import { createAgentLifecycleApi, createAgentLifecycleRuntime } from './agent_lifecycle.js';
+import { createAgentAssignmentStateStore } from './agent_assignment_state.js';
+import { createAgentAssignmentApi } from './agent_assignment_api.js';
+import { createOwnerInboxStateStore } from './owner_inbox_state.js';
+import { createOwnerInboxApi } from './owner_inbox_api.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -80,23 +84,52 @@ const operatorRealtimeAsrSampleRateHz = Number.parseInt(process.env.MH_OPERATOR_
 const browserAudioMaxChannels = resolveBrowserAudioMaxChannels({ env: process.env, uiMode });
 const faceConfig = loadFaceAppConfig({ repoRoot, env: process.env, log: console });
 const agentStatePath = process.env.MH_AGENT_STATE_PATH ?? '';
+const agentAssignmentStatePath = process.env.MH_AGENT_ASSIGNMENT_STATE_PATH ?? '';
+const ownerInboxStatePath = process.env.MH_OWNER_INBOX_STATE_PATH ?? '';
+const activeTargetRepoRoot = process.env.MH_AGENT_SOURCE_REPO_DEFAULT ?? '';
+const activeStreamId = process.env.MH_AGENT_STREAM_ID ?? '';
 const agentRuntimeState = createAgentRuntimeStateStore({
   repoRoot,
   statePath: agentStatePath,
+  activeTargetRepoRoot,
+  activeStreamId,
   hardCap: Number.parseInt(process.env.MH_AGENT_HARD_CAP ?? '7', 10),
   log: console
 });
 agentRuntimeState.load();
+const ownerInboxState = createOwnerInboxStateStore({
+  repoRoot,
+  statePath: ownerInboxStatePath,
+  log: console
+});
+ownerInboxState.load();
+const agentAssignmentState = createAgentAssignmentStateStore({
+  repoRoot,
+  statePath: agentAssignmentStatePath,
+  log: console
+});
+agentAssignmentState.load();
 let liveServer = null;
 const agentLifecycleRuntime = createAgentLifecycleRuntime({
   stateStore: agentRuntimeState,
   repoRoot,
+  activeTargetRepoRoot,
+  activeStreamId,
+  defaultSourceRepoPath: process.env.MH_AGENT_SOURCE_REPO_DEFAULT ?? '',
   worktreesRoot: process.env.MH_AGENT_WORKTREES_ROOT ?? '',
   tmuxSession: process.env.MH_AGENT_TMUX_SESSION ?? 'agent',
   defaultAgentCommand: process.env.MH_AGENT_DEFAULT_CMD ?? 'codex',
   tmuxEnabled: (process.env.MH_AGENT_TMUX_ENABLED ?? '1') === '1',
   worktreeEnabled: (process.env.MH_AGENT_WORKTREE_ENABLED ?? '1') === '1',
   allowExternalDelete: (process.env.MH_AGENT_ALLOW_EXTERNAL_DELETE ?? '0') === '1',
+  helperInjectWaitForReady: (process.env.MH_AGENT_INJECT_WAIT_FOR_READY ?? '1') === '1',
+  helperInjectReadyTimeoutMs: Number.parseInt(process.env.MH_AGENT_INJECT_READY_TIMEOUT_MS ?? '4000', 10),
+  helperInjectReadyPollMs: Number.parseInt(process.env.MH_AGENT_INJECT_READY_POLL_MS ?? '150', 10),
+  helperInjectReadyCaptureLines: Number.parseInt(process.env.MH_AGENT_INJECT_READY_CAPTURE_LINES ?? '80', 10),
+  helperInjectReadyStablePolls: Number.parseInt(process.env.MH_AGENT_INJECT_READY_STABLE_POLLS ?? '2', 10),
+  helperInjectProbeTimeoutMs: Number.parseInt(process.env.MH_AGENT_INJECT_PROBE_TIMEOUT_MS ?? '1500', 10),
+  helperInjectProbePollMs: Number.parseInt(process.env.MH_AGENT_INJECT_PROBE_POLL_MS ?? '75', 10),
+  helperInjectProbeCaptureLines: Number.parseInt(process.env.MH_AGENT_INJECT_PROBE_CAPTURE_LINES ?? '80', 10),
   async onFocus({ agentId, paneId, sessionId }) {
     if (!liveServer || typeof liveServer.broadcast !== 'function') {
       const error = new Error('face server is unavailable for focus handoff');
@@ -116,6 +149,19 @@ const agentLifecycleRuntime = createAgentLifecycleRuntime({
 });
 const agentLifecycleApi = createAgentLifecycleApi({
   runtime: agentLifecycleRuntime
+});
+const agentAssignmentApi = createAgentAssignmentApi({
+  store: agentAssignmentState,
+  lifecycleRuntime: agentLifecycleRuntime
+});
+const ownerInboxApi = createOwnerInboxApi({
+  store: ownerInboxState,
+  async onSubmitReport({ result }) {
+    if (!result || result.transport_state !== 'accepted' || !result.report) {
+      return;
+    }
+    agentAssignmentState.noteReport(result.report);
+  }
 });
 const operatorAsrProxy = createOperatorAsrProxy({
   baseUrl: operatorAsrBaseUrl,
@@ -215,6 +261,12 @@ const server = await startFaceWebSocketServer({
   async onHttpRequest(request, response) {
     const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
     if (await agentLifecycleApi.handleHttpRequest(request, response)) {
+      return true;
+    }
+    if (await agentAssignmentApi.handleHttpRequest(request, response)) {
+      return true;
+    }
+    if (await ownerInboxApi.handleHttpRequest(request, response)) {
       return true;
     }
     if (parsedUrl.pathname === '/api/operator/recover-default') {

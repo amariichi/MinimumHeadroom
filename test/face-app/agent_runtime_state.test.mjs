@@ -89,6 +89,70 @@ test('agent runtime store enforces hard cap for all tracked agents', () => {
   cleanup(rootDir);
 });
 
+test('agent runtime store scopes default listing to the active stream', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-state-stream-scope-');
+  const repoA = path.join(rootDir, 'repo-a');
+  const repoB = path.join(rootDir, 'repo-b');
+  fs.mkdirSync(repoA, { recursive: true });
+  fs.mkdirSync(repoB, { recursive: true });
+
+  const store = createAgentRuntimeStateStore({
+    statePath,
+    activeTargetRepoRoot: repoB,
+    activeStreamId: `repo:${repoB}`,
+    now: createClock(),
+    log: quietLog
+  });
+  store.load();
+
+  store.addAgent({ id: 'a-helper', source_repo_path: repoA });
+  store.addAgent({ id: 'b-helper', source_repo_path: repoB });
+
+  const activeState = store.getState();
+  const allState = store.getState({ scope: 'all' });
+
+  assert.deepEqual(activeState.agents.map((agent) => agent.id), ['b-helper']);
+  assert.equal(activeState.active_stream_id, `repo:${repoB}`);
+  assert.equal(activeState.hidden_agent_count, 1);
+  assert.deepEqual(allState.agents.map((agent) => agent.id), ['a-helper', 'b-helper']);
+
+  cleanup(rootDir);
+});
+
+test('agent runtime store enforces hard cap per stream', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-state-stream-cap-');
+  const repoA = path.join(rootDir, 'repo-a');
+  const repoB = path.join(rootDir, 'repo-b');
+  fs.mkdirSync(repoA, { recursive: true });
+  fs.mkdirSync(repoB, { recursive: true });
+
+  const store = createAgentRuntimeStateStore({
+    statePath,
+    hardCap: 2,
+    activeTargetRepoRoot: repoA,
+    activeStreamId: `repo:${repoA}`,
+    now: createClock(),
+    log: quietLog
+  });
+  store.load();
+
+  store.addAgent({ id: 'a-1', source_repo_path: repoA });
+  store.addAgent({ id: 'a-2', source_repo_path: repoA });
+  store.addAgent({ id: 'b-1', source_repo_path: repoB });
+  store.addAgent({ id: 'b-2', source_repo_path: repoB });
+
+  assert.throws(
+    () => store.addAgent({ id: 'a-3', source_repo_path: repoA }),
+    (error) => error?.code === 'hard_cap_reached'
+  );
+  assert.throws(
+    () => store.addAgent({ id: 'b-3', source_repo_path: repoB }),
+    (error) => error?.code === 'hard_cap_reached'
+  );
+
+  cleanup(rootDir);
+});
+
 test('agent runtime store normalizes legacy removed entries away on load', () => {
   const { rootDir, statePath } = createTempStatePath('mh-agent-state-legacy-');
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
@@ -121,6 +185,39 @@ test('agent runtime store normalizes legacy removed entries away on load', () =>
       ['c', 'active']
     ]
   );
+
+  cleanup(rootDir);
+});
+
+test('agent runtime store derives legacy stream and target repo roots from source repo path', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-state-legacy-stream-');
+  const repoA = path.join(rootDir, 'repo-a');
+  fs.mkdirSync(repoA, { recursive: true });
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      schema_version: 1,
+      updated_at: 1,
+      policy: { default_cap: 4, hard_cap: 7 },
+      agents: [
+        { id: 'a', status: 'active', slot: 0, source_repo_path: repoA }
+      ]
+    }),
+    'utf8'
+  );
+
+  const store = createAgentRuntimeStateStore({
+    statePath,
+    activeTargetRepoRoot: repoA,
+    activeStreamId: `repo:${repoA}`,
+    now: createClock(),
+    log: quietLog
+  });
+  const state = store.load();
+
+  assert.equal(state.agents[0]?.target_repo_root, repoA);
+  assert.equal(state.agents[0]?.stream_id, `repo:${repoA}`);
 
   cleanup(rootDir);
 });

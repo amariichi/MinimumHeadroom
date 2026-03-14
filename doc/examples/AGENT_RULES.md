@@ -92,3 +92,47 @@ This preserves freshness even for similar text.
 - If MCP calls fail, continue core implementation work.
 - Report degraded telemetry once in chat.
 - Resume signaling automatically when MCP recovers.
+
+## 8. Operator-led multi-agent workflow
+
+- When acting as the user-facing owner/operator, prefer first-class MCP tools over raw localhost HTTP or manual `tmux send-keys`.
+- Standard lifecycle:
+  - `agent.list(scope="stream")`
+  - `agent.spawn`
+  - `agent.assign`
+  - `agent.inject`
+  - `agent.assignment.list`
+  - `owner.inbox.list`
+  - `owner.inbox.resolve`
+  - `agent.delete`
+- Treat `agent.assign` as the durable mission record and `agent.inject` as controlled delivery for bootstrap or explicit reinstruction.
+- For review, investigation, or other narrow helper work, shape the mission explicitly:
+  - use `target_paths` when the owner knows the file or directory scope
+  - use `completion_criteria` to define what "done" means for this pass
+  - use `timebox_minutes` when the owner wants a bounded first pass
+  - use `max_findings` when the owner wants a short return such as "one finding or done"
+- Treat `target_paths` as stream-root/source-repo anchored. They may point outside the helper worktree; helpers should inspect those exact paths under the stream root instead of guessing mirrored locations inside their own worktree.
+- For reinstruction to an already-running helper, prefer `agent.inject(..., probe_before_send=true)` when the helper may be sitting at a prompt or when input readiness is uncertain. The probe sends a short ASCII token, checks that it appears, erases it with matching backspaces, and only then sends the real text.
+- If a multiline mission still appears buffered in the helper input after submit, prefer `agent.inject(..., rescue_submit_if_buffered=true)` so the runtime can send one guarded extra `Enter` only when the buffered tail is still visibly present.
+- After `agent.inject`, expect helper acknowledgment through `agent.report`. A matching `progress`, `blocked`, `question`, `done`, or `review_findings` report counts as acknowledgment.
+- If delivery reaches `failed` or `timeout`, retry injection at most once. If acknowledgment still does not arrive, surface that helper as `needs_attention`.
+- If a probe-based reinstruction fails, stop and surface `needs_attention` instead of looping repeated probe attempts.
+- Helpers report to the owner, not to the user. Only the current user-facing owner asks the user for input or approval.
+- `agent.focus` changes visibility only; it does not transfer ownership.
+- Review helpers should default to read-only missions unless the owner explicitly chooses otherwise.
+
+## 9. Helper reporting discipline
+
+- When acting as a helper under a minimum-headroom owner assignment, send the first `agent.report(progress)` before repo exploration, broad file reads, or skill lookup.
+- Treat that first report as the mission-accept handshake. If you cannot accept the mission as written, send `blocked` or `question` instead of silent waiting.
+- Use the owner-provided identity tuple exactly as given: `stream_id`, `mission_id`, `owner_agent_id`, and `from_agent_id`.
+- After the first report succeeds, use the `minimum-headroom-ops` skill if it is available and relevant to the assignment.
+- After the first report succeeds, inspect the owner-provided target files before optional `/skills`, slash commands, or unrelated repo exploration unless you are blocked without them.
+- After the first report succeeds, continue the requested work. On completion, report `done` or `review_findings`.
+- Once you have a bounded answer that satisfies the current completion criteria, send the final `done` or `review_findings` report before any extra prompts, `/skills`, or follow-up exploration.
+- If the owner provided `target_paths`, stay on those paths first.
+- Treat owner-provided `target_paths` as stream-root/source-repo anchored, even when they point outside your helper worktree.
+- If the owner provided `completion_criteria`, follow them exactly.
+- If the owner provided `timebox_minutes` or `max_findings`, treat them as hard bounds for the current pass.
+- If scope is still broad or ambiguous after the first report, send `question` instead of broad repo exploration.
+- If the owner sends a follow-up reinstruction, apply the same discipline again: acknowledge or escalate promptly instead of drifting into unrelated exploration first.

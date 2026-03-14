@@ -85,6 +85,15 @@ require_value() {
   fi
 }
 
+derive_agent_repo_root() {
+  local cwd="$1"
+  if git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1; then
+    git -C "$cwd" rev-parse --show-toplevel
+    return
+  fi
+  printf '%s\n' "$cwd"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --session)
@@ -168,8 +177,10 @@ fi
 
 agent_pane="$(tmux display-message -p -t "${SESSION_NAME}:${WINDOW_NAME}.0" '#{pane_id}' 2>/dev/null || true)"
 stack_pane="$(tmux display-message -p -t "${SESSION_NAME}:${WINDOW_NAME}.1" '#{pane_id}' 2>/dev/null || true)"
+agent_cwd="$(tmux display-message -p -t "${SESSION_NAME}:${WINDOW_NAME}.0" '#{pane_current_path}' 2>/dev/null || true)"
+agent_repo_root="$(derive_agent_repo_root "$agent_cwd")"
 
-if [[ -z "$agent_pane" || -z "$stack_pane" ]]; then
+if [[ -z "$agent_pane" || -z "$stack_pane" || -z "$agent_cwd" ]]; then
   echo "[restart-operator-stack] expected panes .0 (agent) and .1 (stack) in ${SESSION_NAME}:${WINDOW_NAME}" >&2
   exit 2
 fi
@@ -185,6 +196,9 @@ append_env() {
 
 append_env "MH_BRIDGE_TMUX_PANE" "$agent_pane"
 append_env "MH_BRIDGE_RECOVERY_TMUX_PANE" "$agent_pane"
+append_env "MH_AGENT_SOURCE_REPO_DEFAULT" "$agent_repo_root"
+append_env "MH_AGENT_STREAM_ID" "repo:${agent_repo_root}"
+append_env "MH_AGENT_WORKTREES_ROOT" "${agent_repo_root}/.agent/worktrees"
 if [[ -n "$FACE_UI_MODE" ]]; then
   append_env "FACE_UI_MODE" "$FACE_UI_MODE"
 fi
@@ -203,6 +217,7 @@ tmux respawn-pane -k -t "$stack_pane" "$stack_launch"
 echo "[restart-operator-stack] session=${SESSION_NAME} window=${WINDOW_NAME}"
 echo "[restart-operator-stack] agent pane=${agent_pane}"
 echo "[restart-operator-stack] stack pane=${stack_pane}"
+echo "[restart-operator-stack] repo root=${agent_repo_root}"
 echo "[restart-operator-stack] MH_BRIDGE_TMUX_PANE=${agent_pane}"
 
 if [[ -n "${TMUX:-}" ]]; then

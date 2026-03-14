@@ -25,12 +25,14 @@ import {
 import {
   deriveAgentTileTone,
   deriveDashboardMode,
+  deriveOwnerInboxToneOptions,
   normalizeDashboardAgent,
   resolveAgentQuietActivityAt,
   shouldRefreshAgentActivityFromState,
   shouldUseAgentQuietPromptIdle,
   sortDashboardAgents,
-  summarizeAgentTileMessage
+  summarizeAgentTileMessage,
+  summarizeOwnerInboxSummary
 } from './agent_dashboard_state.js';
 import { resolveAgentsFromActionResult } from './agent_dashboard_apply_result.js';
 import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
@@ -379,7 +381,23 @@ let agentDashboardState = {
   mode: 'single',
   selectedAgentId: OPERATOR_DASHBOARD_AGENT_ID,
   agents: [],
+  activeStreamId: null,
+  activeTargetRepoRoot: null,
+  hiddenAgentCount: 0,
   loaded: false
+};
+let ownerInboxViewState = {
+  loaded: false,
+  reports: [],
+  summary: {
+    unresolved_count: 0,
+    blocking_count: 0,
+    informational_count: 0,
+    error_count: 0,
+    top_report: null,
+    summary: null,
+    by_agent_id: {}
+  }
 };
 const agentTransientStateById = new Map();
 const operatorEscRecoveryTracker = createTapBurstTrigger({
@@ -574,18 +592,31 @@ function setAgentDashboardStatus(text, tone = 'default') {
   agentDashboardStatusEl.style.color = toneColor(tone);
 }
 
+function refreshAgentDashboardSoon() {
+  void refreshAgentDashboardState({ silentStatus: true });
+}
+
 function updateOperatorCurrentAgentBar() {
   if (!operatorCurrentAgentButtonEl || !operatorCurrentAgentLabelEl || !operatorCurrentAgentMetaEl) {
     return;
   }
   const current = getCurrentDashboardAgent();
+  const nowMs = Date.now();
+  const toneOptions = resolveAgentTransientToneOptions(current?.id ?? OPERATOR_DASHBOARD_AGENT_ID, current, nowMs);
+  const currentSummary = isOperatorDashboardAgentId(current?.id ?? OPERATOR_DASHBOARD_AGENT_ID)
+    ? getOwnerInboxOverallSummary()
+    : getOwnerInboxAgentSummary(current?.id ?? '');
+  const unresolvedCount = Number.isFinite(currentSummary?.unresolved_count) ? Math.max(0, Math.floor(currentSummary.unresolved_count)) : 0;
   const label = current?.label ?? current?.id ?? OPERATOR_DASHBOARD_AGENT_LABEL;
   const status = current?.status ?? 'active';
-  const message = current?.last_message ?? '';
+  const message =
+    summarizeOwnerInboxSummary(currentSummary) ??
+    (typeof current?.last_message === 'string' ? current.last_message : '');
   const countText = formatDashboardVisibleCount();
   const paneText = operatorMirrorPaneId ? ` · ${operatorMirrorPaneId}` : '';
   operatorCurrentAgentLabelEl.textContent = label;
-  operatorCurrentAgentMetaEl.textContent = `${status} · ${countText}${paneText}${message ? ` · ${truncateAgentText(message, 40)}` : ''}`;
+  operatorCurrentAgentMetaEl.textContent = `${status} · ${countText}${paneText}${unresolvedCount > 0 ? ` · inbox ${unresolvedCount}` : ''}${message ? ` · ${truncateAgentText(message, 40)}` : ''}`;
+  operatorCurrentAgentButtonEl.dataset.tone = deriveAgentTileTone(current, toneOptions);
   operatorCurrentAgentButtonEl.setAttribute(
     'aria-expanded',
     operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE ? String(operatorAgentPickerOpen) : String(agentDashboardSurfaceOpen)
@@ -693,6 +724,29 @@ function normalizeDashboardAgentList(rawAgents) {
   return sortDashboardAgents(mapped);
 }
 
+function normalizeDashboardStatePayload(rawState) {
+  if (!rawState || typeof rawState !== 'object') {
+    return {
+      agents: [],
+      activeStreamId: null,
+      activeTargetRepoRoot: null,
+      hiddenAgentCount: 0
+    };
+  }
+  return {
+    agents: normalizeDashboardAgentList(rawState.agents),
+    activeStreamId: typeof rawState.active_stream_id === 'string' && rawState.active_stream_id.trim() !== ''
+      ? rawState.active_stream_id.trim()
+      : null,
+    activeTargetRepoRoot: typeof rawState.active_target_repo_root === 'string' && rawState.active_target_repo_root.trim() !== ''
+      ? rawState.active_target_repo_root.trim()
+      : null,
+    hiddenAgentCount: Number.isFinite(rawState.hidden_agent_count)
+      ? Math.max(0, Math.floor(rawState.hidden_agent_count))
+      : 0
+  };
+}
+
 function getTrackedDashboardAgents() {
   return agentDashboardState.agents;
 }
@@ -720,6 +774,75 @@ function getCurrentDashboardAgent() {
     };
   }
   return agentDashboardState.agents.find((agent) => agent.id === agentDashboardState.selectedAgentId) ?? null;
+}
+
+function createEmptyOwnerInboxViewState() {
+  return {
+    loaded: true,
+    reports: [],
+    summary: {
+      unresolved_count: 0,
+      blocking_count: 0,
+      informational_count: 0,
+      error_count: 0,
+      top_report: null,
+      summary: null,
+      by_agent_id: {}
+    }
+  };
+}
+
+function normalizeOwnerInboxAgentSummary(rawSummary = {}) {
+  return {
+    agent_id: typeof rawSummary?.agent_id === 'string' ? rawSummary.agent_id : null,
+    unresolved_count: Number.isFinite(rawSummary?.unresolved_count) ? Math.max(0, Math.floor(rawSummary.unresolved_count)) : 0,
+    blocking_count: Number.isFinite(rawSummary?.blocking_count) ? Math.max(0, Math.floor(rawSummary.blocking_count)) : 0,
+    informational_count: Number.isFinite(rawSummary?.informational_count) ? Math.max(0, Math.floor(rawSummary.informational_count)) : 0,
+    error_count: Number.isFinite(rawSummary?.error_count) ? Math.max(0, Math.floor(rawSummary.error_count)) : 0,
+    top_report: rawSummary?.top_report && typeof rawSummary.top_report === 'object' ? rawSummary.top_report : null,
+    summary: typeof rawSummary?.summary === 'string' ? rawSummary.summary : null
+  };
+}
+
+function normalizeOwnerInboxViewState(rawState) {
+  const empty = createEmptyOwnerInboxViewState();
+  if (!rawState || typeof rawState !== 'object') {
+    return empty;
+  }
+  const reports = Array.isArray(rawState.reports) ? rawState.reports : [];
+  const rawSummary = rawState.summary && typeof rawState.summary === 'object' ? rawState.summary : {};
+  const byAgentId = {};
+  const rawByAgentId = rawSummary.by_agent_id && typeof rawSummary.by_agent_id === 'object' ? rawSummary.by_agent_id : {};
+  for (const [agentId, summary] of Object.entries(rawByAgentId)) {
+    byAgentId[agentId] = normalizeOwnerInboxAgentSummary({
+      ...summary,
+      agent_id: typeof summary?.agent_id === 'string' ? summary.agent_id : agentId
+    });
+  }
+  return {
+    loaded: true,
+    reports,
+    summary: {
+      unresolved_count: Number.isFinite(rawSummary?.unresolved_count) ? Math.max(0, Math.floor(rawSummary.unresolved_count)) : 0,
+      blocking_count: Number.isFinite(rawSummary?.blocking_count) ? Math.max(0, Math.floor(rawSummary.blocking_count)) : 0,
+      informational_count: Number.isFinite(rawSummary?.informational_count) ? Math.max(0, Math.floor(rawSummary.informational_count)) : 0,
+      error_count: Number.isFinite(rawSummary?.error_count) ? Math.max(0, Math.floor(rawSummary.error_count)) : 0,
+      top_report: rawSummary?.top_report && typeof rawSummary.top_report === 'object' ? rawSummary.top_report : null,
+      summary: typeof rawSummary?.summary === 'string' ? rawSummary.summary : null,
+      by_agent_id: byAgentId
+    }
+  };
+}
+
+function getOwnerInboxOverallSummary() {
+  return ownerInboxViewState?.summary ?? createEmptyOwnerInboxViewState().summary;
+}
+
+function getOwnerInboxAgentSummary(agentId) {
+  if (!agentId) {
+    return null;
+  }
+  return ownerInboxViewState?.summary?.by_agent_id?.[agentId] ?? null;
 }
 
 function syncSelectedDashboardAgentToMirrorPane() {
@@ -1134,13 +1257,19 @@ function markAgentError(agentId, active, ttlMs = AGENT_TILE_MESSAGE_TTL_MS) {
 function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
   const transient = agentTransientStateById.get(agentId) ?? null;
   const speaking = Boolean(transient && transient.speakingUntil > nowMs);
-  const needsAttention = Boolean(transient && transient.needsAttentionUntil > nowMs);
+  const transientNeedsAttention = Boolean(transient && transient.needsAttentionUntil > nowMs);
   const explicitPromptIdle = Boolean(transient && transient.promptIdleUntil > nowMs);
-  const error = Boolean(transient && transient.errorUntil > nowMs);
+  const transientError = Boolean(transient && transient.errorUntil > nowMs);
+  const inboxSummary = isOperatorDashboardAgentId(agentId)
+    ? getOwnerInboxOverallSummary()
+    : getOwnerInboxAgentSummary(agentId);
+  const inboxTone = deriveOwnerInboxToneOptions(inboxSummary);
   const promptNeedsAttention =
     agentId === agentDashboardState.selectedAgentId &&
     operatorActivePrompt &&
     (operatorActivePrompt.state === 'awaiting_input' || operatorActivePrompt.state === 'awaiting_approval');
+  const needsAttention = transientNeedsAttention || promptNeedsAttention || inboxTone.needsAttention;
+  const error = transientError || inboxTone.error;
   const lastActivityAt = resolveAgentQuietActivityAt(agent, transient);
   const quietPromptIdle = shouldUseAgentQuietPromptIdle({
     agentStatus: agent?.status ?? 'active',
@@ -1149,13 +1278,13 @@ function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
     quietMs: AGENT_TILE_PROMPT_IDLE_QUIET_MS,
     speaking,
     needsAttention,
-    promptNeedsAttention,
+    promptNeedsAttention: promptNeedsAttention || inboxTone.needsAttention,
     error
   });
   return {
     speaking,
-    needsAttention: needsAttention || promptNeedsAttention,
-    promptIdle: (explicitPromptIdle || quietPromptIdle) && !speaking && !needsAttention && !promptNeedsAttention && !error,
+    needsAttention,
+    promptIdle: (explicitPromptIdle || quietPromptIdle) && !speaking && !needsAttention && !error,
     error
   };
 }
@@ -1207,7 +1336,28 @@ async function readAgentDashboardState() {
   if (!payload || payload.ok !== true || !Array.isArray(payload?.state?.agents)) {
     throw new Error('agent state response is invalid');
   }
-  return normalizeDashboardAgentList(payload.state.agents);
+  return normalizeDashboardStatePayload(payload.state);
+}
+
+async function readOwnerInboxState(streamId = null) {
+  const query = new URLSearchParams({
+    owner_agent_id: OPERATOR_DASHBOARD_AGENT_ID
+  });
+  if (typeof streamId === 'string' && streamId.trim() !== '') {
+    query.set('stream_id', streamId.trim());
+  }
+  const response = await fetch(`/api/owner-inbox/list?${query.toString()}`, {
+    method: 'GET',
+    cache: 'no-store'
+  });
+  if (!response.ok) {
+    throw new Error(`owner inbox request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  if (!payload || payload.ok !== true || !payload.state || typeof payload.state !== 'object') {
+    throw new Error('owner inbox response is invalid');
+  }
+  return normalizeOwnerInboxViewState(payload.state);
 }
 
 function syncAgentActivityFromDashboardState(previousAgents, nextAgents, nowMs = Date.now()) {
@@ -1405,6 +1555,7 @@ function renderAgentDashboard() {
   const operatorTile = document.createElement('article');
   operatorTile.className = 'agent-tile';
   const operatorToneOptions = resolveAgentTransientToneOptions(OPERATOR_DASHBOARD_AGENT_ID, null);
+  const operatorInboxSummary = getOwnerInboxOverallSummary();
   operatorTile.dataset.tone = deriveAgentTileTone(
     { status: operatorRecoverPending ? 'active' : 'active' },
     operatorToneOptions
@@ -1451,7 +1602,9 @@ function renderAgentDashboard() {
 
   const operatorMessageEl = document.createElement('p');
   operatorMessageEl.className = 'agent-tile-message';
-  operatorMessageEl.textContent = operatorRecoverPending ? 'recovering operator...' : 'primary operator';
+  operatorMessageEl.textContent =
+    summarizeOwnerInboxSummary(operatorInboxSummary) ??
+    (operatorRecoverPending ? 'recovering operator...' : 'primary operator');
 
   const operatorTransient = agentTransientStateById.get(OPERATOR_DASHBOARD_AGENT_ID) ?? null;
   const operatorSpeechBubble =
@@ -1479,6 +1632,7 @@ function renderAgentDashboard() {
     const transient = agentTransientStateById.get(agent.id) ?? null;
     const toneOptions = resolveAgentTransientToneOptions(agent.id, agent, nowMs);
     const transientMessage = transient && transient.messageExpiresAt > nowMs ? transient.message : null;
+    const ownerInboxMessage = summarizeOwnerInboxSummary(getOwnerInboxAgentSummary(agent.id));
     const runtime = getOrCreateAgentFaceRuntime(agent.id, nowMs);
     const tile = document.createElement('article');
     tile.className = 'agent-tile';
@@ -1524,7 +1678,7 @@ function renderAgentDashboard() {
 
     const messageEl = document.createElement('p');
     messageEl.className = 'agent-tile-message';
-    messageEl.textContent = summarizeAgentTileMessage(agent, transientMessage);
+    messageEl.textContent = summarizeAgentTileMessage(agent, transientMessage, ownerInboxMessage);
 
     const speechBubble = transient && transient.speechBubbleExpiresAt > nowMs ? transient.speechBubble : null;
     if (speechBubble) {
@@ -1577,6 +1731,10 @@ function renderOperatorMobileAgentList() {
   operatorAgentListItemsEl.innerHTML = '';
   const operatorItem = document.createElement('article');
   operatorItem.className = 'operator-agent-item';
+  operatorItem.dataset.tone = deriveAgentTileTone(
+    { status: operatorRecoverPending ? 'active' : 'active' },
+    resolveAgentTransientToneOptions(OPERATOR_DASHBOARD_AGENT_ID, null, Date.now())
+  );
   if (agentDashboardState.selectedAgentId === OPERATOR_DASHBOARD_AGENT_ID) {
     operatorItem.classList.add('is-selected');
     operatorItem.style.borderColor = 'rgba(111, 243, 184, 0.65)';
@@ -1604,7 +1762,9 @@ function renderOperatorMobileAgentList() {
 
   const operatorMessageEl = document.createElement('p');
   operatorMessageEl.className = 'operator-agent-item-message';
-  operatorMessageEl.textContent = operatorRecoverPending ? 'recovering operator...' : 'primary operator';
+  operatorMessageEl.textContent =
+    summarizeOwnerInboxSummary(getOwnerInboxOverallSummary()) ??
+    (operatorRecoverPending ? 'recovering operator...' : 'primary operator');
 
   operatorItemFocus.append(operatorHeader, operatorMessageEl);
   operatorItem.append(operatorItemFocus);
@@ -1613,12 +1773,15 @@ function renderOperatorMobileAgentList() {
   for (const agent of agentDashboardState.agents) {
     const transient = agentTransientStateById.get(agent.id) ?? null;
     const nowMs = Date.now();
+    const ownerInboxMessage = summarizeOwnerInboxSummary(getOwnerInboxAgentSummary(agent.id));
     const message = summarizeAgentTileMessage(
       agent,
-      transient && transient.messageExpiresAt > nowMs ? transient.message : null
+      transient && transient.messageExpiresAt > nowMs ? transient.message : null,
+      ownerInboxMessage
     );
     const item = document.createElement('article');
     item.className = 'operator-agent-item';
+    item.dataset.tone = deriveAgentTileTone(agent, resolveAgentTransientToneOptions(agent.id, agent, nowMs));
     if (agent.id === agentDashboardState.selectedAgentId) {
       item.classList.add('is-selected');
       item.style.borderColor = 'rgba(111, 243, 184, 0.65)';
@@ -1668,14 +1831,34 @@ async function refreshAgentDashboardState(options = {}) {
   const silentStatus = options.silentStatus === true;
   agentDashboardLoadInFlight = (async () => {
     const previousAgents = agentDashboardState.agents;
-    const agents = await readAgentDashboardState();
-    syncAgentActivityFromDashboardState(previousAgents, agents, Date.now());
-    agentDashboardState.agents = agents;
+    const agentsPromise = readAgentDashboardState();
+    const nextDashboardState = await agentsPromise;
+    const ownerInboxPromise = readOwnerInboxState(nextDashboardState.activeStreamId).catch((error) => {
+      console.warn(`[face-app] owner inbox refresh failed: ${error.message}`);
+      return null;
+    });
+    const nextOwnerInboxState = await ownerInboxPromise;
+    syncAgentActivityFromDashboardState(previousAgents, nextDashboardState.agents, Date.now());
+    agentDashboardState.agents = nextDashboardState.agents;
+    agentDashboardState.activeStreamId = nextDashboardState.activeStreamId;
+    agentDashboardState.activeTargetRepoRoot = nextDashboardState.activeTargetRepoRoot;
+    agentDashboardState.hiddenAgentCount = nextDashboardState.hiddenAgentCount;
+    ownerInboxViewState = nextOwnerInboxState ?? createEmptyOwnerInboxViewState();
     agentDashboardState.loaded = true;
     ensureSelectedDashboardAgent();
     renderAgentDashboard();
+    updateOperatorUi();
     if (!silentStatus) {
-      setAgentDashboardStatus(`${getDashboardVisibleCount()} agents`, 'ok');
+      const unresolvedCount = Number.isFinite(ownerInboxViewState?.summary?.unresolved_count)
+        ? Math.max(0, Math.floor(ownerInboxViewState.summary.unresolved_count))
+        : 0;
+      const countText = formatDashboardVisibleCount();
+      setAgentDashboardStatus(
+        unresolvedCount > 0
+          ? `${countText} · inbox ${unresolvedCount}`
+          : countText,
+        unresolvedCount > 0 ? 'warn' : 'ok'
+      );
     }
   })()
     .catch((error) => {
@@ -1761,6 +1944,17 @@ function installAgentDashboardControls() {
       }
     });
   }
+}
+
+function installOperatorStateRefreshHooks() {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      refreshAgentDashboardSoon();
+    }
+  });
+  window.addEventListener('focus', () => {
+    refreshAgentDashboardSoon();
+  });
 }
 
 function applyOperatorUiMode(mode) {
@@ -4654,6 +4848,7 @@ async function bootstrap() {
     updateOperatorUi();
   }
   installAgentDashboardControls();
+  installOperatorStateRefreshHooks();
   await refreshAgentDashboardState({ silentStatus: false });
   if (operatorPanelEnabled) {
     resetStartupOperatorFocus();
