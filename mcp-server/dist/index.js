@@ -199,6 +199,10 @@ const BASE_TOOL_DEFINITIONS = [
         probe_poll_ms: { type: ['integer', 'null'], minimum: 20 },
         rescue_submit_if_buffered: { type: ['boolean', 'null'] },
         rescue_submit_delay_ms: { type: ['integer', 'null'], minimum: 20 },
+        followup_mode: {
+          type: ['string', 'null'],
+          enum: ['completion_rescue', 'blocker_summary', null]
+        },
         submit: { type: ['boolean', 'null'] },
         reinforce_submit: { type: ['boolean', 'null'] },
         delivery_id: { type: ['string', 'null'] }
@@ -815,6 +819,12 @@ function normalizeAgentInjectPayload(rawArguments) {
       throw new Error('delivery_id must be string or null');
     }
     payload.delivery_id = args.delivery_id;
+  }
+  if (args.followup_mode !== undefined && args.followup_mode !== null) {
+    if (typeof args.followup_mode !== 'string' || !['completion_rescue', 'blocker_summary'].includes(args.followup_mode)) {
+      throw new Error('followup_mode must be completion_rescue, blocker_summary, or null');
+    }
+    payload.followup_mode = args.followup_mode;
   }
   return payload;
 }

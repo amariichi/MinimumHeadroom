@@ -136,6 +136,28 @@ The key realtime ASR variables are:
 
 ### Recommended startup modes
 
+Prefer these `run-operator-once.sh --profile ...` launchers for normal operation. They wire the bridge target safely and match the profile terminology used elsewhere in the docs.
+
+Parakeet only (lowest VRAM, no realtime):
+
+    ./scripts/run-operator-once.sh --profile default
+
+Voxtral realtime plus Parakeet fallback (best current experience, higher VRAM):
+
+    ./scripts/run-operator-once.sh --profile realtime
+
+Qwen3 TTS plus batch ASR:
+
+    ./scripts/run-operator-once.sh --profile qwen3
+
+Qwen3 TTS plus Voxtral realtime ASR and Parakeet fallback:
+
+    ./scripts/run-operator-once.sh --profile qwen3-realtime
+
+### Low-level `run-operator-stack.sh` equivalents
+
+Use these only when you intentionally manage tmux pane targeting and stack wiring yourself.
+
 Parakeet only (lowest VRAM, no realtime):
 
     npm run setup
@@ -384,6 +406,28 @@ batch ASR:
 </details>
 
 ### 推奨起動モード
+
+通常運用では、まず `run-operator-once.sh --profile ...` を使ってください。bridge の接続先を安全に埋められ、README など他の説明とも profile 名が一致します。
+
+Parakeet のみ（最小 VRAM、realtime なし）:
+
+    ./scripts/run-operator-once.sh --profile default
+
+Voxtral realtime + Parakeet fallback（現在の本命、VRAM 多め）:
+
+    ./scripts/run-operator-once.sh --profile realtime
+
+Qwen3 TTS + batch ASR のみ:
+
+    ./scripts/run-operator-once.sh --profile qwen3
+
+Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback:
+
+    ./scripts/run-operator-once.sh --profile qwen3-realtime
+
+### 低レベルな `run-operator-stack.sh` 相当例
+
+以下は tmux pane の接続先や stack 配線を自分で管理したい場合だけ使ってください。
 
 Parakeet のみ（最小 VRAM、realtime なし）:
 

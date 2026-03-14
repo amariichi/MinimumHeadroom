@@ -21,7 +21,7 @@ Paste this into your project `AGENTS.md` and customize.
 
 - Use MCP lifecycle tools as the standard path: `agent.list(scope="stream")`, `agent.spawn`, `agent.assign`, `agent.inject`, `agent.assignment.list`, `owner.inbox.list`, `owner.inbox.resolve`, `agent.delete`.
 - Treat `agent.assign` as the durable mission record and `agent.inject` as controlled delivery for bootstrap or explicit reinstruction.
-- For review or investigation helpers, make the mission concrete with `target_paths`, `completion_criteria`, `timebox_minutes`, and `max_findings` when possible.
+- For review, investigation, implementation, or docs-check helpers, make the mission concrete with `role`, `target_paths`, `completion_criteria`, `timebox_minutes`, and `max_findings` when possible.
 - Treat `target_paths` as stream-root/source-repo anchored, even when they point outside the helper worktree.
 - For reinstruction to an already-running helper, prefer `agent.inject(..., probe_before_send=true)` when the helper may already be sitting at a prompt or when input readiness is uncertain.
 - If a multiline mission still appears buffered after submit, prefer `agent.inject(..., rescue_submit_if_buffered=true)` so the runtime can send one guarded extra `Enter`.
@@ -31,9 +31,12 @@ Paste this into your project `AGENTS.md` and customize.
 - `agent.focus` changes visibility only; it does not transfer ownership.
 - Review helpers should default to read-only missions.
 - Use helpers when the work splits cleanly: implementation, review/findings, or one bounded investigation.
+- Prefer docs-check helpers when the likely work is README/guide/diagram consistency rather than code behavior.
 - Prefer staying single-agent for tiny one-file edits or narrow wording changes where helper overhead would dominate.
 - Prefer one bounded helper mission at a time such as "one finding or done", then follow up only if needed.
 - If a helper reports late after timing out, treat the report as real work product first; do not assume the delivery path is fully broken.
+- If a helper has acknowledged but still has no final `done` or `review_findings` after the scoped timebox or a long quiet window, wait through a short grace period first, about 10 seconds or until `agent.assignment.list` says rescue is ready.
+- After that grace window, prefer `agent.inject(..., followup_mode="completion_rescue", probe_before_send=true, rescue_submit_if_buffered=true)` instead of broad reinstruction.
 
 ## Helper reporting discipline (recommended)
 
@@ -50,6 +53,7 @@ Paste this into your project `AGENTS.md` and customize.
 - After your final `done` or `review_findings` report, stop and wait for the owner instead of continuing exploration on your own.
 - If the owner gave `target_paths`, `completion_criteria`, `timebox_minutes`, or `max_findings`, treat them as active mission constraints.
 - If the owner gave `target_paths`, read those exact stream-root/source-repo paths first instead of hunting for mirrored copies inside your helper worktree.
+- If the owner sends a completion rescue follow-up, do not restart broad exploration. Send `done`, `review_findings`, `blocked`, or `question` immediately from the current scoped work.
 
 ## Speech defaults
 

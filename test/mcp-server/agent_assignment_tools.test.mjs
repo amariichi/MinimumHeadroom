@@ -189,6 +189,7 @@ test('mcp agent assignment tools call the face-app HTTP API', async () => {
         agent_id: 'helper-a',
         mission_id: 'mission-a',
         stream_id: 'repo:/tmp/target',
+        followup_mode: 'completion_rescue',
         probe_before_send: true,
         rescue_submit_if_buffered: true,
         rescue_submit_delay_ms: 180,
@@ -216,6 +217,7 @@ test('mcp agent assignment tools call the face-app HTTP API', async () => {
       requests.some(
         (item) =>
           item.url === '/api/agent-assignments/inject' &&
+          item.body?.followup_mode === 'completion_rescue' &&
           item.body?.probe_before_send === true &&
           item.body?.rescue_submit_if_buffered === true &&
           item.body?.rescue_submit_delay_ms === 180 &&

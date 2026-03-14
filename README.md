@@ -238,10 +238,10 @@ Use this path when you want the simple face UI and signaling, without the full o
 After `./scripts/setup.sh`, recommended one-shot startup:
 
 ```bash
-./scripts/run-operator-once.sh --profile qwen3-realtime
+./scripts/run-operator-once.sh --profile realtime
 ```
 
-Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring.
+Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring. Start with `--profile default` or `--profile realtime` unless you specifically want Qwen3 TTS.
 
 - `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. `qwen3` / `qwen3-realtime` profiles work by passing `TTS_ENGINE=qwen3` into that spawned worker path.
 - Profile shorthand:
@@ -268,20 +268,23 @@ Useful variants:
 
 ```bash
 # work on another repository while keeping minimum-headroom as the operator shell
-./scripts/run-operator-once.sh --profile qwen3-realtime --repo /path/to/target-repo
+./scripts/run-operator-once.sh --profile realtime --repo /path/to/target-repo
 
 # work from the target repository itself and call the script by absolute path
 cd /path/to/target-repo
-/path/to/MinimumHeadroom/scripts/run-operator-once.sh --profile qwen3-realtime
+/path/to/MinimumHeadroom/scripts/run-operator-once.sh --profile realtime
 
 # start with a shell in the agent pane first
-./scripts/run-operator-once.sh --profile qwen3-realtime --agent-shell
+./scripts/run-operator-once.sh --profile realtime --agent-shell
 
 # resume an existing Codex conversation
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
 
 # keep the current shell instead of attaching to tmux
-./scripts/run-operator-once.sh --profile qwen3-realtime --no-attach
+./scripts/run-operator-once.sh --profile realtime --no-attach
+
+# choose Qwen3 TTS only when you want that path explicitly
+./scripts/run-operator-once.sh --profile qwen3-realtime
 ```
 
 <a id="en-detailed-guides"></a>
@@ -605,10 +608,10 @@ tailscale serve --bg 8765
 `./scripts/setup.sh` 実行後の推奨 1 発起動:
 
 ```bash
-./scripts/run-operator-once.sh --profile qwen3-realtime
+./scripts/run-operator-once.sh --profile realtime
 ```
 
-これは、tmux 連携、browser PTT、terminal mirror、隠し復旧、bridge の安全な既定配線まで含む、いちばん実用的な構成です。
+これは、tmux 連携、browser PTT、terminal mirror、隠し復旧、bridge の安全な既定配線まで含む、いちばん実用的な構成です。特に Qwen3 TTS を使いたい理由がなければ、`--profile default` か `--profile realtime` から始めてください。
 
 - `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`qwen3` / `qwen3-realtime` profile は、この子起動 worker に `TTS_ENGINE=qwen3` を渡して切り替えます。
 - profile の意味:
@@ -635,20 +638,23 @@ tailscale serve --bg 8765
 
 ```bash
 # minimum-headroom を operator shell として使いながら、別 repo を作業対象にする
-./scripts/run-operator-once.sh --profile qwen3-realtime --repo /path/to/target-repo
+./scripts/run-operator-once.sh --profile realtime --repo /path/to/target-repo
 
 # target repository 側から absolute path で script を呼ぶ
 cd /path/to/target-repo
-/path/to/MinimumHeadroom/scripts/run-operator-once.sh --profile qwen3-realtime
+/path/to/MinimumHeadroom/scripts/run-operator-once.sh --profile realtime
 
 # まず agent ペインをシェルだけで開く
-./scripts/run-operator-once.sh --profile qwen3-realtime --agent-shell
+./scripts/run-operator-once.sh --profile realtime --agent-shell
 
 # 直前の Codex セッションを再開
 ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
 
 # 起動だけ行い、現在のシェルを維持
-./scripts/run-operator-once.sh --profile qwen3-realtime --no-attach
+./scripts/run-operator-once.sh --profile realtime --no-attach
+
+# Qwen3 TTS を使いたい時だけ明示的に選ぶ
+./scripts/run-operator-once.sh --profile qwen3-realtime
 ```
 
 <a id="ja-detailed-guides"></a>

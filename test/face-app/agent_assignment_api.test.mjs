@@ -128,6 +128,48 @@ test('renderAssignmentPrompt wraps explicit prompt_text with helper bootstrap gu
   assert.match(prompt, /Investigate the failure and patch the bug\./);
 });
 
+test('renderAssignmentPrompt adds role-aware shaping for reviewer missions', () => {
+  const prompt = renderAssignmentPrompt({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-review',
+    owner_agent_id: '__operator__',
+    agent_id: 'helper-review',
+    role: 'review',
+    goal: 'Review README quick start',
+    target_paths: ['README.md'],
+    completion_criteria: 'Return one finding or done.',
+    max_findings: 1
+  });
+
+  assert.match(prompt, /Role: reviewer/);
+  assert.match(prompt, /Reviewer role: stay read-only unless the owner explicitly asks for edits/);
+  assert.match(prompt, /Prioritize one concrete correctness, regression, or documentation mismatch finding/);
+});
+
+test('renderAssignmentPrompt can render a bounded completion rescue follow-up', () => {
+  const prompt = renderAssignmentPrompt({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-followup',
+    owner_agent_id: '__operator__',
+    agent_id: 'helper-followup',
+    role: 'docs-check',
+    goal: 'Check the mermaid diagram',
+    target_paths: ['README.md'],
+    completion_criteria: 'Return one finding or done.',
+    max_findings: 1,
+    timebox_minutes: 3
+  }, {
+    followup_mode: 'completion_rescue'
+  });
+
+  assert.match(prompt, /^Owner follow-up for helper agent helper-followup\./);
+  assert.match(prompt, /Role: docs-check/);
+  assert.match(prompt, /Follow-up protocol:/);
+  assert.match(prompt, /send done or review_findings now/i);
+  assert.match(prompt, /If no qualifying finding exists within the scoped pass, send done now with a concise no-findings summary/);
+  assert.doesNotMatch(prompt, /Before reading repo files, skills, or running broad exploration/);
+});
+
 test('agent assignment api handles assign, list, and inject flows', async () => {
   const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-api-');
   const store = createAgentAssignmentStateStore({
@@ -232,6 +274,29 @@ test('agent assignment api handles assign, list, and inject flows', async () => 
   assert.equal(runtimeCalls[1]?.input?.probe_before_send, true);
   assert.equal(runtimeCalls[1]?.input?.probe_timeout_ms, 1200);
   assert.equal(runtimeCalls[1]?.input?.probe_poll_ms, 50);
+
+  const followupInjectRequest = createRequest({
+    method: 'POST',
+    url: '/api/agent-assignments/inject',
+    body: {
+      stream_id: 'repo:/tmp/target',
+      mission_id: 'mission-a',
+      agent_id: 'helper-a',
+      ack_timeout_ms: 5000,
+      followup_mode: 'completion_rescue',
+      probe_before_send: true,
+      rescue_submit_if_buffered: true
+    }
+  });
+  const followupInjectResponse = createResponseCapture();
+  const followupInjectHandled = await api.handleHttpRequest(followupInjectRequest, followupInjectResponse);
+  assert.equal(followupInjectHandled, true);
+  assert.equal(followupInjectResponse.snapshot().statusCode, 200);
+  assert.equal(runtimeCalls.length, 3);
+  assert.match(runtimeCalls[2]?.input?.text ?? '', /^Owner follow-up for helper agent helper-a\./);
+  assert.match(runtimeCalls[2]?.input?.text ?? '', /send done or review_findings now/i);
+  assert.equal(runtimeCalls[2]?.input?.probe_before_send, true);
+  assert.equal(runtimeCalls[2]?.input?.rescue_submit_if_buffered, true);
 
   cleanup(rootDir);
 });

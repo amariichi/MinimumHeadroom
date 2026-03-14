@@ -111,6 +111,40 @@ function formatTargetPaths(value) {
   return value.filter((item) => typeof item === 'string' && item.trim() !== '').map((item) => item.trim());
 }
 
+function normalizeRole(value) {
+  const normalized = asNonEmptyString(value)?.toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === 'review' || normalized === 'reviewer') {
+    return 'reviewer';
+  }
+  if (normalized === 'investigation' || normalized === 'investigator' || normalized === 'research') {
+    return 'investigator';
+  }
+  if (normalized === 'implementation' || normalized === 'implementer' || normalized === 'builder') {
+    return 'implementer';
+  }
+  if (normalized === 'docs' || normalized === 'docs-check' || normalized === 'docs_check' || normalized === 'documentation') {
+    return 'docs-check';
+  }
+  return normalized;
+}
+
+function normalizeFollowupMode(value) {
+  const normalized = asNonEmptyString(value)?.toLowerCase();
+  if (!normalized || normalized === 'assignment') {
+    return 'assignment';
+  }
+  if (normalized === 'completion_rescue') {
+    return 'completion_rescue';
+  }
+  if (normalized === 'blocker_summary') {
+    return 'blocker_summary';
+  }
+  return 'assignment';
+}
+
 function deriveStreamRoot(streamId) {
   const normalized = asNonEmptyString(streamId);
   if (!normalized || !normalized.startsWith('repo:')) {
@@ -136,13 +170,90 @@ function describeTargetPaths(targetPaths, streamRoot) {
   return absolutePaths.join(', ');
 }
 
-export function renderAssignmentPrompt(assignment) {
+function buildRoleShapingLines(role) {
+  switch (role) {
+    case 'reviewer':
+      return [
+        '- Reviewer role: stay read-only unless the owner explicitly asks for edits.',
+        '- Prioritize one concrete correctness, regression, or documentation mismatch finding over a broad sweep.',
+        '- If nothing qualifies within the scoped pass, return done with a concise no-findings summary.'
+      ];
+    case 'investigator':
+      return [
+        '- Investigator role: answer the bounded question with the minimum files and commands needed.',
+        '- Prefer one concrete repro, root cause, or disproof quickly instead of broad repo exploration.',
+        '- If the investigation branch is ambiguous, return question with the smallest missing fact.'
+      ];
+    case 'implementer':
+      return [
+        '- Implementer role: stay within the requested subsystem or target paths and prefer the smallest viable patch.',
+        '- If the requested split would cause same-file conflicts or ownership ambiguity, return question before editing broadly.',
+        '- Once the requested implementation change is ready, report done promptly instead of expanding scope.'
+      ];
+    case 'docs-check':
+      return [
+        '- Docs-check role: verify consistency across README, guides, examples, and exported diagram assets inside the stated scope.',
+        '- Prefer the first concrete mismatch or stale statement with an exact path over broad commentary.',
+        '- If the scoped docs are already aligned, return done with a concise no-findings summary.'
+      ];
+    default:
+      return [];
+  }
+}
+
+function buildFollowupPrompt(assignment, streamRoot, targetPathDescription, mode) {
+  const role = normalizeRole(assignment.role);
+  const lines = [
+    `Owner follow-up for helper agent ${assignment.agent_id}.`,
+    `Original goal: ${assignment.goal}`
+  ];
+  if (role) {
+    lines.push(`Role: ${role}`);
+  }
+  if (streamRoot) {
+    lines.push(`Stream root: ${streamRoot}`);
+  }
+  if (targetPathDescription && targetPathDescription !== '(none provided)') {
+    lines.push(`Target paths (stream-root anchored): ${targetPathDescription}`);
+  }
+  if (assignment.completion_criteria) {
+    lines.push(`Completion criteria: ${assignment.completion_criteria}`);
+  }
+  if (Number.isInteger(assignment.max_findings) && assignment.max_findings > 0) {
+    lines.push(`Max findings this pass: ${assignment.max_findings}`);
+  }
+  if (Number.isInteger(assignment.timebox_minutes) && assignment.timebox_minutes > 0) {
+    lines.push(`Timebox minutes: ${assignment.timebox_minutes}`);
+  }
+  lines.push('Follow-up protocol:');
+  if (mode === 'blocker_summary') {
+    lines.push('- Do not start another broad exploration pass.');
+    lines.push('- Immediately send blocked or question with the single blocker or ambiguity that prevents completion right now.');
+    lines.push('- Summarize the single blocking fact, missing input, or ambiguity that prevents completion right now.');
+    lines.push('- If you are no longer blocked and already have a bounded answer, send done or review_findings now instead.');
+  } else {
+    lines.push('- Do not restart broad exploration or optional skill lookup.');
+    lines.push('- Using the current scoped work, send done or review_findings now.');
+    lines.push('- If this is a narrow review or docs pass, return the first qualifying finding now rather than hunting for more.');
+    lines.push('- If no qualifying finding exists within the scoped pass, send done now with a concise no-findings summary.');
+    lines.push('- If you are truly blocked, send blocked or question now with the shortest blocker summary that lets the owner unblock you.');
+  }
+  lines.push('- After the final report, stop and wait for the owner.');
+  return lines.join('\n');
+}
+
+export function renderAssignmentPrompt(assignment, options = {}) {
   if (!assignment || typeof assignment !== 'object') {
     throw new Error('assignment is required');
   }
+  const followupMode = normalizeFollowupMode(options.followup_mode);
   const streamRoot = deriveStreamRoot(assignment.stream_id);
   const targetPaths = formatTargetPaths(assignment.target_paths);
   const targetPathDescription = describeTargetPaths(targetPaths, streamRoot);
+  const role = normalizeRole(assignment.role);
+  if (followupMode !== 'assignment') {
+    return buildFollowupPrompt(assignment, streamRoot, targetPathDescription, followupMode);
+  }
   const protocolLines = [
     `1. Before reading repo files, skills, or running broad exploration, call the agent.report MCP tool (shown in some clients as minimum_headroom.agent_report) with stream_id=${assignment.stream_id}, mission_id=${assignment.mission_id}, owner_agent_id=${assignment.owner_agent_id}, from_agent_id=${assignment.agent_id}, kind=progress, summary='Mission accepted'.`,
     '2. Wait until that first report call succeeds.',
@@ -163,6 +274,7 @@ export function renderAssignmentPrompt(assignment) {
     '- If max_findings is 1 or the completion criteria say "one finding or done", stop after the first qualifying result and report it immediately.',
     '- If the scope is still ambiguous after the first report, send question instead of broad repo exploration.'
   ];
+  const roleShapingLines = buildRoleShapingLines(role);
   const explicitPrompt = asNonEmptyString(assignment.prompt_text);
   if (explicitPrompt) {
     const lines = [
@@ -171,6 +283,7 @@ export function renderAssignmentPrompt(assignment) {
       ...protocolLines,
       'Execution shaping:',
       ...shapingLines,
+      ...roleShapingLines,
       'Mission body:',
       explicitPrompt
     ];
@@ -184,8 +297,8 @@ export function renderAssignmentPrompt(assignment) {
   if (streamRoot) {
     lines.push(`Stream root: ${streamRoot}`);
   }
-  if (assignment.role) {
-    lines.push(`Role: ${assignment.role}`);
+  if (role) {
+    lines.push(`Role: ${role}`);
   }
   lines.push(`Goal: ${assignment.goal}`);
   if (assignment.constraints) {
@@ -220,6 +333,7 @@ export function renderAssignmentPrompt(assignment) {
   lines.push('- If no qualifying finding appears within the scoped pass, send done with a concise no-findings summary instead of waiting silently.');
   lines.push('- After your final done/review_findings report, stop and wait for the owner instead of continuing exploration on your own.');
   lines.push('- If the mission is ambiguous after the first report, send question instead of exploring broadly.');
+  lines.push(...roleShapingLines);
   lines.push('Begin now.');
   return lines.join('\n');
 }
@@ -294,7 +408,10 @@ export function createAgentAssignmentApi(options = {}) {
             mission_id: missionId,
             agent_id: agentId
           });
-          const text = renderAssignmentPrompt(assignment);
+          const followupMode = normalizeFollowupMode(body.followup_mode);
+          const text = renderAssignmentPrompt(assignment, {
+            followup_mode: followupMode
+          });
           const ackTimeoutMs = parseInteger(body.ack_timeout_ms, 20_000, 1000);
           const submit = normalizeBoolean(body.submit, true);
           const reinforceSubmit = normalizeBoolean(body.reinforce_submit, false);
