@@ -1,6 +1,6 @@
 [project]
 name = "asr-worker"
-version = "1.12.0"
+version = "1.13.0"
 description = "Local ASR worker for english-trainer (Parakeet EN/JA routing)"
 readme = "README.md"
 requires-python = ">=3.10"
