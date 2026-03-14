@@ -1,4 +1,6 @@
 const KNOWN_AGENT_STATUSES = new Set(['active', 'missing']);
+const KNOWN_ASSIGNMENT_DELIVERY_STATES = new Set(['pending', 'sent_to_tmux', 'acked', 'acked_late', 'failed', 'timeout']);
+const FINAL_ASSIGNMENT_REPORT_KINDS = new Set(['done', 'review_findings']);
 
 function asNonEmptyString(value) {
   if (typeof value !== 'string') {
@@ -22,6 +24,18 @@ export function normalizeAgentStatus(value) {
     return 'active';
   }
   return normalized;
+}
+
+function normalizeAssignmentDeliveryState(value) {
+  const normalized = asNonEmptyString(value)?.toLowerCase() ?? 'pending';
+  if (!KNOWN_ASSIGNMENT_DELIVERY_STATES.has(normalized)) {
+    return 'pending';
+  }
+  return normalized;
+}
+
+function normalizeAssignmentReportKind(value) {
+  return asNonEmptyString(value)?.toLowerCase() ?? null;
 }
 
 export function normalizeDashboardAgent(rawAgent = {}, index = 0) {
@@ -123,6 +137,95 @@ export function deriveAgentTileTone(agent, options = {}) {
   return normalizeAgentStatus(agent?.status) === 'active' ? 'active' : 'missing';
 }
 
+export function deriveAssignmentToneOptions(assignment) {
+  const deliveryState = normalizeAssignmentDeliveryState(assignment?.delivery_state);
+  const reportKind = normalizeAssignmentReportKind(assignment?.last_report_kind);
+  const finalReport = reportKind ? FINAL_ASSIGNMENT_REPORT_KINDS.has(reportKind) : false;
+  const activeMission = (deliveryState === 'acked' || deliveryState === 'acked_late') && !finalReport;
+  const needsAttention =
+    deliveryState === 'failed' ||
+    deliveryState === 'timeout' ||
+    reportKind === 'blocked' ||
+    reportKind === 'question';
+  return {
+    activeMission,
+    needsAttention,
+    suppressPromptIdle: deliveryState === 'sent_to_tmux' || activeMission
+  };
+}
+
+export function deriveAgentOperationalState(agent, options = {}) {
+  const agentStatus = normalizeAgentStatus(agent?.status);
+  if (agentStatus !== 'active') {
+    return 'missing';
+  }
+  if (options.error === true) {
+    return 'error';
+  }
+
+  const assignment = options.assignment && typeof options.assignment === 'object' ? options.assignment : null;
+  const assignmentTone = deriveAssignmentToneOptions(assignment);
+  const reportKind = normalizeAssignmentReportKind(assignment?.last_report_kind);
+  const deliveryState = normalizeAssignmentDeliveryState(assignment?.delivery_state);
+  const inboxSummary = options.ownerInboxSummary && typeof options.ownerInboxSummary === 'object'
+    ? options.ownerInboxSummary
+    : null;
+  const informationalCount = asInteger(inboxSummary?.informational_count, 0, 0) ?? 0;
+  const nowMs = Number.isFinite(options.nowMs) ? Math.floor(options.nowMs) : Date.now();
+  const assignmentReportAt = Number.isFinite(assignment?.last_report_at) ? Math.floor(assignment.last_report_at) : 0;
+  const lastActivityAt = Math.max(
+    Number.isFinite(options.lastActivityAt) ? Math.floor(options.lastActivityAt) : 0,
+    assignmentReportAt
+  );
+  const recentActivityWindowMs = Number.isFinite(options.recentActivityWindowMs)
+    ? Math.max(1_500, Math.floor(options.recentActivityWindowMs))
+    : 10_000;
+  const hasRecentActivity = lastActivityAt > 0 && nowMs - lastActivityAt < recentActivityWindowMs;
+  const finalReport = reportKind ? FINAL_ASSIGNMENT_REPORT_KINDS.has(reportKind) : false;
+
+  if (options.needsAttention === true || assignmentTone.needsAttention) {
+    return 'needs_attention';
+  }
+  if (deliveryState === 'sent_to_tmux') {
+    return 'awaiting_ack';
+  }
+  if (finalReport && informationalCount > 0) {
+    return 'awaiting_review';
+  }
+  if (options.speaking === true || hasRecentActivity) {
+    return 'working';
+  }
+  if (assignmentTone.activeMission) {
+    return 'thinking';
+  }
+  if (options.promptIdle === true) {
+    return 'idle';
+  }
+  return 'working';
+}
+
+export function summarizeAgentOperationalState(state) {
+  switch (state) {
+    case 'awaiting_ack':
+      return 'awaiting_ack';
+    case 'awaiting_review':
+      return 'awaiting_review';
+    case 'thinking':
+      return 'thinking';
+    case 'needs_attention':
+      return 'attention';
+    case 'error':
+      return 'error';
+    case 'missing':
+      return 'missing';
+    case 'idle':
+      return 'idle';
+    case 'working':
+    default:
+      return 'working';
+  }
+}
+
 export function deriveOwnerInboxToneOptions(summary) {
   const blockingCount = asInteger(summary?.blocking_count, 0, 0) ?? 0;
   const errorCount = asInteger(summary?.error_count, 0, 0) ?? 0;
@@ -147,7 +250,7 @@ export function summarizeOwnerInboxSummary(summary) {
   return null;
 }
 
-export function summarizeAgentTileMessage(agent, transientMessage = null, ownerInboxMessage = null) {
+export function summarizeAgentTileMessage(agent, transientMessage = null, ownerInboxMessage = null, operationalState = null) {
   const transient = asNonEmptyString(transientMessage);
   if (transient) {
     return transient;
@@ -159,6 +262,22 @@ export function summarizeAgentTileMessage(agent, transientMessage = null, ownerI
   const persisted = asNonEmptyString(agent?.last_message);
   if (persisted) {
     return persisted;
+  }
+  switch (operationalState) {
+    case 'awaiting_ack':
+      return 'awaiting first report';
+    case 'awaiting_review':
+      return 'waiting for owner review';
+    case 'thinking':
+      return 'quiet, mission in progress';
+    case 'needs_attention':
+      return 'needs operator attention';
+    case 'error':
+      return 'error';
+    case 'idle':
+      return 'ready for next task';
+    default:
+      break;
   }
   switch (normalizeAgentStatus(agent?.status)) {
     case 'active':

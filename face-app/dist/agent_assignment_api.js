@@ -143,27 +143,34 @@ export function renderAssignmentPrompt(assignment) {
   const streamRoot = deriveStreamRoot(assignment.stream_id);
   const targetPaths = formatTargetPaths(assignment.target_paths);
   const targetPathDescription = describeTargetPaths(targetPaths, streamRoot);
+  const protocolLines = [
+    `1. Before reading repo files, skills, or running broad exploration, call the agent.report MCP tool (shown in some clients as minimum_headroom.agent_report) with stream_id=${assignment.stream_id}, mission_id=${assignment.mission_id}, owner_agent_id=${assignment.owner_agent_id}, from_agent_id=${assignment.agent_id}, kind=progress, summary='Mission accepted'.`,
+    '2. Wait until that first report call succeeds.',
+    '3. If blocked or uncertain, send blocked or question to the owner instead of asking the user directly.',
+    '4. Inspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration unless blocked without them.',
+    '5. Send done or review_findings as soon as the current completion criteria are satisfied.',
+    '6. If this is a narrow review or investigation pass, return the first qualifying finding immediately instead of hunting for more.',
+    '7. If no qualifying finding appears within the stated scope or timebox, send done with a short no-findings summary instead of lingering.',
+    '8. After your final done/review_findings report, stop and wait for the owner.'
+  ];
+  const shapingLines = [
+    `- Stream root: ${streamRoot ?? '(not available)'}.`,
+    `- Target paths are stream-root anchored: ${targetPathDescription}.`,
+    '- Read the exact target path under the stream root even if it sits outside your helper worktree.',
+    `- Timebox: ${assignment.timebox_minutes ?? '(not specified)'} minute(s).`,
+    `- Completion criteria: ${assignment.completion_criteria ?? '(not specified)'}.`,
+    `- Max findings this pass: ${assignment.max_findings ?? '(not specified)'}.`,
+    '- If max_findings is 1 or the completion criteria say "one finding or done", stop after the first qualifying result and report it immediately.',
+    '- If the scope is still ambiguous after the first report, send question instead of broad repo exploration.'
+  ];
   const explicitPrompt = asNonEmptyString(assignment.prompt_text);
   if (explicitPrompt) {
     const lines = [
       `Owner assignment for helper agent ${assignment.agent_id}.`,
-      'Bootstrap protocol (follow in order):',
-      `1. Before reading repo files, skills, or running broad exploration, call the agent.report MCP tool (shown in some clients as minimum_headroom.agent_report) with stream_id=${assignment.stream_id}, mission_id=${assignment.mission_id}, owner_agent_id=${assignment.owner_agent_id}, from_agent_id=${assignment.agent_id}, kind=progress, summary='Mission accepted'.`,
-      '2. Wait until that first report call succeeds.',
-      '3. After the first report succeeds, use the minimum-headroom-ops skill if it is available and relevant.',
-      '4. If you cannot accept the mission as written, send blocked or question to the owner instead of asking the user directly.',
-      '5. Keep the first pass narrow. Do not broaden the scope silently.',
-      '6. When the work is complete, send done or review_findings back to the owner.',
-      '7. After the first report succeeds, inspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration unless the mission is blocked without them.',
-      '8. As soon as you have a bounded answer that satisfies the completion criteria, send the final done/review_findings report before any further prompts, /skills, or extra exploration.',
+      'Immediate protocol:',
+      ...protocolLines,
       'Execution shaping:',
-      `- Stream root for this mission: ${streamRoot ?? '(not available)'}.`,
-      `- If target_paths are given, treat them as stream-root anchored paths first: ${targetPathDescription}.`,
-      '- If a target path is outside your helper worktree but still under the stream root, inspect it there directly instead of broad repo exploration.',
-      `- If a timebox is given, stop and report by then: ${assignment.timebox_minutes ?? '(not specified)'} minute(s).`,
-      `- If completion criteria are given, follow them exactly: ${assignment.completion_criteria ?? '(not specified)'}.`,
-      `- If max_findings is given, return no more than that many findings on this pass: ${assignment.max_findings ?? '(not specified)'}.`,
-      '- If the scope is still ambiguous after the first report, send question instead of broad repo exploration.',
+      ...shapingLines,
       'Mission body:',
       explicitPrompt
     ];
@@ -171,15 +178,8 @@ export function renderAssignmentPrompt(assignment) {
   }
   const lines = [
     `Owner assignment for helper agent ${assignment.agent_id}.`,
-    'Bootstrap protocol (follow in order):',
-    `1. Before reading repo files, skills, or running broad exploration, call the agent.report MCP tool (shown in some clients as minimum_headroom.agent_report) with stream_id=${assignment.stream_id}, mission_id=${assignment.mission_id}, owner_agent_id=${assignment.owner_agent_id}, from_agent_id=${assignment.agent_id}, kind=progress, summary='Mission accepted'.`,
-    '2. Wait until that first report call succeeds.',
-    '3. After the first report succeeds, use the minimum-headroom-ops skill if it is available and relevant.',
-    '4. If blocked or uncertain, report blocked or question to the owner instead of asking the user directly.',
-    '5. Keep the first pass narrow. Do not broaden the scope silently.',
-    '6. When the work is complete, send done or review_findings back to the owner.',
-    '7. After the first report succeeds, inspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration unless the mission is blocked without them.',
-    '8. As soon as you have a bounded answer that satisfies the completion criteria, send the final done/review_findings report before any further prompts, /skills, or extra exploration.'
+    'Immediate protocol:',
+    ...protocolLines
   ];
   if (streamRoot) {
     lines.push(`Stream root: ${streamRoot}`);
@@ -215,10 +215,10 @@ export function renderAssignmentPrompt(assignment) {
   lines.push('Scoping rules:');
   lines.push('- Start with the minimum files or commands needed to answer the goal.');
   lines.push('- If target paths are given, do not roam outside them without explaining why in your next report.');
-  lines.push('- When a target path lives outside your helper worktree but under the stream root, inspect that exact path instead of guessing a mirrored location.');
-  lines.push('- Read the target paths before optional /skills or slash-command detours unless you are blocked without them.');
   lines.push('- Prefer returning one concrete result quickly unless the owner explicitly asked for a broader sweep.');
-  lines.push('- Once you have the bounded result for this pass, report it immediately before any extra prompts or follow-up exploration.');
+  lines.push('- If max_findings is 1 or the completion criteria say "one finding or done", stop after the first qualifying result and report it immediately.');
+  lines.push('- If no qualifying finding appears within the scoped pass, send done with a concise no-findings summary instead of waiting silently.');
+  lines.push('- After your final done/review_findings report, stop and wait for the owner instead of continuing exploration on your own.');
   lines.push('- If the mission is ambiguous after the first report, send question instead of exploring broadly.');
   lines.push('Begin now.');
   return lines.join('\n');

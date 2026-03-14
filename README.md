@@ -244,6 +244,11 @@ After `./scripts/setup.sh`, recommended one-shot startup:
 Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring.
 
 - `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. `qwen3` / `qwen3-realtime` profiles work by passing `TTS_ENGINE=qwen3` into that spawned worker path.
+- Profile shorthand:
+  - `--profile default`: Kokoro TTS + batch ASR only
+  - `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
+  - `--profile qwen3`: Qwen3 TTS + batch ASR only
+  - `--profile qwen3-realtime`: Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback
 - When you use this app to work on another repository, put a project-local `AGENTS.md` in that target repository too. Start from `doc/examples/AGENTS.sample.md`, then customize the repo-specific build/test/run rules there.
 - For another repository, you can start the operator in either of these equivalent styles:
   - run from this repository and pass `--repo /path/to/target-repo`
@@ -606,6 +611,11 @@ tailscale serve --bg 8765
 これは、tmux 連携、browser PTT、terminal mirror、隠し復旧、bridge の安全な既定配線まで含む、いちばん実用的な構成です。
 
 - `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`qwen3` / `qwen3-realtime` profile は、この子起動 worker に `TTS_ENGINE=qwen3` を渡して切り替えます。
+- profile の意味:
+  - `--profile default`: Kokoro TTS + batch ASR のみ
+  - `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
+  - `--profile qwen3`: Qwen3 TTS + batch ASR のみ
+  - `--profile qwen3-realtime`: Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback
 - このアプリを使って別の作業リポジトリを扱う場合は、その target repository 側にも project-local な `AGENTS.md` を置いてください。`doc/examples/AGENTS.sample.md` を出発点にして、その repo 固有の build/test/run ルールを追記するのが簡単です。
 - 別の作業リポジトリで使う起動方法は、次の 2 通りが実用的です。
   - このリポジトリ側から `--repo /path/to/target-repo` を付けて起動する

@@ -120,6 +120,11 @@ This preserves freshness even for similar text.
 - Helpers report to the owner, not to the user. Only the current user-facing owner asks the user for input or approval.
 - `agent.focus` changes visibility only; it does not transfer ownership.
 - Review helpers should default to read-only missions unless the owner explicitly chooses otherwise.
+- Prefer spinning up a reviewer helper when the owner expects non-trivial code edits, broad config/docs changes, or a risky cross-cutting patch.
+- Prefer spinning up an investigation helper when one bounded question can be answered independently while the owner continues another path.
+- Prefer staying single-agent when the task is a tiny one-file edit, a narrowly scoped wording change, or anything where mission overhead would exceed the likely parallelism gain.
+- Prefer one bounded helper mission at a time over a broad "review everything" request. Ask helpers for one finding or done, then follow up only if needed.
+- If a helper acknowledges late (`acked_late`) after a timeout, treat that as evidence the mission eventually reached the helper. Review or resolve the report before concluding the delivery path is broken.
 
 ## 9. Helper reporting discipline
 
@@ -130,6 +135,10 @@ This preserves freshness even for similar text.
 - After the first report succeeds, inspect the owner-provided target files before optional `/skills`, slash commands, or unrelated repo exploration unless you are blocked without them.
 - After the first report succeeds, continue the requested work. On completion, report `done` or `review_findings`.
 - Once you have a bounded answer that satisfies the current completion criteria, send the final `done` or `review_findings` report before any extra prompts, `/skills`, or follow-up exploration.
+- If this is a narrow review or investigation pass, return the first qualifying finding immediately instead of continuing to hunt for more.
+- If `max_findings` is `1` or the completion criteria say "one finding or done", stop after the first qualifying result and report it immediately.
+- If no qualifying finding appears within the scoped pass or timebox, send `done` with a concise no-findings summary instead of lingering silently.
+- After your final `done` or `review_findings` report, stop and wait for the owner instead of continuing exploration on your own.
 - If the owner provided `target_paths`, stay on those paths first.
 - Treat owner-provided `target_paths` as stream-root/source-repo anchored, even when they point outside your helper worktree.
 - If the owner provided `completion_criteria`, follow them exactly.

@@ -30,6 +30,10 @@ Paste this into your project `AGENTS.md` and customize.
 - Helpers report to the owner, not directly to the user.
 - `agent.focus` changes visibility only; it does not transfer ownership.
 - Review helpers should default to read-only missions.
+- Use helpers when the work splits cleanly: implementation, review/findings, or one bounded investigation.
+- Prefer staying single-agent for tiny one-file edits or narrow wording changes where helper overhead would dominate.
+- Prefer one bounded helper mission at a time such as "one finding or done", then follow up only if needed.
+- If a helper reports late after timing out, treat the report as real work product first; do not assume the delivery path is fully broken.
 
 ## Helper reporting discipline (recommended)
 
@@ -40,6 +44,10 @@ Paste this into your project `AGENTS.md` and customize.
 - After the first report succeeds, inspect the owner-provided target files before optional `/skills`, slash commands, or unrelated repo exploration unless blocked without them.
 - After the first report succeeds, continue the work and later report `done` or `review_findings`.
 - Once you have the bounded answer for the current pass, send the final `done` or `review_findings` report before extra prompts, `/skills`, or follow-up exploration.
+- If this is a narrow review or investigation pass, return the first qualifying finding immediately instead of continuing to hunt for more.
+- If `max_findings` is `1` or the completion criteria say "one finding or done", stop after the first qualifying result and report it immediately.
+- If no qualifying finding appears within the scoped pass or timebox, send `done` with a concise no-findings summary instead of lingering silently.
+- After your final `done` or `review_findings` report, stop and wait for the owner instead of continuing exploration on your own.
 - If the owner gave `target_paths`, `completion_criteria`, `timebox_minutes`, or `max_findings`, treat them as active mission constraints.
 - If the owner gave `target_paths`, read those exact stream-root/source-repo paths first instead of hunting for mirrored copies inside your helper worktree.
 

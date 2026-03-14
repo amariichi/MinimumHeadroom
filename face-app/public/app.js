@@ -23,6 +23,8 @@ import {
   shouldStopBrowserAudioChannel
 } from './browser_audio_policy.js';
 import {
+  deriveAgentOperationalState,
+  deriveAssignmentToneOptions,
   deriveAgentTileTone,
   deriveDashboardMode,
   deriveOwnerInboxToneOptions,
@@ -31,6 +33,7 @@ import {
   shouldRefreshAgentActivityFromState,
   shouldUseAgentQuietPromptIdle,
   sortDashboardAgents,
+  summarizeAgentOperationalState,
   summarizeAgentTileMessage,
   summarizeOwnerInboxSummary
 } from './agent_dashboard_state.js';
@@ -399,6 +402,23 @@ let ownerInboxViewState = {
     by_agent_id: {}
   }
 };
+let agentAssignmentViewState = {
+  loaded: false,
+  assignments: [],
+  latestByAgentId: {},
+  summary: {
+    count: 0,
+    by_delivery_state: {
+      pending: 0,
+      sent_to_tmux: 0,
+      acked: 0,
+      acked_late: 0,
+      failed: 0,
+      timeout: 0
+    },
+    by_agent_id: {}
+  }
+};
 const agentTransientStateById = new Map();
 const operatorEscRecoveryTracker = createTapBurstTrigger({
   requiredCount: OPERATOR_ESC_RECOVERY_REQUIRED_TAPS,
@@ -606,12 +626,25 @@ function updateOperatorCurrentAgentBar() {
   const currentSummary = isOperatorDashboardAgentId(current?.id ?? OPERATOR_DASHBOARD_AGENT_ID)
     ? getOwnerInboxOverallSummary()
     : getOwnerInboxAgentSummary(current?.id ?? '');
+  const currentAssignment = isOperatorDashboardAgentId(current?.id ?? OPERATOR_DASHBOARD_AGENT_ID)
+    ? null
+    : getLatestAgentAssignment(current?.id ?? '');
   const unresolvedCount = Number.isFinite(currentSummary?.unresolved_count) ? Math.max(0, Math.floor(currentSummary.unresolved_count)) : 0;
   const label = current?.label ?? current?.id ?? OPERATOR_DASHBOARD_AGENT_LABEL;
-  const status = current?.status ?? 'active';
-  const message =
-    summarizeOwnerInboxSummary(currentSummary) ??
-    (typeof current?.last_message === 'string' ? current.last_message : '');
+  const operationalState = deriveAgentOperationalState(current, {
+    ...toneOptions,
+    nowMs,
+    lastActivityAt: resolveAgentQuietActivityAt(current, agentTransientStateById.get(current?.id ?? '') ?? null),
+    ownerInboxSummary: currentSummary,
+    assignment: currentAssignment
+  });
+  const status = summarizeAgentOperationalState(operationalState);
+  const message = summarizeAgentTileMessage(
+    current,
+    null,
+    summarizeOwnerInboxSummary(currentSummary),
+    operationalState
+  );
   const countText = formatDashboardVisibleCount();
   const paneText = operatorMirrorPaneId ? ` · ${operatorMirrorPaneId}` : '';
   operatorCurrentAgentLabelEl.textContent = label;
@@ -792,6 +825,91 @@ function createEmptyOwnerInboxViewState() {
   };
 }
 
+function createEmptyAgentAssignmentViewState() {
+  return {
+    loaded: true,
+    assignments: [],
+    latestByAgentId: {},
+    summary: {
+      count: 0,
+      by_delivery_state: {
+        pending: 0,
+        sent_to_tmux: 0,
+        acked: 0,
+        acked_late: 0,
+        failed: 0,
+        timeout: 0
+      },
+      by_agent_id: {}
+    }
+  };
+}
+
+function normalizeAssignmentAgentSummary(rawSummary = {}) {
+  return {
+    count: Number.isFinite(rawSummary?.count) ? Math.max(0, Math.floor(rawSummary.count)) : 0,
+    pending: Number.isFinite(rawSummary?.pending) ? Math.max(0, Math.floor(rawSummary.pending)) : 0,
+    sent_to_tmux: Number.isFinite(rawSummary?.sent_to_tmux) ? Math.max(0, Math.floor(rawSummary.sent_to_tmux)) : 0,
+    acked: Number.isFinite(rawSummary?.acked) ? Math.max(0, Math.floor(rawSummary.acked)) : 0,
+    acked_late: Number.isFinite(rawSummary?.acked_late) ? Math.max(0, Math.floor(rawSummary.acked_late)) : 0,
+    failed: Number.isFinite(rawSummary?.failed) ? Math.max(0, Math.floor(rawSummary.failed)) : 0,
+    timeout: Number.isFinite(rawSummary?.timeout) ? Math.max(0, Math.floor(rawSummary.timeout)) : 0
+  };
+}
+
+function normalizeAssignmentRecord(rawAssignment = {}) {
+  return {
+    stream_id: typeof rawAssignment?.stream_id === 'string' ? rawAssignment.stream_id : null,
+    mission_id: typeof rawAssignment?.mission_id === 'string' ? rawAssignment.mission_id : null,
+    agent_id: typeof rawAssignment?.agent_id === 'string' ? rawAssignment.agent_id : null,
+    delivery_state: typeof rawAssignment?.delivery_state === 'string' ? rawAssignment.delivery_state : 'pending',
+    last_report_kind: typeof rawAssignment?.last_report_kind === 'string' ? rawAssignment.last_report_kind : null,
+    last_report_at: Number.isFinite(rawAssignment?.last_report_at) ? Math.max(0, Math.floor(rawAssignment.last_report_at)) : 0,
+    updated_at: Number.isFinite(rawAssignment?.updated_at) ? Math.max(0, Math.floor(rawAssignment.updated_at)) : 0
+  };
+}
+
+function normalizeAgentAssignmentViewState(rawState) {
+  const empty = createEmptyAgentAssignmentViewState();
+  if (!rawState || typeof rawState !== 'object') {
+    return empty;
+  }
+  const assignments = Array.isArray(rawState.assignments) ? rawState.assignments.map((item) => normalizeAssignmentRecord(item)) : [];
+  const latestByAgentId = {};
+  for (const assignment of assignments) {
+    if (!assignment.agent_id) {
+      continue;
+    }
+    const current = latestByAgentId[assignment.agent_id];
+    if (!current || assignment.updated_at > current.updated_at) {
+      latestByAgentId[assignment.agent_id] = assignment;
+    }
+  }
+  const rawSummary = rawState.summary && typeof rawState.summary === 'object' ? rawState.summary : {};
+  const rawByAgentId = rawSummary.by_agent_id && typeof rawSummary.by_agent_id === 'object' ? rawSummary.by_agent_id : {};
+  const byAgentId = {};
+  for (const [agentId, summary] of Object.entries(rawByAgentId)) {
+    byAgentId[agentId] = normalizeAssignmentAgentSummary(summary);
+  }
+  return {
+    loaded: true,
+    assignments,
+    latestByAgentId,
+    summary: {
+      count: Number.isFinite(rawSummary?.count) ? Math.max(0, Math.floor(rawSummary.count)) : assignments.length,
+      by_delivery_state: {
+        pending: Number.isFinite(rawSummary?.by_delivery_state?.pending) ? Math.max(0, Math.floor(rawSummary.by_delivery_state.pending)) : 0,
+        sent_to_tmux: Number.isFinite(rawSummary?.by_delivery_state?.sent_to_tmux) ? Math.max(0, Math.floor(rawSummary.by_delivery_state.sent_to_tmux)) : 0,
+        acked: Number.isFinite(rawSummary?.by_delivery_state?.acked) ? Math.max(0, Math.floor(rawSummary.by_delivery_state.acked)) : 0,
+        acked_late: Number.isFinite(rawSummary?.by_delivery_state?.acked_late) ? Math.max(0, Math.floor(rawSummary.by_delivery_state.acked_late)) : 0,
+        failed: Number.isFinite(rawSummary?.by_delivery_state?.failed) ? Math.max(0, Math.floor(rawSummary.by_delivery_state.failed)) : 0,
+        timeout: Number.isFinite(rawSummary?.by_delivery_state?.timeout) ? Math.max(0, Math.floor(rawSummary.by_delivery_state.timeout)) : 0
+      },
+      by_agent_id: byAgentId
+    }
+  };
+}
+
 function normalizeOwnerInboxAgentSummary(rawSummary = {}) {
   return {
     agent_id: typeof rawSummary?.agent_id === 'string' ? rawSummary.agent_id : null,
@@ -843,6 +961,13 @@ function getOwnerInboxAgentSummary(agentId) {
     return null;
   }
   return ownerInboxViewState?.summary?.by_agent_id?.[agentId] ?? null;
+}
+
+function getLatestAgentAssignment(agentId) {
+  if (!agentId) {
+    return null;
+  }
+  return agentAssignmentViewState?.latestByAgentId?.[agentId] ?? null;
 }
 
 function syncSelectedDashboardAgentToMirrorPane() {
@@ -1260,6 +1385,7 @@ function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
   const transientNeedsAttention = Boolean(transient && transient.needsAttentionUntil > nowMs);
   const explicitPromptIdle = Boolean(transient && transient.promptIdleUntil > nowMs);
   const transientError = Boolean(transient && transient.errorUntil > nowMs);
+  const assignmentTone = deriveAssignmentToneOptions(getLatestAgentAssignment(agentId));
   const inboxSummary = isOperatorDashboardAgentId(agentId)
     ? getOwnerInboxOverallSummary()
     : getOwnerInboxAgentSummary(agentId);
@@ -1268,7 +1394,7 @@ function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
     agentId === agentDashboardState.selectedAgentId &&
     operatorActivePrompt &&
     (operatorActivePrompt.state === 'awaiting_input' || operatorActivePrompt.state === 'awaiting_approval');
-  const needsAttention = transientNeedsAttention || promptNeedsAttention || inboxTone.needsAttention;
+  const needsAttention = transientNeedsAttention || promptNeedsAttention || inboxTone.needsAttention || assignmentTone.needsAttention;
   const error = transientError || inboxTone.error;
   const lastActivityAt = resolveAgentQuietActivityAt(agent, transient);
   const quietPromptIdle = shouldUseAgentQuietPromptIdle({
@@ -1284,7 +1410,7 @@ function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
   return {
     speaking,
     needsAttention,
-    promptIdle: (explicitPromptIdle || quietPromptIdle) && !speaking && !needsAttention && !error,
+    promptIdle: (explicitPromptIdle || quietPromptIdle) && !assignmentTone.suppressPromptIdle && !speaking && !needsAttention && !error,
     error
   };
 }
@@ -1358,6 +1484,25 @@ async function readOwnerInboxState(streamId = null) {
     throw new Error('owner inbox response is invalid');
   }
   return normalizeOwnerInboxViewState(payload.state);
+}
+
+async function readAgentAssignmentState(streamId = null) {
+  const query = new URLSearchParams();
+  if (typeof streamId === 'string' && streamId.trim() !== '') {
+    query.set('stream_id', streamId.trim());
+  }
+  const response = await fetch(`/api/agent-assignments/list?${query.toString()}`, {
+    method: 'GET',
+    cache: 'no-store'
+  });
+  if (!response.ok) {
+    throw new Error(`agent assignment request failed (${response.status})`);
+  }
+  const payload = await response.json();
+  if (!payload || payload.ok !== true || !payload.state || typeof payload.state !== 'object') {
+    throw new Error('agent assignment response is invalid');
+  }
+  return normalizeAgentAssignmentViewState(payload.state);
 }
 
 function syncAgentActivityFromDashboardState(previousAgents, nextAgents, nowMs = Date.now()) {
@@ -1632,7 +1777,15 @@ function renderAgentDashboard() {
     const transient = agentTransientStateById.get(agent.id) ?? null;
     const toneOptions = resolveAgentTransientToneOptions(agent.id, agent, nowMs);
     const transientMessage = transient && transient.messageExpiresAt > nowMs ? transient.message : null;
-    const ownerInboxMessage = summarizeOwnerInboxSummary(getOwnerInboxAgentSummary(agent.id));
+    const ownerInboxSummary = getOwnerInboxAgentSummary(agent.id);
+    const ownerInboxMessage = summarizeOwnerInboxSummary(ownerInboxSummary);
+    const operationalState = deriveAgentOperationalState(agent, {
+      ...toneOptions,
+      nowMs,
+      lastActivityAt: resolveAgentQuietActivityAt(agent, transient),
+      ownerInboxSummary,
+      assignment: getLatestAgentAssignment(agent.id)
+    });
     const runtime = getOrCreateAgentFaceRuntime(agent.id, nowMs);
     const tile = document.createElement('article');
     tile.className = 'agent-tile';
@@ -1669,7 +1822,7 @@ function renderAgentDashboard() {
     idEl.textContent = agent.id;
     const statusEl = document.createElement('span');
     statusEl.className = 'agent-tile-status';
-    statusEl.textContent = agent.status;
+    statusEl.textContent = summarizeAgentOperationalState(operationalState);
     header.append(idEl, statusEl);
 
     const sessionEl = document.createElement('div');
@@ -1678,7 +1831,7 @@ function renderAgentDashboard() {
 
     const messageEl = document.createElement('p');
     messageEl.className = 'agent-tile-message';
-    messageEl.textContent = summarizeAgentTileMessage(agent, transientMessage, ownerInboxMessage);
+    messageEl.textContent = summarizeAgentTileMessage(agent, transientMessage, ownerInboxMessage, operationalState);
 
     const speechBubble = transient && transient.speechBubbleExpiresAt > nowMs ? transient.speechBubble : null;
     if (speechBubble) {
@@ -1773,15 +1926,25 @@ function renderOperatorMobileAgentList() {
   for (const agent of agentDashboardState.agents) {
     const transient = agentTransientStateById.get(agent.id) ?? null;
     const nowMs = Date.now();
-    const ownerInboxMessage = summarizeOwnerInboxSummary(getOwnerInboxAgentSummary(agent.id));
+    const ownerInboxSummary = getOwnerInboxAgentSummary(agent.id);
+    const ownerInboxMessage = summarizeOwnerInboxSummary(ownerInboxSummary);
+    const toneOptions = resolveAgentTransientToneOptions(agent.id, agent, nowMs);
+    const operationalState = deriveAgentOperationalState(agent, {
+      ...toneOptions,
+      nowMs,
+      lastActivityAt: resolveAgentQuietActivityAt(agent, transient),
+      ownerInboxSummary,
+      assignment: getLatestAgentAssignment(agent.id)
+    });
     const message = summarizeAgentTileMessage(
       agent,
       transient && transient.messageExpiresAt > nowMs ? transient.message : null,
-      ownerInboxMessage
+      ownerInboxMessage,
+      operationalState
     );
     const item = document.createElement('article');
     item.className = 'operator-agent-item';
-    item.dataset.tone = deriveAgentTileTone(agent, resolveAgentTransientToneOptions(agent.id, agent, nowMs));
+    item.dataset.tone = deriveAgentTileTone(agent, toneOptions);
     if (agent.id === agentDashboardState.selectedAgentId) {
       item.classList.add('is-selected');
       item.style.borderColor = 'rgba(111, 243, 184, 0.65)';
@@ -1804,7 +1967,7 @@ function renderOperatorMobileAgentList() {
     idEl.textContent = agent.id;
     const statusEl = document.createElement('span');
     statusEl.className = 'operator-agent-item-status';
-    statusEl.textContent = agent.status;
+    statusEl.textContent = summarizeAgentOperationalState(operationalState);
     header.append(idEl, statusEl);
 
     const messageEl = document.createElement('p');
@@ -1837,13 +2000,18 @@ async function refreshAgentDashboardState(options = {}) {
       console.warn(`[face-app] owner inbox refresh failed: ${error.message}`);
       return null;
     });
-    const nextOwnerInboxState = await ownerInboxPromise;
+    const assignmentPromise = readAgentAssignmentState(nextDashboardState.activeStreamId).catch((error) => {
+      console.warn(`[face-app] agent assignment refresh failed: ${error.message}`);
+      return null;
+    });
+    const [nextOwnerInboxState, nextAssignmentState] = await Promise.all([ownerInboxPromise, assignmentPromise]);
     syncAgentActivityFromDashboardState(previousAgents, nextDashboardState.agents, Date.now());
     agentDashboardState.agents = nextDashboardState.agents;
     agentDashboardState.activeStreamId = nextDashboardState.activeStreamId;
     agentDashboardState.activeTargetRepoRoot = nextDashboardState.activeTargetRepoRoot;
     agentDashboardState.hiddenAgentCount = nextDashboardState.hiddenAgentCount;
     ownerInboxViewState = nextOwnerInboxState ?? createEmptyOwnerInboxViewState();
+    agentAssignmentViewState = nextAssignmentState ?? createEmptyAgentAssignmentViewState();
     agentDashboardState.loaded = true;
     ensureSelectedDashboardAgent();
     renderAgentDashboard();
