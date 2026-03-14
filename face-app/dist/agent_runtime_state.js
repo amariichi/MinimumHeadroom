@@ -30,6 +30,33 @@ function asNonEmptyString(value) {
   return trimmed === '' ? null : trimmed;
 }
 
+function normalizeRepoPath(value) {
+  const candidate = asNonEmptyString(value);
+  if (!candidate) {
+    return null;
+  }
+  return path.resolve(candidate);
+}
+
+function deriveStableStreamId(rawStreamId, targetRepoRoot, fallbackRoot = '') {
+  const explicit = asNonEmptyString(rawStreamId);
+  if (explicit) {
+    return explicit;
+  }
+  const resolvedRoot = normalizeRepoPath(targetRepoRoot) ?? normalizeRepoPath(fallbackRoot);
+  return resolvedRoot ? `repo:${resolvedRoot}` : 'repo:default';
+}
+
+function resolveAgentTargetRepoRoot(rawAgent, fallbackRoot = '') {
+  return normalizeRepoPath(rawAgent?.target_repo_root)
+    ?? normalizeRepoPath(rawAgent?.source_repo_path)
+    ?? normalizeRepoPath(fallbackRoot);
+}
+
+function resolveAgentStreamId(rawAgent, fallbackRoot = '') {
+  return deriveStableStreamId(rawAgent?.stream_id, resolveAgentTargetRepoRoot(rawAgent, fallbackRoot), fallbackRoot);
+}
+
 function asInteger(value, fallback = null, minValue = Number.MIN_SAFE_INTEGER) {
   if (!Number.isFinite(value)) {
     return fallback;
@@ -78,18 +105,23 @@ function normalizeStatus(raw, fallback = 'active') {
   return fallback;
 }
 
-function normalizeAgent(rawAgent, index, now, hardCap) {
+function normalizeAgent(rawAgent, index, now, hardCap, fallbackRoot) {
   const ts = nowMs(now);
   const normalizedStatus = normalizeStatus(rawAgent?.status, 'active');
   if (!normalizedStatus) {
     return null;
   }
+  const sourceRepoPath = normalizeRepoPath(rawAgent?.source_repo_path);
+  const targetRepoRoot = resolveAgentTargetRepoRoot(rawAgent, fallbackRoot);
+  const streamId = resolveAgentStreamId(rawAgent, targetRepoRoot ?? fallbackRoot);
   return {
     id: asNonEmptyString(rawAgent?.id) ?? `agent-${index + 1}`,
     session_id: asNonEmptyString(rawAgent?.session_id),
     status: normalizedStatus,
     slot: asInteger(rawAgent?.slot, index < hardCap ? index : null, 0),
-    source_repo_path: asNonEmptyString(rawAgent?.source_repo_path),
+    stream_id: streamId,
+    source_repo_path: sourceRepoPath,
+    target_repo_root: targetRepoRoot,
     worktree_path: asNonEmptyString(rawAgent?.worktree_path),
     branch: asNonEmptyString(rawAgent?.branch),
     pane_id: asNonEmptyString(rawAgent?.pane_id),
@@ -100,9 +132,12 @@ function normalizeAgent(rawAgent, index, now, hardCap) {
   };
 }
 
-function nextAvailableSlot(agents) {
+function nextAvailableSlot(agents, streamId = null) {
   const used = new Set();
   for (const agent of agents) {
+    if (streamId && resolveAgentStreamId(agent) !== streamId) {
+      continue;
+    }
     if (Number.isInteger(agent.slot) && agent.slot >= 0) {
       used.add(agent.slot);
     }
@@ -115,7 +150,7 @@ function nextAvailableSlot(agents) {
   return slot;
 }
 
-function normalizeState(rawState, now, hardCap) {
+function normalizeState(rawState, now, hardCap, fallbackRoot) {
   if (!rawState || typeof rawState !== 'object') {
     throw createStoreError('invalid_state', 'state root must be an object');
   }
@@ -135,7 +170,7 @@ function normalizeState(rawState, now, hardCap) {
 
   const seenIds = new Set();
   for (let index = 0; index < rawState.agents.length; index += 1) {
-    const normalized = normalizeAgent(rawState.agents[index], index, now, hardCap);
+    const normalized = normalizeAgent(rawState.agents[index], index, now, hardCap, fallbackRoot);
     if (!normalized || seenIds.has(normalized.id)) {
       continue;
     }
@@ -143,10 +178,16 @@ function normalizeState(rawState, now, hardCap) {
     state.agents.push(normalized);
   }
 
-  const occupied = new Set();
+  const occupiedByStream = new Map();
   for (const agent of state.agents) {
+    const streamId = resolveAgentStreamId(agent, fallbackRoot);
+    let occupied = occupiedByStream.get(streamId);
+    if (!occupied) {
+      occupied = new Set();
+      occupiedByStream.set(streamId, occupied);
+    }
     if (!Number.isInteger(agent.slot) || agent.slot < 0 || occupied.has(agent.slot)) {
-      agent.slot = nextAvailableSlot(state.agents);
+      agent.slot = nextAvailableSlot(state.agents, streamId);
     }
     occupied.add(agent.slot);
   }
@@ -173,8 +214,14 @@ function backupCorruptedStateFile(statePath, log) {
   }
 }
 
-function countTrackedAgents(agents) {
-  return Array.isArray(agents) ? agents.length : 0;
+function countTrackedAgents(agents, streamId = null) {
+  if (!Array.isArray(agents)) {
+    return 0;
+  }
+  if (!streamId) {
+    return agents.length;
+  }
+  return agents.filter((agent) => resolveAgentStreamId(agent) === streamId).length;
 }
 
 function normalizeStatePath(inputPath, repoRoot) {
@@ -205,9 +252,38 @@ export function createAgentRuntimeStateStore(options = {}) {
   const hardCap = asInteger(options.hardCap, HARD_CAP, 1) ?? HARD_CAP;
   const log = toLogger(options.log ?? console);
   const statePath = normalizeStatePath(options.statePath, options.repoRoot);
+  const activeTargetRepoRoot = normalizeRepoPath(options.activeTargetRepoRoot) ?? normalizeRepoPath(options.repoRoot);
+  const activeStreamId = deriveStableStreamId(options.activeStreamId, activeTargetRepoRoot, options.repoRoot);
 
   let loaded = false;
   let state = createEmptyState(now, hardCap);
+
+  function resolveScopeStreamId(filters = {}) {
+    const requested = asNonEmptyString(filters.stream_id);
+    if (requested) {
+      return requested;
+    }
+    const scope = asNonEmptyString(filters.scope)?.toLowerCase();
+    if (scope === 'all') {
+      return null;
+    }
+    return activeStreamId;
+  }
+
+  function listScopedAgents(filters = {}) {
+    const streamId = resolveScopeStreamId(filters);
+    const listed = [...state.agents]
+      .filter((agent) => !streamId || resolveAgentStreamId(agent, activeTargetRepoRoot) === streamId)
+      .sort((left, right) => {
+        const leftSlot = Number.isInteger(left.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
+        const rightSlot = Number.isInteger(right.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
+        if (leftSlot !== rightSlot) {
+          return leftSlot - rightSlot;
+        }
+        return String(left.id).localeCompare(String(right.id));
+      });
+    return clone(listed);
+  }
 
   function ensureLoaded() {
     if (!loaded) {
@@ -232,7 +308,7 @@ export function createAgentRuntimeStateStore(options = {}) {
     try {
       const raw = fs.readFileSync(statePath, 'utf8');
       const parsed = JSON.parse(raw);
-      state = normalizeState(parsed, now, hardCap);
+      state = normalizeState(parsed, now, hardCap, activeTargetRepoRoot ?? options.repoRoot);
       loaded = true;
       commitState();
       return clone(state);
@@ -246,22 +322,23 @@ export function createAgentRuntimeStateStore(options = {}) {
     }
   }
 
-  function getState() {
+  function getState(filters = {}) {
     ensureLoaded();
-    return clone(state);
+    const agents = listScopedAgents(filters);
+    return {
+      schema_version: state.schema_version,
+      updated_at: state.updated_at,
+      policy: clone(state.policy),
+      active_stream_id: activeStreamId,
+      active_target_repo_root: activeTargetRepoRoot,
+      hidden_agent_count: Math.max(0, state.agents.length - agents.length),
+      agents
+    };
   }
 
-  function listAgents() {
+  function listAgents(filters = {}) {
     ensureLoaded();
-    const listed = [...state.agents].sort((left, right) => {
-      const leftSlot = Number.isInteger(left.slot) ? left.slot : Number.MAX_SAFE_INTEGER;
-      const rightSlot = Number.isInteger(right.slot) ? right.slot : Number.MAX_SAFE_INTEGER;
-      if (leftSlot !== rightSlot) {
-        return leftSlot - rightSlot;
-      }
-      return String(left.id).localeCompare(String(right.id));
-    });
-    return clone(listed);
+    return listScopedAgents(filters);
   }
 
   function getAgent(agentId) {
@@ -276,7 +353,11 @@ export function createAgentRuntimeStateStore(options = {}) {
 
   function addAgent(input = {}) {
     ensureLoaded();
-    if (countTrackedAgents(state.agents) >= hardCap) {
+    const sourceRepoPath = normalizeRepoPath(input.source_repo_path) ?? activeTargetRepoRoot;
+    const targetRepoRoot = normalizeRepoPath(input.target_repo_root) ?? sourceRepoPath ?? activeTargetRepoRoot;
+    const streamId = deriveStableStreamId(input.stream_id, targetRepoRoot, activeTargetRepoRoot);
+
+    if (countTrackedAgents(state.agents, streamId) >= hardCap) {
       throw createStoreError('hard_cap_reached', `agent hard cap reached (${hardCap})`);
     }
 
@@ -287,9 +368,13 @@ export function createAgentRuntimeStateStore(options = {}) {
 
     const ts = nowMs(now);
     const requestedSlot = asInteger(input.slot, null, 0);
-    const slot = Number.isInteger(requestedSlot) ? requestedSlot : nextAvailableSlot(state.agents);
-    const occupied = new Set(state.agents.filter((item) => Number.isInteger(item.slot)).map((item) => item.slot));
-    const resolvedSlot = occupied.has(slot) ? nextAvailableSlot(state.agents) : slot;
+    const slot = Number.isInteger(requestedSlot) ? requestedSlot : nextAvailableSlot(state.agents, streamId);
+    const occupied = new Set(
+      state.agents
+        .filter((item) => resolveAgentStreamId(item, activeTargetRepoRoot) === streamId && Number.isInteger(item.slot))
+        .map((item) => item.slot)
+    );
+    const resolvedSlot = occupied.has(slot) ? nextAvailableSlot(state.agents, streamId) : slot;
     const status = normalizeStatus(input.status, 'active') ?? 'active';
 
     const agent = {
@@ -297,7 +382,9 @@ export function createAgentRuntimeStateStore(options = {}) {
       session_id: asNonEmptyString(input.session_id),
       status,
       slot: resolvedSlot,
-      source_repo_path: asNonEmptyString(input.source_repo_path),
+      stream_id: streamId,
+      source_repo_path: sourceRepoPath,
+      target_repo_root: targetRepoRoot,
       worktree_path: asNonEmptyString(input.worktree_path),
       branch: asNonEmptyString(input.branch),
       pane_id: asNonEmptyString(input.pane_id),
@@ -402,7 +489,10 @@ export function createAgentRuntimeStateStore(options = {}) {
 
   function updateAgentMetadata(agentId, updates = {}) {
     const nextSourceRepoPath = Object.prototype.hasOwnProperty.call(updates, 'source_repo_path')
-      ? asNonEmptyString(updates.source_repo_path)
+      ? normalizeRepoPath(updates.source_repo_path)
+      : undefined;
+    const nextTargetRepoRoot = Object.prototype.hasOwnProperty.call(updates, 'target_repo_root')
+      ? normalizeRepoPath(updates.target_repo_root)
       : undefined;
     const nextWorktreePath = Object.prototype.hasOwnProperty.call(updates, 'worktree_path')
       ? asNonEmptyString(updates.worktree_path)
@@ -419,12 +509,36 @@ export function createAgentRuntimeStateStore(options = {}) {
     const nextSlot = Object.prototype.hasOwnProperty.call(updates, 'slot')
       ? asInteger(updates.slot, null, 0)
       : undefined;
+    const hasStreamIdUpdate = Object.prototype.hasOwnProperty.call(updates, 'stream_id');
+    const rawNextStreamId = hasStreamIdUpdate ? updates.stream_id : undefined;
 
     return transitionAgent(agentId, 'update_metadata', (agent) => {
       let changed = false;
+      const resolvedTargetRepoRoot =
+        nextTargetRepoRoot !== undefined
+          ? nextTargetRepoRoot
+          : nextSourceRepoPath !== undefined
+            ? nextSourceRepoPath
+            : agent.target_repo_root ?? agent.source_repo_path ?? activeTargetRepoRoot;
+      const resolvedStreamId =
+        hasStreamIdUpdate || nextTargetRepoRoot !== undefined || nextSourceRepoPath !== undefined
+          ? deriveStableStreamId(
+              rawNextStreamId !== undefined ? rawNextStreamId : agent.stream_id,
+              resolvedTargetRepoRoot,
+              activeTargetRepoRoot
+            )
+          : undefined;
 
       if (nextSourceRepoPath !== undefined && nextSourceRepoPath !== agent.source_repo_path) {
         agent.source_repo_path = nextSourceRepoPath;
+        changed = true;
+      }
+      if (nextTargetRepoRoot !== undefined && nextTargetRepoRoot !== agent.target_repo_root) {
+        agent.target_repo_root = nextTargetRepoRoot;
+        changed = true;
+      }
+      if (resolvedStreamId !== undefined && resolvedStreamId !== agent.stream_id) {
+        agent.stream_id = resolvedStreamId;
         changed = true;
       }
       if (nextWorktreePath !== undefined && nextWorktreePath !== agent.worktree_path) {
@@ -483,6 +597,8 @@ export function createAgentRuntimeStateStore(options = {}) {
   return {
     hardCap,
     statePath,
+    activeStreamId,
+    activeTargetRepoRoot,
     load,
     getState,
     getAgent,

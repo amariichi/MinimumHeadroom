@@ -79,6 +79,15 @@ resolve_agent_cwd() {
   )
 }
 
+derive_agent_repo_root() {
+  local cwd="$1"
+  if git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1; then
+    git -C "$cwd" rev-parse --show-toplevel
+    return
+  fi
+  printf '%s\n' "$cwd"
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./scripts/run-operator-once.sh [options]
@@ -208,6 +217,7 @@ done
 
 apply_profile_defaults
 AGENT_CWD="$(resolve_agent_cwd "$AGENT_CWD")"
+AGENT_REPO_ROOT="$(derive_agent_repo_root "$AGENT_CWD")"
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "[run-operator-once] tmux is required but not found in PATH." >&2
@@ -303,6 +313,9 @@ append_env() {
 append_env "MH_BRIDGE_TMUX_PANE" "$bridge_pane"
 append_env "MH_BRIDGE_RECOVERY_TMUX_PANE" "$agent_pane"
 append_env "MH_AGENT_DEFAULT_CMD" "$AGENT_CMD"
+append_env "MH_AGENT_SOURCE_REPO_DEFAULT" "$AGENT_REPO_ROOT"
+append_env "MH_AGENT_STREAM_ID" "repo:${AGENT_REPO_ROOT}"
+append_env "MH_AGENT_WORKTREES_ROOT" "${AGENT_REPO_ROOT}/.agent/worktrees"
 if [[ -n "$FACE_UI_MODE" ]]; then
   append_env "FACE_UI_MODE" "$FACE_UI_MODE"
 fi
@@ -320,7 +333,7 @@ tmux send-keys -t "$stack_pane" "$stack_launch" C-m
 
 echo "[run-operator-once] session=${SESSION_NAME} window=${window_name}"
 echo "[run-operator-once] profile=${PROFILE_NAME}"
-echo "[run-operator-once] agent pane=${agent_pane} cwd=${AGENT_CWD} command=${AGENT_CMD}"
+echo "[run-operator-once] agent pane=${agent_pane} cwd=${AGENT_CWD} repo=${AGENT_REPO_ROOT} command=${AGENT_CMD}"
 echo "[run-operator-once] stack pane=${stack_pane} command=${STACK_CMD}"
 echo "[run-operator-once] MH_BRIDGE_TMUX_PANE=${bridge_pane} (${BRIDGE_TARGET})"
 

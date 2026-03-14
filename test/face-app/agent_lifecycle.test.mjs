@@ -69,9 +69,13 @@ function createResponseCapture() {
 function createRuntimeHarness(options = {}) {
   const repoRoot = createTempRoot('mh-agent-lifecycle-runtime-');
   const statePath = path.join(repoRoot, '.agent/runtime/agents-state.json');
+  const activeTargetRepoRoot = options.activeTargetRepoRoot ?? repoRoot;
+  const activeStreamId = options.activeStreamId ?? `repo:${activeTargetRepoRoot}`;
   const stateStore = createAgentRuntimeStateStore({
     repoRoot,
     statePath,
+    activeTargetRepoRoot,
+    activeStreamId,
     now: createClock(),
     log: quietLog
   });
@@ -83,6 +87,9 @@ function createRuntimeHarness(options = {}) {
   const runtime = createAgentLifecycleRuntime({
     stateStore,
     repoRoot,
+    activeTargetRepoRoot,
+    activeStreamId,
+    defaultSourceRepoPath: options.defaultSourceRepoPath ?? '',
     tmuxEnabled: options.tmuxEnabled ?? true,
     worktreeEnabled: options.worktreeEnabled ?? true,
     allowExternalDelete: options.allowExternalDelete ?? false,
@@ -131,6 +138,79 @@ test('agent lifecycle runtime adds agent without worktree/tmux orchestration', a
   cleanup(repoRoot);
 });
 
+test('agent lifecycle runtime inherits default external source repo path for helpers', async () => {
+  const externalRepoRoot = createTempRoot('mh-agent-external-source-');
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    defaultSourceRepoPath: externalRepoRoot,
+    commandRunner: async (command, args) => {
+      if (command === 'git' && args[1] === 'rev-parse') {
+        return { stdout: 'true\n', stderr: '', code: 0 };
+      }
+      if (command === 'git' && args[1] === 'worktree' && args[2] === 'add') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%51\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  const result = await runtime.addAgent({
+    id: 'agent-external-default',
+    create_tmux: false
+  });
+
+  assert.equal(result.agent.source_repo_path, externalRepoRoot);
+  assert.equal(
+    commands.some(
+      (entry) =>
+        entry[0] === 'git' &&
+        entry[1] === '-C' &&
+        entry[2] === externalRepoRoot &&
+        entry[3] === 'rev-parse'
+    ),
+    true
+  );
+
+  cleanup(repoRoot);
+  cleanup(externalRepoRoot);
+});
+
+test('agent lifecycle runtime reconciles only the active stream by default', async () => {
+  const externalRepoRoot = createTempRoot('mh-agent-lifecycle-other-stream-');
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness();
+
+  await runtime.addAgent({
+    id: 'active-stream-agent',
+    create_worktree: false,
+    create_tmux: false,
+    source_repo_path: repoRoot
+  });
+  stateStore.addAgent({
+    id: 'hidden-stream-agent',
+    session_id: 'hidden-stream-agent',
+    source_repo_path: externalRepoRoot,
+    target_repo_root: externalRepoRoot,
+    stream_id: `repo:${externalRepoRoot}`,
+    worktree_path: null,
+    pane_id: null
+  });
+
+  const result = await runtime.reconcileAgents({
+    recreate_missing_panes: false
+  });
+
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0]?.agent_id, 'active-stream-agent');
+
+  cleanup(repoRoot);
+  cleanup(externalRepoRoot);
+});
+
 test('agent lifecycle runtime blocks deleting worktree outside managed root by default', async () => {
   const { repoRoot, runtime } = createRuntimeHarness();
   const externalDir = createTempRoot('mh-agent-external-delete-');
@@ -174,6 +254,454 @@ test('agent lifecycle runtime delete-worktree only requires pane detachment', as
     commands.some((entry) => entry[0] === 'git' && entry[3] === 'worktree' && entry[4] === 'prune'),
     true
   );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime injects literal mission text into helper tmux pane', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness();
+
+  await runtime.addAgent({
+    id: 'agent-inject',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%77',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-inject', {
+    text: 'Mission text',
+    submit: true,
+    reinforce_submit: true,
+    reinforce_delay_ms: 25
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'inject');
+  assert.equal(result.injection.pane_id, '%77');
+  assert.equal(
+    commands.some(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry[2] === '-t' &&
+        entry[3] === '%77' &&
+        entry[4] === '-l' &&
+        entry[6] === 'Mission text'
+    ),
+    true
+  );
+  assert.equal(
+    commands.filter(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry[2] === '-t' &&
+        entry[3] === '%77' &&
+        entry[4] === 'C-m'
+    ).length >= 2,
+    true
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime waits for a codex prompt before injection', async () => {
+  let captureCount = 0;
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        captureCount += 1;
+        if (captureCount === 1) {
+          return {
+            stdout: 'amari1@host:~/repo$ codex resume --last\n',
+            stderr: '',
+            code: 0
+          };
+        }
+        return {
+          stdout: [
+            '│ >_ OpenAI Codex (v0.114.0)                         │',
+            '',
+            '› Implement {feature}',
+            '  gpt-5.4 xhigh · 100% left · ~/repo'
+          ].join('\n'),
+          stderr: '',
+          code: 0
+        };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-wait-ready',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%88',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-wait-ready', {
+    text: 'Mission text',
+    submit: true,
+    ready_timeout_ms: 80,
+    ready_poll_ms: 20
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.ready_wait.observed_agent, 'codex');
+  assert.equal(result.injection.ready_wait.waited_for_ready, true);
+  assert.equal(result.injection.ready_wait.timed_out, false);
+  assert.equal(captureCount >= 2, true);
+  assert.equal(
+    commands.some(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry[2] === '-t' &&
+        entry[3] === '%88' &&
+        entry[4] === '-l' &&
+        entry[6] === 'Mission text'
+    ),
+    true
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime can inject after generic startup output settles', async () => {
+  let captureCount = 0;
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        captureCount += 1;
+        const stdout = captureCount === 1
+          ? 'Starting helper runtime...\nLoading plugins...\n'
+          : 'Ready and waiting for input.\n';
+        return { stdout, stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-startup-quiet',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%90',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-startup-quiet', {
+    text: 'Mission text',
+    submit: true,
+    ready_timeout_ms: 80,
+    ready_poll_ms: 20,
+    ready_stable_polls: 2
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.ready_wait.ready, true);
+  assert.equal(result.injection.ready_wait.ready_reason, 'startup_quiet');
+  assert.equal(result.injection.ready_wait.blocked, false);
+  assert.equal(captureCount >= 2, true);
+  assert.equal(
+    commands.some(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry[2] === '-t' &&
+        entry[3] === '%90' &&
+        entry[4] === '-l' &&
+        entry[6] === 'Mission text'
+    ),
+    true
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime auto-reinforces submit for multiline codex assignments', async () => {
+  let captureCount = 0;
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        captureCount += 1;
+        return {
+          stdout: [
+            '│ >_ OpenAI Codex (v0.114.0)                         │',
+            '',
+            '› Implement {feature}',
+            '  gpt-5.4 xhigh · 100% left · ~/repo'
+          ].join('\n'),
+          stderr: '',
+          code: 0
+        };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-multiline-submit',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%89',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-multiline-submit', {
+    text: 'Line one\nLine two',
+    submit: true,
+    reinforce_submit: false,
+    ready_timeout_ms: 40,
+    ready_poll_ms: 20
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.ready_wait.observed_agent, 'codex');
+  assert.equal(captureCount >= 1, true);
+  assert.equal(
+    commands.filter(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry[2] === '-t' &&
+        entry[3] === '%89' &&
+        entry[4] === 'C-m'
+    ).length >= 2,
+    true
+  );
+  assert.equal(result.injection.reinforce_submit, true);
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime can probe and clear before reinstruction', async () => {
+  let lineBuffer = '';
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return { stdout: lineBuffer === '' ? '' : `${lineBuffer}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === '-l') {
+        lineBuffer += args[5] ?? '';
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args.slice(3).every((key) => key === 'BSpace')) {
+        lineBuffer = lineBuffer.slice(0, Math.max(0, lineBuffer.length - args.slice(3).length));
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-probe-success',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%94',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-probe-success', {
+    text: 'Follow-up instruction',
+    submit: true,
+    wait_for_ready: false,
+    probe_before_send: true,
+    probe_timeout_ms: 100,
+    probe_poll_ms: 20
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.probe.enabled, true);
+  assert.equal(result.injection.probe.ok, true);
+  assert.equal(result.injection.probe.stage, 'cleared');
+  assert.equal(result.injection.probe.token_length > 0, true);
+  assert.equal(lineBuffer, 'Follow-up instruction');
+  assert.equal(
+    commands.some(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry[2] === '-t' &&
+        entry[3] === '%94' &&
+        entry[4] === '-l' &&
+        entry[6] === 'Follow-up instruction'
+    ),
+    true
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime can rescue buffered multiline submit with one extra enter', async () => {
+  let lineBuffer = '';
+  let enterCount = 0;
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return { stdout: lineBuffer === '' ? '' : `${lineBuffer}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === '-l') {
+        lineBuffer += args[5] ?? '';
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === 'C-m') {
+        enterCount += 1;
+        if (enterCount >= 2) {
+          lineBuffer = '';
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-rescue-submit',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%96',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-rescue-submit', {
+    text: 'Line one\nLine two',
+    submit: true,
+    reinforce_submit: false,
+    rescue_submit_if_buffered: true,
+    rescue_submit_delay_ms: 20
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.rescue_submit.enabled, true);
+  assert.equal(result.injection.rescue_submit.attempted, true);
+  assert.equal(result.injection.rescue_submit.rescued, true);
+  assert.equal(result.injection.rescue_submit.matched_line, 'Line two');
+  assert.equal(enterCount, 2);
+  assert.equal(lineBuffer, '');
+  assert.equal(
+    commands.filter(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry[2] === '-t' &&
+        entry[3] === '%96' &&
+        entry[4] === 'C-m'
+    ).length,
+    2
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime fails reinstruction when probe never appears', async () => {
+  const { repoRoot, runtime, commands, stateStore } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-probe-fail',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%95',
+    source_repo_path: repoRoot
+  });
+
+  await assert.rejects(
+    () => runtime.injectAgent('agent-probe-fail', {
+      text: 'Follow-up instruction',
+      submit: true,
+      wait_for_ready: false,
+      probe_before_send: true,
+      probe_timeout_ms: 60,
+      probe_poll_ms: 20
+    }),
+    (error) => error?.code === 'invalid_state' && /input probe failed/i.test(error.message)
+  );
+
+  assert.equal(stateStore.getAgent('agent-probe-fail')?.last_message, 'input probe did not appear in helper pane');
+  assert.equal(
+    commands.some(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry[2] === '-t' &&
+        entry[3] === '%95' &&
+        entry[4] === '-l' &&
+        entry[6] === 'Follow-up instruction'
+    ),
+    false
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime stops injection when startup is blocked by trust prompt', async () => {
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return {
+          stdout: [
+            'Gemini CLI v0.33.1',
+            'Do you trust this folder?',
+            '1. Trust folder',
+            '2. Trust parent folder'
+          ].join('\n'),
+          stderr: '',
+          code: 0
+        };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-trust-blocked',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%91',
+    source_repo_path: repoRoot
+  });
+
+  await assert.rejects(
+    () => runtime.injectAgent('agent-trust-blocked', {
+      text: 'Mission text',
+      submit: true,
+      ready_timeout_ms: 80,
+      ready_poll_ms: 20
+    }),
+    (error) => error?.code === 'invalid_state' && /startup blocked/i.test(error.message)
+  );
+  assert.equal(stateStore.getAgent('agent-trust-blocked')?.last_message, 'startup blocked: trust prompt');
 
   cleanup(repoRoot);
 });

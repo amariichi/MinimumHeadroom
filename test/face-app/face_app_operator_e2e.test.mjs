@@ -59,10 +59,15 @@ function stopChild(child) {
   });
 }
 
-async function startFaceAppE2e() {
+async function startFaceAppE2e(options = {}) {
   const port = await allocatePort();
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-face-app-e2e-'));
   const statePath = path.join(stateRoot, 'agents-state.json');
+  if (options.stateFixture) {
+    fs.writeFileSync(statePath, `${JSON.stringify(options.stateFixture, null, 2)}\n`, 'utf8');
+  }
+  const activeTargetRepoRoot = options.activeTargetRepoRoot ?? '';
+  const activeStreamId = options.activeStreamId ?? '';
 
   const child = spawn(process.execPath, ['face-app/dist/index.js'], {
     cwd: process.cwd(),
@@ -75,8 +80,11 @@ async function startFaceAppE2e() {
       FACE_UI_MODE: 'pc',
       FACE_OPERATOR_PANEL_ENABLED: '1',
       MH_AGENT_STATE_PATH: statePath,
+      MH_AGENT_SOURCE_REPO_DEFAULT: activeTargetRepoRoot,
+      MH_AGENT_STREAM_ID: activeStreamId,
       MH_AGENT_TMUX_ENABLED: '0',
-      MH_AGENT_WORKTREE_ENABLED: '0'
+      MH_AGENT_WORKTREE_ENABLED: '0',
+      ...(options.env ?? {})
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -171,5 +179,86 @@ test('face-app e2e delete action purges the agent from runtime state', async () 
   } finally {
     await stopChild(child);
     fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test('face-app e2e helper creation inherits configured external source repo default', async () => {
+  const externalRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-face-app-external-target-'));
+  const { child, baseUrl, stateRoot } = await startFaceAppE2e({
+    env: {
+      MH_AGENT_SOURCE_REPO_DEFAULT: externalRepoRoot
+    }
+  });
+  try {
+    const add = await postJson(`${baseUrl}/api/agents/add`, {
+      id: 'agent-external-e2e',
+      create_worktree: false,
+      create_tmux: false
+    });
+    assert.equal(add.response.status, 200);
+    assert.equal(add.payload?.ok, true);
+    assert.equal(add.payload?.result?.agent?.source_repo_path, externalRepoRoot);
+
+    const stateResponse = await fetch(`${baseUrl}/api/agents/state`, { method: 'GET' });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = await stateResponse.json();
+    const agent = statePayload?.state?.agents?.find((item) => item.id === 'agent-external-e2e');
+    assert.equal(agent?.source_repo_path, externalRepoRoot);
+  } finally {
+    await stopChild(child);
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+    fs.rmSync(externalRepoRoot, { recursive: true, force: true });
+  }
+});
+
+test('face-app e2e only exposes agents from the active stream', async () => {
+  const repoA = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-face-app-repo-a-'));
+  const repoB = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-face-app-repo-b-'));
+  const { child, baseUrl, stateRoot } = await startFaceAppE2e({
+    activeTargetRepoRoot: repoB,
+    activeStreamId: `repo:${repoB}`,
+    stateFixture: {
+      schema_version: 1,
+      updated_at: 1,
+      policy: { default_cap: 4, hard_cap: 7 },
+      agents: [
+        {
+          id: 'repo-a-helper',
+          status: 'active',
+          slot: 0,
+          stream_id: `repo:${repoA}`,
+          source_repo_path: repoA,
+          target_repo_root: repoA,
+          session_id: 'repo-a-helper',
+          updated_at: 10
+        },
+        {
+          id: 'repo-b-helper',
+          status: 'active',
+          slot: 0,
+          stream_id: `repo:${repoB}`,
+          source_repo_path: repoB,
+          target_repo_root: repoB,
+          session_id: 'repo-b-helper',
+          updated_at: 20
+        }
+      ]
+    }
+  });
+  try {
+    const stateResponse = await fetch(`${baseUrl}/api/agents/state`, { method: 'GET' });
+    assert.equal(stateResponse.ok, true);
+    const statePayload = await stateResponse.json();
+    assert.equal(statePayload?.state?.active_stream_id, `repo:${repoB}`);
+    assert.equal(statePayload?.state?.hidden_agent_count, 1);
+    assert.deepEqual(
+      (statePayload?.state?.agents ?? []).map((agent) => agent.id),
+      ['repo-b-helper']
+    );
+  } finally {
+    await stopChild(child);
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+    fs.rmSync(repoA, { recursive: true, force: true });
+    fs.rmSync(repoB, { recursive: true, force: true });
   }
 });

@@ -652,6 +652,21 @@ body.agent-dashboard-open .panel-left {
   background: rgba(12, 37, 53, 0.9);
 }
 
+.operator-agent-current[data-tone='needs_attention'] {
+  border-color: rgba(204, 112, 126, 0.52);
+  background: rgba(61, 25, 33, 0.9);
+}
+
+.operator-agent-current[data-tone='error'] {
+  border-color: rgba(233, 94, 112, 0.7);
+  background: rgba(88, 18, 30, 0.94);
+}
+
+.operator-agent-current[data-tone='prompt_idle'] {
+  border-color: rgba(91, 126, 153, 0.34);
+  background: rgba(10, 20, 29, 0.84);
+}
+
 .operator-agent-current-label {
   font-family: 'JetBrains Mono', 'Consolas', 'Roboto Mono', monospace;
   font-size: 0.78rem;
@@ -737,6 +752,21 @@ body.agent-dashboard-open .panel-left {
 .operator-agent-item.is-selected {
   background: rgba(33, 78, 62, 0.9);
   border-color: rgba(111, 243, 184, 0.65);
+}
+
+.operator-agent-item[data-tone='needs_attention'] {
+  border-color: rgba(204, 112, 126, 0.42);
+  background: rgba(38, 13, 18, 0.82);
+}
+
+.operator-agent-item[data-tone='error'] {
+  border-color: rgba(233, 94, 112, 0.6);
+  background: rgba(64, 11, 20, 0.88);
+}
+
+.operator-agent-item[data-tone='prompt_idle'] {
+  border-color: rgba(82, 111, 134, 0.28);
+  background: rgba(4, 12, 18, 0.76);
 }
 
 .operator-agent-item-focus {
