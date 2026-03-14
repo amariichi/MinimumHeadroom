@@ -4,6 +4,7 @@ import path from 'node:path';
 
 const SCHEMA_VERSION = 1;
 const DELIVERY_STATES = new Set(['pending', 'sent_to_tmux', 'acked', 'acked_late', 'failed', 'timeout']);
+const DEFAULT_COMPLETION_RESCUE_GRACE_MS = 10_000;
 
 function toLogger(log) {
   if (!log) {
@@ -245,6 +246,37 @@ function buildSummary(assignments) {
   return summary;
 }
 
+function isFinalReportKind(kind) {
+  return kind === 'done' || kind === 'review_findings';
+}
+
+function annotateAssignmentForView(assignment, now) {
+  const view = clone(assignment);
+  const lastMeaningfulAt = Math.max(
+    asInteger(assignment.last_report_at, 0, 0) ?? 0,
+    asInteger(assignment.acked_at, 0, 0) ?? 0,
+    asInteger(assignment.last_sent_at, 0, 0) ?? 0
+  );
+  const eligibleForRescue = (
+    (assignment.delivery_state === 'acked' || assignment.delivery_state === 'acked_late') &&
+    !isFinalReportKind(assignment.last_report_kind)
+  );
+  if (!eligibleForRescue || lastMeaningfulAt <= 0) {
+    view.completion_rescue_grace_ms = DEFAULT_COMPLETION_RESCUE_GRACE_MS;
+    view.completion_rescue_ready_at = 0;
+    view.completion_rescue_wait_ms = 0;
+    view.completion_rescue_recommended = false;
+    return view;
+  }
+  const readyAt = lastMeaningfulAt + DEFAULT_COMPLETION_RESCUE_GRACE_MS;
+  const waitMs = Math.max(0, readyAt - now);
+  view.completion_rescue_grace_ms = DEFAULT_COMPLETION_RESCUE_GRACE_MS;
+  view.completion_rescue_ready_at = readyAt;
+  view.completion_rescue_wait_ms = waitMs;
+  view.completion_rescue_recommended = waitMs === 0;
+  return view;
+}
+
 export function createAgentAssignmentStateStore(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const log = toLogger(options.log ?? console);
@@ -343,6 +375,7 @@ export function createAgentAssignmentStateStore(options = {}) {
   function listAssignments(filters = {}) {
     ensureLoaded();
     refreshTimeouts();
+    const ts = nowMs(now);
     const streamId = asNonEmptyString(filters.stream_id);
     const ownerAgentId = asNonEmptyString(filters.owner_agent_id);
     const agentId = asNonEmptyString(filters.agent_id);
@@ -364,7 +397,7 @@ export function createAgentAssignmentStateStore(options = {}) {
         return true;
       })
       .sort(compareAssignments);
-    return clone(listed);
+    return listed.map((assignment) => annotateAssignmentForView(assignment, ts));
   }
 
   function getAssignmentsView(filters = {}) {

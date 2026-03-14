@@ -107,6 +107,7 @@ This preserves freshness even for similar text.
   - `agent.delete`
 - Treat `agent.assign` as the durable mission record and `agent.inject` as controlled delivery for bootstrap or explicit reinstruction.
 - For review, investigation, or other narrow helper work, shape the mission explicitly:
+  - set `role` when it helps the helper stay narrow (`reviewer`, `investigator`, `implementer`, `docs-check`)
   - use `target_paths` when the owner knows the file or directory scope
   - use `completion_criteria` to define what "done" means for this pass
   - use `timebox_minutes` when the owner wants a bounded first pass
@@ -122,9 +123,13 @@ This preserves freshness even for similar text.
 - Review helpers should default to read-only missions unless the owner explicitly chooses otherwise.
 - Prefer spinning up a reviewer helper when the owner expects non-trivial code edits, broad config/docs changes, or a risky cross-cutting patch.
 - Prefer spinning up an investigation helper when one bounded question can be answered independently while the owner continues another path.
+- Prefer spinning up an implementation helper only when the change splits cleanly by file set or subsystem and the owner can still integrate the result safely.
+- Prefer spinning up a docs-check helper when the likely work is documentation, README, guide, or diagram consistency rather than code behavior.
 - Prefer staying single-agent when the task is a tiny one-file edit, a narrowly scoped wording change, or anything where mission overhead would exceed the likely parallelism gain.
 - Prefer one bounded helper mission at a time over a broad "review everything" request. Ask helpers for one finding or done, then follow up only if needed.
 - If a helper acknowledges late (`acked_late`) after a timeout, treat that as evidence the mission eventually reached the helper. Review or resolve the report before concluding the delivery path is broken.
+- If a helper has acknowledged but still has no final `done` or `review_findings` after the scoped timebox or a long quiet window, wait through a short grace period first (about 10 seconds, or use `completion_rescue_ready_at` / `completion_rescue_wait_ms` from `agent.assignment.list` when available).
+- After that grace window expires, prefer a bounded follow-up such as `agent.inject(..., followup_mode="completion_rescue", probe_before_send=true, rescue_submit_if_buffered=true)` instead of broad reinstruction.
 
 ## 9. Helper reporting discipline
 
@@ -145,3 +150,4 @@ This preserves freshness even for similar text.
 - If the owner provided `timebox_minutes` or `max_findings`, treat them as hard bounds for the current pass.
 - If scope is still broad or ambiguous after the first report, send `question` instead of broad repo exploration.
 - If the owner sends a follow-up reinstruction, apply the same discipline again: acknowledge or escalate promptly instead of drifting into unrelated exploration first.
+- If the owner sends a completion rescue follow-up, do not restart broad exploration. Send `done`, `review_findings`, `blocked`, or `question` immediately from the current scoped work.

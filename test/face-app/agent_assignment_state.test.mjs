@@ -230,3 +230,70 @@ test('agent assignment store promotes late reports after timeout to acked_late',
 
   cleanup(rootDir);
 });
+
+test('agent assignment view exposes a grace window before completion rescue is recommended', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-rescue-grace-');
+  let tick = 1_700_460_000_000;
+  const store = createAgentAssignmentStateStore({
+    statePath,
+    now: () => tick,
+    log: quietLog
+  });
+  store.load();
+
+  store.upsertAssignment({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-rescue-grace',
+    owner_agent_id: '__operator__',
+    agent_id: 'helper-rescue-grace',
+    goal: 'Return one finding or done'
+  });
+  store.markDeliverySent({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-rescue-grace',
+    agent_id: 'helper-rescue-grace',
+    ack_timeout_ms: 1000
+  });
+  tick += 500;
+  store.noteReport({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-rescue-grace',
+    from_agent_id: 'helper-rescue-grace',
+    kind: 'progress',
+    report_id: 'rpt-rescue-grace',
+    accepted_at: tick
+  });
+
+  const earlyView = store.getAssignmentsView({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-rescue-grace'
+  });
+  assert.equal(earlyView.assignments[0]?.completion_rescue_grace_ms, 10_000);
+  assert.equal(earlyView.assignments[0]?.completion_rescue_recommended, false);
+  assert.ok((earlyView.assignments[0]?.completion_rescue_wait_ms ?? 0) > 0);
+
+  tick += 10_500;
+  const lateView = store.getAssignmentsView({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-rescue-grace'
+  });
+  assert.equal(lateView.assignments[0]?.completion_rescue_recommended, true);
+  assert.equal(lateView.assignments[0]?.completion_rescue_wait_ms, 0);
+
+  store.noteReport({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-rescue-grace',
+    from_agent_id: 'helper-rescue-grace',
+    kind: 'review_findings',
+    report_id: 'rpt-rescue-final',
+    accepted_at: tick + 10
+  });
+  const finalView = store.getAssignmentsView({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-rescue-grace'
+  });
+  assert.equal(finalView.assignments[0]?.completion_rescue_recommended, false);
+  assert.equal(finalView.assignments[0]?.completion_rescue_ready_at, 0);
+
+  cleanup(rootDir);
+});
