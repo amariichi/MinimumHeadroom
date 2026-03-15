@@ -58,7 +58,8 @@ A face and operator companion app for coding agents.
   - selecting a tile or list row changes the real operator focus target
   - `Delete` removes the helper agent pane, worktree, and runtime record together
   - helper reports now land in an app-owned durable owner inbox; unresolved items survive reloads and keep helper/owner attention visible until resolved
-  - helper missions can now be stored in an app-owned assignment store, injected into helper panes through controlled tmux delivery, and tracked as `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout`
+  - helper missions can now be stored in an app-owned assignment store, injected into helper panes through controlled tmux paste-buffer delivery, and tracked as `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout`
+  - `agent.spawn` accepts `permission_preset` (`reviewer`, `implementer`, `full`) to auto-configure helper tool permissions at spawn time, eliminating manual approval prompts for Claude, Gemini, and Codex agents
   - after full tmux shutdown, helper agents are recreated from saved worktrees on the next startup when possible; helpers from other repositories stay hidden, and helpers whose worktrees are gone appear as `missing`
 - MCP tools for signaling:
   - `face.event` / `face.say` / `face.ping`
@@ -429,7 +430,8 @@ npm run asr-worker:smoke
   - タイルや行の選択で operator pane の接続先を切り替えます
   - `Delete` は helper agent の pane / worktree / runtime record をまとめて削除します
   - helper report は app 側の durable な owner inbox に保存され、未解決項目は reload 後も helper / owner の attention 表示を維持します
-  - helper mission は app 側の assignment store に保存され、制御された tmux 注入で helper pane へ渡せます。delivery 状態は `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout` として追跡されます
+  - helper mission は app 側の assignment store に保存され、制御された tmux paste-buffer 注入で helper pane へ渡せます。delivery 状態は `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout` として追跡されます
+  - `agent.spawn` で `permission_preset`（`reviewer` / `implementer` / `full`）を指定すると、Claude / Gemini / Codex 各エージェントのツール承認を spawn 時に自動設定し、手動承認プロンプトを排除できます
   - review や investigation 用 helper の mission は、`target_paths`、`completion_criteria`、`timebox_minutes`、`max_findings` を使って具体化するのが有効です。そうすると helper は最初の pass で狭い結果 1 件か、明確な `question` / `blocked` を返しやすくなります。`target_paths` は active stream / source repository root 基準で解釈されるので、helper worktree の外にある source-repo 側パスを意図的に指定できます
   - `tmux` session 全体を落として再起動した場合も、active repository stream の helper は worktree が残っていれば再生成され、無ければ `missing` として戻ります。他 repository の helper は hidden のままです
 - MCPシグナリングツール:
@@ -631,7 +633,8 @@ tailscale serve --bg 8765
 - Desktop は現在 `operator + helper 最大 7 体` を同時表示します（合計 `8` タイル）。
 - operator を `--repo /path/to/target` 付きで起動した場合、新しい helper は既定でその target repository を継承します。
 - helper report は app 側の durable な owner inbox に保持されるため、未解決の `blocked` / `question` / `done` / `review_findings` は browser reload 後も attention を維持します。
-- helper mission は app 側の assignment store に保存され、制御された tmux 注入で helper pane に渡せます。delivery は `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout` として追跡され、matching `agent.report` が ack を返します。
+- helper mission は app 側の assignment store に保存され、制御された tmux paste-buffer 注入で helper pane に渡せます。delivery は `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout` として追跡され、matching `agent.report` が ack を返します。
+- `agent.spawn` で `permission_preset` を指定すると、helper のツール承認をエージェント種別（Claude / Gemini / Codex）に応じて自動設定できます。
 - `tmux` session 全体を落としてから `./scripts/run-operator-once.sh` で再起動した場合も、helper の worktree が残っていれば再生成され、worktree が無ければ `missing` として戻ります。
 
 よく使う派生例:

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -194,6 +195,22 @@ export function createTmuxController(options = {}) {
     await runTmux(['send-keys', '-t', activePane, '-l', '--', text]);
   }
 
+  async function pasteTextToPane(text, submit) {
+    const bufferName = `mh-bridge-${randomUUID().slice(0, 8)}`;
+    await runTmux(['load-buffer', '-b', bufferName, '-'], text);
+    try {
+      await runTmux(['paste-buffer', '-b', bufferName, '-t', activePane, '-d', '-p']);
+    } finally {
+      try {
+        await runTmux(['delete-buffer', '-b', bufferName]);
+      } catch (_) {}
+    }
+    if (submit) {
+      await delayMs(250);
+      await sendRawKeyToken('C-m');
+    }
+  }
+
   async function delayMs(ms) {
     return new Promise((resolve) => {
       setTimeout(resolve, ms);
@@ -227,16 +244,13 @@ export function createTmuxController(options = {}) {
       const submit = options.submit !== false;
       const reinforceSubmit = options.reinforceSubmit === true;
 
-      await sendRawTextLiteral(text);
-      if (submit) {
-        await sendRawKeyToken('C-m');
-        if (reinforceSubmit) {
-          try {
-            await delayMs(submitReinforceDelayMs);
-            await sendRawKeyToken('C-m');
-          } catch (error) {
-            log.warn(`[operator-bridge] submit reinforcement failed: ${error.message}`);
-          }
+      await pasteTextToPane(text, submit);
+      if (submit && reinforceSubmit) {
+        try {
+          await delayMs(submitReinforceDelayMs);
+          await sendRawKeyToken('C-m');
+        } catch (error) {
+          log.warn(`[operator-bridge] submit reinforcement failed: ${error.message}`);
         }
       }
     },
@@ -247,8 +261,7 @@ export function createTmuxController(options = {}) {
       for (const token of restartPreKeys) {
         await sendRawKeyToken(token);
       }
-      await sendRawTextLiteral(restartCommand);
-      await sendRawKeyToken('C-m');
+      await pasteTextToPane(restartCommand, true);
     },
     async captureTail(lines) {
       const lineCount = clampInteger(lines, 200, 1, 2000);

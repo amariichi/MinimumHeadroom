@@ -98,7 +98,7 @@ This preserves freshness even for similar text.
 - When acting as the user-facing owner/operator, prefer first-class MCP tools over raw localhost HTTP or manual `tmux send-keys`.
 - Standard lifecycle:
   - `agent.list(scope="stream")`
-  - `agent.spawn`
+  - `agent.spawn` — pass `agent_cmd` (`claude`, `gemini`, `codex`) and `permission_preset` (`reviewer`, `implementer`, `full`) to auto-configure helper tool permissions at spawn time
   - `agent.assign`
   - `agent.inject`
   - `agent.assignment.list`
@@ -115,7 +115,7 @@ This preserves freshness even for similar text.
 - Treat `target_paths` as stream-root/source-repo anchored. They may point outside the helper worktree; helpers should inspect those exact paths under the stream root instead of guessing mirrored locations inside their own worktree.
 - For reinstruction to an already-running helper, prefer `agent.inject(..., probe_before_send=true)` when the helper may be sitting at a prompt or when input readiness is uncertain. The probe sends a short ASCII token, checks that it appears, erases it with matching backspaces, and only then sends the real text.
 - If a multiline mission still appears buffered in the helper input after submit, prefer `agent.inject(..., rescue_submit_if_buffered=true)` so the runtime can send one guarded extra `Enter` only when the buffered tail is still visibly present.
-- After `agent.inject`, verify the helper can use MCP tools by checking whether a `progress` report arrives in `owner.inbox.list` within the ack deadline. If no `progress` arrives and `agent.assignment.list` shows `timeout`, the helper may be blocked by tool permission prompts rather than stalled on work. In that case, surface `needs_attention` and check the helper pane directly instead of firing a rescue.
+- After `agent.inject`, verify the helper can use MCP tools by checking whether a `progress` report arrives in `owner.inbox.list` within the ack deadline. If `permission_preset` was set at spawn, tool approvals should be automatic; if no `progress` arrives and `agent.assignment.list` shows `timeout`, the helper may still be blocked by an uncovered prompt. In that case, surface `needs_attention` and check the helper pane directly instead of firing a rescue.
 - After `agent.inject`, expect helper acknowledgment through `agent.report`. A matching `progress`, `blocked`, `question`, `done`, or `review_findings` report counts as acknowledgment.
 - If delivery reaches `failed` or `timeout`, retry injection at most once. If acknowledgment still does not arrive, surface that helper as `needs_attention`.
 - If a probe-based reinstruction fails, stop and surface `needs_attention` instead of looping repeated probe attempts.

@@ -121,7 +121,8 @@ const BASE_TOOL_DEFINITIONS = [
         create_worktree: { type: ['boolean', 'null'] },
         create_tmux: { type: ['boolean', 'null'] },
         agent_cmd: { type: ['string', 'null'] },
-        stream_id: { type: ['string', 'null'] }
+        stream_id: { type: ['string', 'null'] },
+        permission_preset: { type: ['string', 'null'], enum: ['reviewer', 'implementer', 'full', null] }
       }
     }
   },
@@ -687,7 +688,8 @@ function normalizeAgentSpawnPayload(rawArguments) {
     'worktree_path',
     'branch',
     'agent_cmd',
-    'stream_id'
+    'stream_id',
+    'permission_preset'
   ];
   for (const key of optionalStringKeys) {
     const value = args[key];
