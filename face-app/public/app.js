@@ -596,9 +596,11 @@ function truncateAgentText(value, maxLength = 84) {
   return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
-function createAgentTileSpeechBubble(text) {
+function createAgentTileSpeechBubble(text, options = {}) {
   const bubble = document.createElement('div');
-  bubble.className = 'agent-tile-speech-bubble';
+  bubble.className = options.fallback
+    ? 'agent-tile-speech-bubble agent-tile-speech-bubble--fallback'
+    : 'agent-tile-speech-bubble';
   bubble.textContent = text;
   bubble.setAttribute('aria-hidden', 'true');
   return bubble;
@@ -1278,6 +1280,7 @@ function getAgentTransientState(agentId) {
     messageExpiresAt: 0,
     speechBubble: null,
     speechBubbleExpiresAt: 0,
+    speechBubbleFallback: false,
     speakingUntil: 0,
     needsAttentionUntil: 0,
     promptIdleUntil: 0,
@@ -1330,7 +1333,7 @@ function setAgentTransientMessage(agentId, message, ttlMs = AGENT_TILE_MESSAGE_T
   transient.messageExpiresAt = Date.now() + Math.max(600, ttlMs);
 }
 
-function setAgentSpeechBubble(agentId, message, ttlMs = 5_000) {
+function setAgentSpeechBubble(agentId, message, ttlMs = 5_000, options = {}) {
   const text = typeof message === 'string' ? message.trim() : '';
   if (text === '') {
     return;
@@ -1338,6 +1341,7 @@ function setAgentSpeechBubble(agentId, message, ttlMs = 5_000) {
   const transient = getAgentTransientState(agentId);
   transient.speechBubble = text;
   transient.speechBubbleExpiresAt = Date.now() + Math.max(1_200, Math.min(8_000, ttlMs));
+  transient.speechBubbleFallback = Boolean(options.fallback);
 }
 
 function markAgentSpeaking(agentId, active) {
@@ -1415,6 +1419,15 @@ function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
   };
 }
 
+function isPayloadFallbackMatch(payload) {
+  if (!isOperatorDashboardAgentId(resolvePayloadAgentIdForFace(payload))) {
+    return false;
+  }
+  const payloadSessionId = typeof payload?.session_id === 'string' ? payload.session_id.trim() : '';
+  const operatorSessionId = resolveOperatorSessionId();
+  return payloadSessionId !== '' && payloadSessionId !== operatorSessionId;
+}
+
 function trackAgentTileFromPayload(payload) {
   const agentId = resolvePayloadAgentIdForFace(payload);
   if (!agentId) {
@@ -1427,11 +1440,12 @@ function trackAgentTileFromPayload(payload) {
   if (!update) {
     return;
   }
+  const fallback = isPayloadFallbackMatch(payload);
   if (typeof update.message === 'string' && update.message.trim() !== '') {
     setAgentTransientMessage(agentId, update.message);
   }
   if (typeof update.speechBubble === 'string' && update.speechBubble.trim() !== '') {
-    setAgentSpeechBubble(agentId, update.speechBubble, update.speechBubbleTtlMs);
+    setAgentSpeechBubble(agentId, update.speechBubble, update.speechBubbleTtlMs, { fallback });
   }
   if (typeof update.speaking === 'boolean') {
     markAgentSpeaking(agentId, update.speaking);
@@ -1755,7 +1769,9 @@ function renderAgentDashboard() {
   const operatorSpeechBubble =
     operatorTransient && operatorTransient.speechBubbleExpiresAt > Date.now() ? operatorTransient.speechBubble : null;
   if (operatorSpeechBubble) {
-    operatorFaceSlot.appendChild(createAgentTileSpeechBubble(operatorSpeechBubble));
+    operatorFaceSlot.appendChild(createAgentTileSpeechBubble(operatorSpeechBubble, {
+      fallback: Boolean(operatorTransient?.speechBubbleFallback)
+    }));
   }
 
   operatorFocusButton.append(operatorFaceSlot, operatorHeader, operatorSessionEl, operatorMessageEl);
@@ -1835,7 +1851,9 @@ function renderAgentDashboard() {
 
     const speechBubble = transient && transient.speechBubbleExpiresAt > nowMs ? transient.speechBubble : null;
     if (speechBubble) {
-      faceSlot.appendChild(createAgentTileSpeechBubble(speechBubble));
+      faceSlot.appendChild(createAgentTileSpeechBubble(speechBubble, {
+        fallback: Boolean(transient?.speechBubbleFallback)
+      }));
     }
 
     const actions = document.createElement('div');

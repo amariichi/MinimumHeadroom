@@ -506,6 +506,12 @@ body.agent-dashboard-open .panel-left {
   overflow: hidden;
 }
 
+.agent-tile-speech-bubble--fallback {
+  background: linear-gradient(145deg, rgba(118, 226, 255, 0.94), rgba(56, 172, 215, 0.94));
+  color: #0a1f2a;
+  border-color: rgba(200, 240, 255, 0.78);
+}
+
 .agent-tile-focus:focus-visible {
   outline: 2px solid rgba(111, 243, 184, 0.76);
   outline-offset: 3px;
