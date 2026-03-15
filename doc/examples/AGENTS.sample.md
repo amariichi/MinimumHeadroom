@@ -36,7 +36,9 @@ Paste this into your project `AGENTS.md` and customize.
 - Prefer one bounded helper mission at a time such as "one finding or done", then follow up only if needed.
 - If a helper reports late after timing out, treat the report as real work product first; do not assume the delivery path is fully broken.
 - If a helper has acknowledged but still has no final `done` or `review_findings` after the scoped timebox or a long quiet window, wait through a short grace period first, about 10 seconds or until `agent.assignment.list` says rescue is ready.
-- After that grace window, prefer `agent.inject(..., followup_mode="completion_rescue", probe_before_send=true, rescue_submit_if_buffered=true)` instead of broad reinstruction.
+- After that grace window, check `owner.inbox.list` for that helper first; if a `done` or `review_findings` report has already arrived since the mission was assigned, skip the rescue entirely.
+- If the inbox shows no final report yet, prefer `agent.inject(..., followup_mode="completion_rescue", probe_before_send=true, rescue_submit_if_buffered=true)` instead of broad reinstruction.
+- If two final reports from the same helper arrive close together after a rescue, resolve the earlier one with `owner.inbox.resolve` and treat the later one as the authoritative result.
 
 ## Helper reporting discipline (recommended)
 
