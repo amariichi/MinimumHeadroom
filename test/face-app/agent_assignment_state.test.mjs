@@ -102,6 +102,54 @@ test('agent assignment store upserts missions and resets delivery state on updat
   cleanup(rootDir);
 });
 
+test('agent assignment store normalizes owner_agent_id so "operator" matches "__operator__"', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-normalize-');
+  const store = createAgentAssignmentStateStore({
+    statePath,
+    now: createClock(),
+    log: quietLog
+  });
+  store.load();
+
+  // Create with canonical __operator__
+  store.upsertAssignment({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-norm',
+    owner_agent_id: '__operator__',
+    agent_id: 'helper-norm',
+    goal: 'Test normalization'
+  });
+
+  // Upsert with bare "operator" — should update the same assignment
+  const updated = store.upsertAssignment({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-norm',
+    owner_agent_id: 'operator',
+    agent_id: 'helper-norm',
+    goal: 'Updated via alias'
+  });
+
+  assert.equal(updated.action, 'updated');
+  assert.equal(updated.assignment.assignment_revision, 2);
+  assert.equal(updated.assignment.goal, 'Updated via alias');
+
+  // List with bare "operator" should find the assignment
+  const view = store.getAssignmentsView({
+    stream_id: 'repo:/tmp/target',
+    owner_agent_id: 'operator'
+  });
+  assert.equal(view.assignments.length, 1);
+
+  // List with canonical __operator__ should also find it
+  const viewCanonical = store.getAssignmentsView({
+    stream_id: 'repo:/tmp/target',
+    owner_agent_id: '__operator__'
+  });
+  assert.equal(viewCanonical.assignments.length, 1);
+
+  cleanup(rootDir);
+});
+
 test('agent assignment store marks sent deliveries and acknowledges them through matching reports', () => {
   const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-ack-');
   const store = createAgentAssignmentStateStore({

@@ -115,6 +115,7 @@ This preserves freshness even for similar text.
 - Treat `target_paths` as stream-root/source-repo anchored. They may point outside the helper worktree; helpers should inspect those exact paths under the stream root instead of guessing mirrored locations inside their own worktree.
 - For reinstruction to an already-running helper, prefer `agent.inject(..., probe_before_send=true)` when the helper may be sitting at a prompt or when input readiness is uncertain. The probe sends a short ASCII token, checks that it appears, erases it with matching backspaces, and only then sends the real text.
 - If a multiline mission still appears buffered in the helper input after submit, prefer `agent.inject(..., rescue_submit_if_buffered=true)` so the runtime can send one guarded extra `Enter` only when the buffered tail is still visibly present.
+- After `agent.inject`, verify the helper can use MCP tools by checking whether a `progress` report arrives in `owner.inbox.list` within the ack deadline. If no `progress` arrives and `agent.assignment.list` shows `timeout`, the helper may be blocked by tool permission prompts rather than stalled on work. In that case, surface `needs_attention` and check the helper pane directly instead of firing a rescue.
 - After `agent.inject`, expect helper acknowledgment through `agent.report`. A matching `progress`, `blocked`, `question`, `done`, or `review_findings` report counts as acknowledgment.
 - If delivery reaches `failed` or `timeout`, retry injection at most once. If acknowledgment still does not arrive, surface that helper as `needs_attention`.
 - If a probe-based reinstruction fails, stop and surface `needs_attention` instead of looping repeated probe attempts.
@@ -129,7 +130,10 @@ This preserves freshness even for similar text.
 - Prefer one bounded helper mission at a time over a broad "review everything" request. Ask helpers for one finding or done, then follow up only if needed.
 - If a helper acknowledges late (`acked_late`) after a timeout, treat that as evidence the mission eventually reached the helper. Review or resolve the report before concluding the delivery path is broken.
 - If a helper has acknowledged but still has no final `done` or `review_findings` after the scoped timebox or a long quiet window, wait through a short grace period first (about 10 seconds, or use `completion_rescue_ready_at` / `completion_rescue_wait_ms` from `agent.assignment.list` when available).
-- After that grace window expires, prefer a bounded follow-up such as `agent.inject(..., followup_mode="completion_rescue", probe_before_send=true, rescue_submit_if_buffered=true)` instead of broad reinstruction.
+- After that grace window expires, check `owner.inbox.list` for that helper first; if a `done` or `review_findings` report has already arrived since the mission was assigned, skip the rescue entirely.
+- If `owner.inbox.list` shows zero reports (not even `progress`) for the helper since injection, treat the report channel as potentially broken. Check the helper pane directly for output instead of firing a rescue into a possibly permission-blocked helper.
+- If the inbox shows at least a `progress` ack but no final report yet, prefer a bounded follow-up such as `agent.inject(..., followup_mode="completion_rescue", probe_before_send=true, rescue_submit_if_buffered=true)` instead of broad reinstruction.
+- If two final reports from the same helper arrive close together after a rescue, resolve the earlier one with `owner.inbox.resolve` and treat the later one as the authoritative result.
 
 ## 9. Helper reporting discipline
 
@@ -151,3 +155,4 @@ This preserves freshness even for similar text.
 - If scope is still broad or ambiguous after the first report, send `question` instead of broad repo exploration.
 - If the owner sends a follow-up reinstruction, apply the same discipline again: acknowledge or escalate promptly instead of drifting into unrelated exploration first.
 - If the owner sends a completion rescue follow-up, do not restart broad exploration. Send `done`, `review_findings`, `blocked`, or `question` immediately from the current scoped work.
+- If `agent.report` calls fail due to tool permissions or MCP connectivity, continue the assigned work and leave your results visible in terminal output. The operator may check your pane directly as a fallback.

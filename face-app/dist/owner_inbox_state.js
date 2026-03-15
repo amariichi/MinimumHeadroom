@@ -18,6 +18,14 @@ const REPORT_LIFECYCLE_STATES = new Set([
 const TERMINAL_REPORT_STATES = new Set(['resolved', 'superseded', 'dismissed']);
 const RESOLVABLE_REPORT_STATES = new Set(['seen_by_owner', 'acted_on', 'resolved', 'dismissed']);
 
+const CANONICAL_OPERATOR_ID = '__operator__';
+const OPERATOR_ALIASES = /^_*operator_*$/i;
+
+function normalizeOwnerAgentId(id) {
+  if (typeof id === 'string' && OPERATOR_ALIASES.test(id)) return CANONICAL_OPERATOR_ID;
+  return id;
+}
+
 function toLogger(log) {
   if (!log) {
     return { info: () => {}, warn: () => {}, error: () => {} };
@@ -559,7 +567,7 @@ export function createOwnerInboxStateStore(options = {}) {
 
   function listReports(filters = {}) {
     ensureLoaded();
-    const ownerAgentId = asNonEmptyString(filters.owner_agent_id);
+    const ownerAgentId = normalizeOwnerAgentId(asNonEmptyString(filters.owner_agent_id));
     const streamId = asNonEmptyString(filters.stream_id);
     const includeResolved = asBoolean(filters.include_resolved, false);
     const reports = state.reports
@@ -595,7 +603,7 @@ export function createOwnerInboxStateStore(options = {}) {
     ensureLoaded();
     const streamId = asNonEmptyString(input.stream_id);
     const missionId = asNonEmptyString(input.mission_id);
-    const ownerAgentId = asNonEmptyString(input.owner_agent_id);
+    const ownerAgentId = normalizeOwnerAgentId(asNonEmptyString(input.owner_agent_id));
     const fromAgentId = asNonEmptyString(input.from_agent_id);
     const summary = asNonEmptyString(input.summary);
     if (!streamId || !missionId || !ownerAgentId || !fromAgentId || !summary) {
