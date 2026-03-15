@@ -25,6 +25,7 @@ Paste this into your project `AGENTS.md` and customize.
 - Treat `target_paths` as stream-root/source-repo anchored, even when they point outside the helper worktree.
 - For reinstruction to an already-running helper, prefer `agent.inject(..., probe_before_send=true)` when the helper may already be sitting at a prompt or when input readiness is uncertain.
 - If a multiline mission still appears buffered after submit, prefer `agent.inject(..., rescue_submit_if_buffered=true)` so the runtime can send one guarded extra `Enter`.
+- After `agent.inject`, verify the helper can use MCP tools by checking whether a `progress` report arrives in `owner.inbox.list` within the ack deadline. If no `progress` arrives and `agent.assignment.list` shows `timeout`, the helper may be blocked by tool permission prompts rather than stalled on work. In that case, surface `needs_attention` and check the helper pane directly instead of firing a rescue.
 - Expect a matching helper `agent.report` after `agent.inject`; if delivery fails or times out, retry once and then surface `needs_attention`.
 - If a probe-based reinstruction fails, stop and surface `needs_attention` instead of looping repeated probes.
 - Helpers report to the owner, not directly to the user.
@@ -37,7 +38,8 @@ Paste this into your project `AGENTS.md` and customize.
 - If a helper reports late after timing out, treat the report as real work product first; do not assume the delivery path is fully broken.
 - If a helper has acknowledged but still has no final `done` or `review_findings` after the scoped timebox or a long quiet window, wait through a short grace period first, about 10 seconds or until `agent.assignment.list` says rescue is ready.
 - After that grace window, check `owner.inbox.list` for that helper first; if a `done` or `review_findings` report has already arrived since the mission was assigned, skip the rescue entirely.
-- If the inbox shows no final report yet, prefer `agent.inject(..., followup_mode="completion_rescue", probe_before_send=true, rescue_submit_if_buffered=true)` instead of broad reinstruction.
+- If `owner.inbox.list` shows zero reports (not even `progress`) for the helper since injection, treat the report channel as potentially broken. Check the helper pane directly for output instead of firing a rescue into a possibly permission-blocked helper.
+- If the inbox shows at least a `progress` ack but no final report yet, prefer `agent.inject(..., followup_mode="completion_rescue", probe_before_send=true, rescue_submit_if_buffered=true)` instead of broad reinstruction.
 - If two final reports from the same helper arrive close together after a rescue, resolve the earlier one with `owner.inbox.resolve` and treat the later one as the authoritative result.
 
 ## Helper reporting discipline (recommended)
@@ -56,6 +58,7 @@ Paste this into your project `AGENTS.md` and customize.
 - If the owner gave `target_paths`, `completion_criteria`, `timebox_minutes`, or `max_findings`, treat them as active mission constraints.
 - If the owner gave `target_paths`, read those exact stream-root/source-repo paths first instead of hunting for mirrored copies inside your helper worktree.
 - If the owner sends a completion rescue follow-up, do not restart broad exploration. Send `done`, `review_findings`, `blocked`, or `question` immediately from the current scoped work.
+- If `agent.report` calls fail due to tool permissions or MCP connectivity, continue the assigned work and leave your results visible in terminal output. The operator may check your pane directly as a fallback.
 
 ## Speech defaults
 
