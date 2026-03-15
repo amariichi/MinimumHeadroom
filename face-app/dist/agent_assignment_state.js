@@ -6,6 +6,14 @@ const SCHEMA_VERSION = 1;
 const DELIVERY_STATES = new Set(['pending', 'sent_to_tmux', 'acked', 'acked_late', 'failed', 'timeout']);
 const DEFAULT_COMPLETION_RESCUE_GRACE_MS = 10_000;
 
+const CANONICAL_OPERATOR_ID = '__operator__';
+const OPERATOR_ALIASES = /^_*operator_*$/i;
+
+function normalizeOwnerAgentId(id) {
+  if (typeof id === 'string' && OPERATOR_ALIASES.test(id)) return CANONICAL_OPERATOR_ID;
+  return id;
+}
+
 function toLogger(log) {
   if (!log) {
     return { info: () => {}, warn: () => {}, error: () => {} };
@@ -377,7 +385,7 @@ export function createAgentAssignmentStateStore(options = {}) {
     refreshTimeouts();
     const ts = nowMs(now);
     const streamId = asNonEmptyString(filters.stream_id);
-    const ownerAgentId = asNonEmptyString(filters.owner_agent_id);
+    const ownerAgentId = normalizeOwnerAgentId(asNonEmptyString(filters.owner_agent_id));
     const agentId = asNonEmptyString(filters.agent_id);
     const missionId = asNonEmptyString(filters.mission_id);
     const listed = state.assignments
@@ -416,7 +424,7 @@ export function createAgentAssignmentStateStore(options = {}) {
     ensureLoaded();
     const streamId = asNonEmptyString(input.stream_id);
     const missionId = asNonEmptyString(input.mission_id);
-    const ownerAgentId = asNonEmptyString(input.owner_agent_id);
+    const ownerAgentId = normalizeOwnerAgentId(asNonEmptyString(input.owner_agent_id));
     const agentId = asNonEmptyString(input.agent_id);
     const goal = asNonEmptyString(input.goal);
     if (!streamId || !missionId || !ownerAgentId || !agentId || !goal) {

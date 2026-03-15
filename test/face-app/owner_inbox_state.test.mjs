@@ -143,6 +143,59 @@ test('owner inbox store supersedes earlier helper reports and resolves explicitl
   cleanup(rootDir);
 });
 
+test('owner inbox store normalizes owner_agent_id so "operator" matches "__operator__"', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-owner-inbox-normalize-');
+  const store = createOwnerInboxStateStore({
+    statePath,
+    now: createClock(),
+    log: quietLog
+  });
+  store.load();
+
+  // Submit with canonical __operator__
+  store.submitReport({
+    stream_id: 'operator-default',
+    mission_id: 'helper-norm',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'helper-norm',
+    kind: 'progress',
+    summary: 'Started',
+    report_id: 'rpt-norm-1'
+  });
+
+  // Submit with bare "operator" — should land in the same stream
+  const aliased = store.submitReport({
+    stream_id: 'operator-default',
+    mission_id: 'helper-norm',
+    owner_agent_id: 'operator',
+    from_agent_id: 'helper-norm',
+    kind: 'done',
+    summary: 'Finished',
+    report_id: 'rpt-norm-2'
+  });
+
+  assert.equal(aliased.transport_state, 'accepted');
+  assert.equal(store.getState().reports.length, 2);
+
+  // getInboxView with bare "operator" should find both reports
+  const view = store.getInboxView({
+    stream_id: 'operator-default',
+    owner_agent_id: 'operator',
+    include_resolved: true
+  });
+  assert.equal(view.reports.length, 2);
+
+  // getInboxView with canonical __operator__ should also find both
+  const viewCanonical = store.getInboxView({
+    stream_id: 'operator-default',
+    owner_agent_id: '__operator__',
+    include_resolved: true
+  });
+  assert.equal(viewCanonical.reports.length, 2);
+
+  cleanup(rootDir);
+});
+
 test('owner inbox store rejects late reports for closed streams', () => {
   const { rootDir, statePath } = createTempStatePath('mh-owner-inbox-closed-');
   const store = createOwnerInboxStateStore({
