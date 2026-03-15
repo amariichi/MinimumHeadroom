@@ -20,12 +20,13 @@ Paste this into your project `AGENTS.md` and customize.
 ## Operator-led multi-agent workflow (recommended)
 
 - Use MCP lifecycle tools as the standard path: `agent.list(scope="stream")`, `agent.spawn`, `agent.assign`, `agent.inject`, `agent.assignment.list`, `owner.inbox.list`, `owner.inbox.resolve`, `agent.delete`.
+- When spawning a helper, pass `permission_preset` to auto-configure tool permissions. Values: `reviewer` (read-only tools), `implementer` (read + edit), `full` (all tools). Also pass `agent_cmd` (`claude`, `gemini`, or `codex`) so the runtime knows which config format to write.
 - Treat `agent.assign` as the durable mission record and `agent.inject` as controlled delivery for bootstrap or explicit reinstruction.
 - For review, investigation, implementation, or docs-check helpers, make the mission concrete with `role`, `target_paths`, `completion_criteria`, `timebox_minutes`, and `max_findings` when possible.
 - Treat `target_paths` as stream-root/source-repo anchored, even when they point outside the helper worktree.
 - For reinstruction to an already-running helper, prefer `agent.inject(..., probe_before_send=true)` when the helper may already be sitting at a prompt or when input readiness is uncertain.
 - If a multiline mission still appears buffered after submit, prefer `agent.inject(..., rescue_submit_if_buffered=true)` so the runtime can send one guarded extra `Enter`.
-- After `agent.inject`, verify the helper can use MCP tools by checking whether a `progress` report arrives in `owner.inbox.list` within the ack deadline. If no `progress` arrives and `agent.assignment.list` shows `timeout`, the helper may be blocked by tool permission prompts rather than stalled on work. In that case, surface `needs_attention` and check the helper pane directly instead of firing a rescue.
+- After `agent.inject`, verify the helper can use MCP tools by checking whether a `progress` report arrives in `owner.inbox.list` within the ack deadline. If `permission_preset` was set at spawn, tool approvals should be automatic; if no `progress` arrives and `agent.assignment.list` shows `timeout`, the helper may still be blocked by an uncovered prompt. In that case, surface `needs_attention` and check the helper pane directly instead of firing a rescue.
 - Expect a matching helper `agent.report` after `agent.inject`; if delivery fails or times out, retry once and then surface `needs_attention`.
 - If a probe-based reinstruction fails, stop and surface `needs_attention` instead of looping repeated probes.
 - Helpers report to the owner, not directly to the user.

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -251,6 +252,61 @@ async function runProcess(command, args, options = {}) {
   });
 }
 
+const PERMISSION_PRESETS = new Set(['reviewer', 'implementer', 'full']);
+
+export function inferAgentType(agentCmd) {
+  if (!agentCmd || typeof agentCmd !== 'string') {
+    return 'claude';
+  }
+  const lower = agentCmd.toLowerCase();
+  if (/\bgemini\b/.test(lower)) {
+    return 'gemini';
+  }
+  if (/\bcodex\b/.test(lower)) {
+    return 'codex';
+  }
+  return 'claude';
+}
+
+export function buildPermissionConfig(agentType, preset) {
+  if (!preset || !PERMISSION_PRESETS.has(preset)) {
+    return { configPath: null, configContent: null, cmdSuffix: null };
+  }
+
+  if (agentType === 'claude') {
+    const base = ['Read', 'Glob', 'Grep', 'mcp__minimum_headroom__agent_report'];
+    const allow =
+      preset === 'reviewer' ? base
+        : preset === 'implementer' ? [...base, 'Edit', 'Write', 'Bash']
+          : [...base, 'Edit', 'Write', 'Bash'];
+    return {
+      configPath: '.claude/settings.json',
+      configContent: { permissions: { allow } },
+      cmdSuffix: null
+    };
+  }
+
+  if (agentType === 'gemini') {
+    const readTools = ['read_file', 'search_files', 'list_files'];
+    const editTools = [...readTools, 'edit_file', 'write_file', 'run_shell_command'];
+    const coreTools = preset === 'reviewer' ? readTools : editTools;
+    return {
+      configPath: '.gemini/settings.json',
+      configContent: { tools: { core: coreTools } },
+      cmdSuffix: '--yolo'
+    };
+  }
+
+  if (agentType === 'codex') {
+    if (preset === 'reviewer') {
+      return { configPath: null, configContent: null, cmdSuffix: '-a untrusted' };
+    }
+    return { configPath: null, configContent: null, cmdSuffix: '--full-auto' };
+  }
+
+  return { configPath: null, configContent: null, cmdSuffix: null };
+}
+
 export function createAgentLifecycleRuntime(options = {}) {
   const stateStore = options.stateStore;
   if (!stateStore || typeof stateStore.getState !== 'function') {
@@ -318,6 +374,27 @@ export function createAgentLifecycleRuntime(options = {}) {
       throw createLifecycleError('invalid_state', 'tmux orchestration is disabled');
     }
     return runCommand('tmux', args);
+  }
+
+  async function pasteTextToPane(paneId, text, submit) {
+    const bufferName = `mh-inject-${randomUUID().slice(0, 8)}`;
+    const tmpFile = path.join(os.tmpdir(), `${bufferName}.txt`);
+    try {
+      fs.writeFileSync(tmpFile, text);
+      await runTmux(['load-buffer', '-b', bufferName, tmpFile]);
+      await runTmux(['paste-buffer', '-b', bufferName, '-t', paneId, '-d', '-p']);
+    } finally {
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch (_) {}
+      try {
+        await runTmux(['delete-buffer', '-b', bufferName]);
+      } catch (_) {}
+    }
+    if (submit) {
+      await delayMs(250);
+      await runTmux(['send-keys', '-t', paneId, 'C-m']);
+    }
   }
 
   async function runGit(repoPath, args) {
@@ -419,7 +496,8 @@ export function createAgentLifecycleRuntime(options = {}) {
     const slot = parseInteger(input.slot, null, 0);
     const createWorktree = normalizeBoolean(input.create_worktree, true);
     const createTmux = normalizeBoolean(input.create_tmux, true);
-    const agentCommand = asNonEmptyString(input.agent_cmd) ?? defaultAgentCommand;
+    let agentCommand = asNonEmptyString(input.agent_cmd) ?? defaultAgentCommand;
+    const permissionPreset = PERMISSION_PRESETS.has(input.permission_preset) ? input.permission_preset : null;
     let runCwd = worktreePath;
 
     let worktreeCreated = false;
@@ -447,6 +525,19 @@ export function createAgentLifecycleRuntime(options = {}) {
         throw createLifecycleError('invalid_request', `worktree path does not exist: ${worktreePath}`);
       }
       runCwd = sourceRepoPath;
+    }
+
+    if (permissionPreset && worktreeCreated) {
+      const agentType = inferAgentType(agentCommand);
+      const permConfig = buildPermissionConfig(agentType, permissionPreset);
+      if (permConfig.configContent && permConfig.configPath) {
+        const fullConfigPath = path.join(worktreePath, permConfig.configPath);
+        fs.mkdirSync(path.dirname(fullConfigPath), { recursive: true });
+        fs.writeFileSync(fullConfigPath, JSON.stringify(permConfig.configContent, null, 2));
+      }
+      if (permConfig.cmdSuffix) {
+        agentCommand = `${agentCommand} ${permConfig.cmdSuffix}`;
+      }
     }
 
     if (createTmux) {
@@ -1125,9 +1216,8 @@ export function createAgentLifecycleRuntime(options = {}) {
       wait_ms: 0
     };
 
-    await runTmux(['send-keys', '-t', paneId, '-l', '--', text]);
+    await pasteTextToPane(paneId, text, submit);
     if (submit) {
-      await runTmux(['send-keys', '-t', paneId, 'C-m']);
       if (reinforceSubmit) {
         await delayMs(reinforceDelayMs);
         await runTmux(['send-keys', '-t', paneId, 'C-m']);

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createAgentRuntimeStateStore } from '../../face-app/dist/agent_runtime_state.js';
-import { createAgentLifecycleApi, createAgentLifecycleRuntime } from '../../face-app/dist/agent_lifecycle.js';
+import { createAgentLifecycleApi, createAgentLifecycleRuntime, inferAgentType, buildPermissionConfig } from '../../face-app/dist/agent_lifecycle.js';
 
 const quietLog = {
   info() {},
@@ -63,6 +63,35 @@ function createResponseCapture() {
         body: rawBody === '' ? null : JSON.parse(rawBody)
       };
     }
+  };
+}
+
+function createPasteInterceptor(onPaste) {
+  const buffers = new Map();
+  return function intercept(command, args) {
+    if (command === 'tmux' && args[0] === 'load-buffer') {
+      const name = args[2];
+      const filePath = args[3];
+      try {
+        buffers.set(name, fs.readFileSync(filePath, 'utf8'));
+      } catch (_) {}
+      return { stdout: '', stderr: '', code: 0 };
+    }
+    if (command === 'tmux' && args[0] === 'paste-buffer') {
+      const name = args[2];
+      const paneId = args[4];
+      const content = buffers.get(name) ?? '';
+      buffers.delete(name);
+      if (typeof onPaste === 'function') {
+        onPaste(content, paneId);
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+    if (command === 'tmux' && args[0] === 'delete-buffer') {
+      buffers.delete(args[2]);
+      return { stdout: '', stderr: '', code: 0 };
+    }
+    return null;
   };
 }
 
@@ -259,7 +288,24 @@ test('agent lifecycle runtime delete-worktree only requires pane detachment', as
 });
 
 test('agent lifecycle runtime injects literal mission text into helper tmux pane', async () => {
-  const { repoRoot, runtime, commands } = createRuntimeHarness();
+  let pastedContent = null;
+  let pastedPane = null;
+  const pasteIntercept = createPasteInterceptor((content, paneId) => {
+    pastedContent = content;
+    pastedPane = paneId;
+  });
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
 
   await runtime.addAgent({
     id: 'agent-inject',
@@ -279,18 +325,8 @@ test('agent lifecycle runtime injects literal mission text into helper tmux pane
   assert.equal(result.ok, true);
   assert.equal(result.action, 'inject');
   assert.equal(result.injection.pane_id, '%77');
-  assert.equal(
-    commands.some(
-      (entry) =>
-        entry[0] === 'tmux' &&
-        entry[1] === 'send-keys' &&
-        entry[2] === '-t' &&
-        entry[3] === '%77' &&
-        entry[4] === '-l' &&
-        entry[6] === 'Mission text'
-    ),
-    true
-  );
+  assert.equal(pastedPane, '%77');
+  assert.equal(pastedContent, 'Mission text');
   assert.equal(
     commands.filter(
       (entry) =>
@@ -308,8 +344,16 @@ test('agent lifecycle runtime injects literal mission text into helper tmux pane
 
 test('agent lifecycle runtime waits for a codex prompt before injection', async () => {
   let captureCount = 0;
-  const { repoRoot, runtime, commands } = createRuntimeHarness({
+  let pastedContent = null;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    pastedContent = content;
+  });
+  const { repoRoot, runtime } = createRuntimeHarness({
     commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
       if (command === 'tmux' && args[0] === 'display-message') {
         return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
       }
@@ -357,26 +401,23 @@ test('agent lifecycle runtime waits for a codex prompt before injection', async 
   assert.equal(result.injection.ready_wait.waited_for_ready, true);
   assert.equal(result.injection.ready_wait.timed_out, false);
   assert.equal(captureCount >= 2, true);
-  assert.equal(
-    commands.some(
-      (entry) =>
-        entry[0] === 'tmux' &&
-        entry[1] === 'send-keys' &&
-        entry[2] === '-t' &&
-        entry[3] === '%88' &&
-        entry[4] === '-l' &&
-        entry[6] === 'Mission text'
-    ),
-    true
-  );
+  assert.equal(pastedContent, 'Mission text');
 
   cleanup(repoRoot);
 });
 
 test('agent lifecycle runtime can inject after generic startup output settles', async () => {
   let captureCount = 0;
-  const { repoRoot, runtime, commands } = createRuntimeHarness({
+  let pastedContent = null;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    pastedContent = content;
+  });
+  const { repoRoot, runtime } = createRuntimeHarness({
     commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
       if (command === 'tmux' && args[0] === 'display-message') {
         return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
       }
@@ -412,26 +453,20 @@ test('agent lifecycle runtime can inject after generic startup output settles', 
   assert.equal(result.injection.ready_wait.ready_reason, 'startup_quiet');
   assert.equal(result.injection.ready_wait.blocked, false);
   assert.equal(captureCount >= 2, true);
-  assert.equal(
-    commands.some(
-      (entry) =>
-        entry[0] === 'tmux' &&
-        entry[1] === 'send-keys' &&
-        entry[2] === '-t' &&
-        entry[3] === '%90' &&
-        entry[4] === '-l' &&
-        entry[6] === 'Mission text'
-    ),
-    true
-  );
+  assert.equal(pastedContent, 'Mission text');
 
   cleanup(repoRoot);
 });
 
 test('agent lifecycle runtime auto-reinforces submit for multiline codex assignments', async () => {
   let captureCount = 0;
+  const pasteIntercept = createPasteInterceptor();
   const { repoRoot, runtime, commands } = createRuntimeHarness({
     commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
       if (command === 'tmux' && args[0] === 'display-message') {
         return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
       }
@@ -489,8 +524,16 @@ test('agent lifecycle runtime auto-reinforces submit for multiline codex assignm
 
 test('agent lifecycle runtime can probe and clear before reinstruction', async () => {
   let lineBuffer = '';
-  const { repoRoot, runtime, commands } = createRuntimeHarness({
+  let pastedContent = null;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    pastedContent = content;
+  });
+  const { repoRoot, runtime } = createRuntimeHarness({
     commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
       if (command === 'tmux' && args[0] === 'display-message') {
         return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
       }
@@ -531,19 +574,7 @@ test('agent lifecycle runtime can probe and clear before reinstruction', async (
   assert.equal(result.injection.probe.ok, true);
   assert.equal(result.injection.probe.stage, 'cleared');
   assert.equal(result.injection.probe.token_length > 0, true);
-  assert.equal(lineBuffer, 'Follow-up instruction');
-  assert.equal(
-    commands.some(
-      (entry) =>
-        entry[0] === 'tmux' &&
-        entry[1] === 'send-keys' &&
-        entry[2] === '-t' &&
-        entry[3] === '%94' &&
-        entry[4] === '-l' &&
-        entry[6] === 'Follow-up instruction'
-    ),
-    true
-  );
+  assert.equal(pastedContent, 'Follow-up instruction');
 
   cleanup(repoRoot);
 });
@@ -551,17 +582,20 @@ test('agent lifecycle runtime can probe and clear before reinstruction', async (
 test('agent lifecycle runtime can rescue buffered multiline submit with one extra enter', async () => {
   let lineBuffer = '';
   let enterCount = 0;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    lineBuffer += content;
+  });
   const { repoRoot, runtime, commands } = createRuntimeHarness({
     commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
       if (command === 'tmux' && args[0] === 'display-message') {
         return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
       }
       if (command === 'tmux' && args[0] === 'capture-pane') {
         return { stdout: lineBuffer === '' ? '' : `${lineBuffer}\n`, stderr: '', code: 0 };
-      }
-      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === '-l') {
-        lineBuffer += args[5] ?? '';
-        return { stdout: '', stderr: '', code: 0 };
       }
       if (command === 'tmux' && args[0] === 'send-keys' && args[3] === 'C-m') {
         enterCount += 1;
@@ -619,8 +653,15 @@ test('agent lifecycle runtime waits for buffered multiline submit to disappear a
   let lineBuffer = '';
   let enterCount = 0;
   let captureCount = 0;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    lineBuffer += content;
+  });
   const { repoRoot, runtime } = createRuntimeHarness({
     commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
       if (command === 'tmux' && args[0] === 'display-message') {
         return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
       }
@@ -630,10 +671,6 @@ test('agent lifecycle runtime waits for buffered multiline submit to disappear a
           lineBuffer = '';
         }
         return { stdout: lineBuffer === '' ? '' : `${lineBuffer}\n`, stderr: '', code: 0 };
-      }
-      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === '-l') {
-        lineBuffer += args[5] ?? '';
-        return { stdout: '', stderr: '', code: 0 };
       }
       if (command === 'tmux' && args[0] === 'send-keys' && args[3] === 'C-m') {
         enterCount += 1;
@@ -684,8 +721,13 @@ test('agent lifecycle runtime detects buffered assignment from structured marker
     'Max findings this pass: 1',
     '- After your f'
   ].join('\n');
+  const pasteIntercept = createPasteInterceptor();
   const { repoRoot, runtime } = createRuntimeHarness({
     commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
       if (command === 'tmux' && args[0] === 'display-message') {
         return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
       }
@@ -746,8 +788,15 @@ test('agent lifecycle runtime can use a second rescue enter when buffered input 
   let lineBuffer = '';
   let enterCount = 0;
   let captureCount = 0;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    lineBuffer += content;
+  });
   const { repoRoot, runtime } = createRuntimeHarness({
     commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
       if (command === 'tmux' && args[0] === 'display-message') {
         return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
       }
@@ -757,10 +806,6 @@ test('agent lifecycle runtime can use a second rescue enter when buffered input 
           lineBuffer = '';
         }
         return { stdout: lineBuffer === '' ? '' : `${lineBuffer}\n`, stderr: '', code: 0 };
-      }
-      if (command === 'tmux' && args[0] === 'send-keys' && args[3] === '-l') {
-        lineBuffer += args[5] ?? '';
-        return { stdout: '', stderr: '', code: 0 };
       }
       if (command === 'tmux' && args[0] === 'send-keys' && args[3] === 'C-m') {
         enterCount += 1;
@@ -1366,6 +1411,133 @@ test('agent lifecycle api returns delete success and purged state', async () => 
   assert.equal(snapshot.body?.result?.action, 'delete');
   assert.equal(snapshot.body?.result?.agent?.id, 'agent-http-delete');
   assert.equal(snapshot.body?.result?.state?.agents?.some((agent) => agent.id === 'agent-http-delete'), false);
+
+  cleanup(repoRoot);
+});
+
+test('inferAgentType detects agent types from command strings', () => {
+  assert.equal(inferAgentType('claude'), 'claude');
+  assert.equal(inferAgentType('claude --dangerously-skip-permissions'), 'claude');
+  assert.equal(inferAgentType('codex'), 'codex');
+  assert.equal(inferAgentType('codex --approval-mode full-auto'), 'codex');
+  assert.equal(inferAgentType('gemini'), 'gemini');
+  assert.equal(inferAgentType('gemini --yolo'), 'gemini');
+  assert.equal(inferAgentType(null), 'claude');
+  assert.equal(inferAgentType(''), 'claude');
+  assert.equal(inferAgentType('my-custom-agent'), 'claude');
+});
+
+test('buildPermissionConfig returns correct config per agent type and preset', () => {
+  const claudeReviewer = buildPermissionConfig('claude', 'reviewer');
+  assert.equal(claudeReviewer.configPath, '.claude/settings.json');
+  assert.ok(claudeReviewer.configContent.permissions.allow.includes('Read'));
+  assert.ok(!claudeReviewer.configContent.permissions.allow.includes('Edit'));
+  assert.equal(claudeReviewer.cmdSuffix, null);
+
+  const claudeImpl = buildPermissionConfig('claude', 'implementer');
+  assert.ok(claudeImpl.configContent.permissions.allow.includes('Edit'));
+  assert.ok(claudeImpl.configContent.permissions.allow.includes('Bash'));
+
+  const codexFull = buildPermissionConfig('codex', 'full');
+  assert.equal(codexFull.configPath, null);
+  assert.equal(codexFull.cmdSuffix, '--full-auto');
+
+  const codexReviewer = buildPermissionConfig('codex', 'reviewer');
+  assert.equal(codexReviewer.cmdSuffix, '-a untrusted');
+
+  const geminiImpl = buildPermissionConfig('gemini', 'implementer');
+  assert.equal(geminiImpl.configPath, '.gemini/settings.json');
+  assert.ok(geminiImpl.configContent.tools.core.includes('edit_file'));
+  assert.equal(geminiImpl.cmdSuffix, '--yolo');
+
+  const geminiReviewer = buildPermissionConfig('gemini', 'reviewer');
+  assert.ok(geminiReviewer.configContent.tools.core.includes('read_file'));
+  assert.equal(geminiReviewer.configContent.tools.core.includes('edit_file'), false);
+  assert.equal(geminiReviewer.cmdSuffix, '--yolo');
+
+  const noPreset = buildPermissionConfig('claude', null);
+  assert.equal(noPreset.configPath, null);
+  assert.equal(noPreset.configContent, null);
+});
+
+test('addAgent writes permission config into worktree for claude helper', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+
+  const result = await runtime.addAgent({
+    id: 'agent-perm-claude',
+    create_worktree: true,
+    create_tmux: false,
+    source_repo_path: repoRoot,
+    agent_cmd: 'claude',
+    permission_preset: 'reviewer'
+  });
+
+  assert.equal(result.ok, true);
+  const configPath = path.join(result.agent.worktree_path, '.claude/settings.json');
+  assert.equal(fs.existsSync(configPath), true);
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.ok(config.permissions.allow.includes('Read'));
+  assert.ok(!config.permissions.allow.includes('Edit'));
+
+  cleanup(repoRoot);
+});
+
+test('addAgent appends approval mode flag for codex helper', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness();
+
+  const result = await runtime.addAgent({
+    id: 'agent-perm-codex',
+    create_worktree: true,
+    create_tmux: true,
+    source_repo_path: repoRoot,
+    agent_cmd: 'codex',
+    permission_preset: 'full'
+  });
+
+  assert.equal(result.ok, true);
+  const launchCmd = commands.find(
+    (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('--full-auto'))
+  );
+  assert.ok(launchCmd, 'expected codex launch command to include --full-auto');
+
+  cleanup(repoRoot);
+});
+
+test('addAgent writes gemini settings for gemini helper', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+
+  const result = await runtime.addAgent({
+    id: 'agent-perm-gemini',
+    create_worktree: true,
+    create_tmux: false,
+    source_repo_path: repoRoot,
+    agent_cmd: 'gemini',
+    permission_preset: 'implementer'
+  });
+
+  assert.equal(result.ok, true);
+  const configPath = path.join(result.agent.worktree_path, '.gemini/settings.json');
+  assert.equal(fs.existsSync(configPath), true);
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.ok(config.tools.core.includes('edit_file'));
+
+  cleanup(repoRoot);
+});
+
+test('addAgent skips permission config when no preset is given', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+
+  const result = await runtime.addAgent({
+    id: 'agent-no-perm',
+    create_worktree: true,
+    create_tmux: false,
+    source_repo_path: repoRoot,
+    agent_cmd: 'claude'
+  });
+
+  assert.equal(result.ok, true);
+  const configPath = path.join(result.agent.worktree_path, '.claude/settings.json');
+  assert.equal(fs.existsSync(configPath), false);
 
   cleanup(repoRoot);
 });
