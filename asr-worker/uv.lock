@@ -33,7 +33,7 @@ wheels = [
 
 [[package]]
 name = "accelerate"
-version = "1.13.0"
+version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -247,7 +247,7 @@ wheels = [
 
 [[package]]
 name = "asr-worker"
-version = "1.13.0"
+version = "1.13.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
