@@ -279,9 +279,10 @@ export function buildPermissionConfig(agentType, preset) {
       preset === 'reviewer' ? base
         : preset === 'implementer' ? [...base, 'Edit', 'Write', 'Bash']
           : [...base, 'Edit', 'Write', 'Bash'];
+    const deny = preset === 'reviewer' ? [] : ['Bash(git push:*)', 'Bash(git push *)'];
     return {
       configPath: '.claude/settings.json',
-      configContent: { permissions: { allow } },
+      configContent: { permissions: { allow, deny } },
       cmdSuffix: null
     };
   }
@@ -534,6 +535,7 @@ export function createAgentLifecycleRuntime(options = {}) {
         const fullConfigPath = path.join(worktreePath, permConfig.configPath);
         fs.mkdirSync(path.dirname(fullConfigPath), { recursive: true });
         fs.writeFileSync(fullConfigPath, JSON.stringify(permConfig.configContent, null, 2));
+        fs.chmodSync(fullConfigPath, 0o444);
       }
       if (permConfig.cmdSuffix) {
         agentCommand = `${agentCommand} ${permConfig.cmdSuffix}`;
