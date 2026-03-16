@@ -19,65 +19,36 @@
 
 A face and operator companion app for coding agents.
 
-`minimum-headroom` combines four things into one runtime: a browser face UI, a mobile-friendly operator panel, a tmux bridge for delivering operator input to your agent terminal, and MCP signaling (`face.event` / `face.say` / `face.ping`) for realtime status voice + expression feedback.
-
 ## Contents
 
 - [At a Glance](#en-at-a-glance)
+- [Features](#en-features)
 - [Quick Start](#en-quick-start)
+- [Agent Setup](#en-agent-setup)
 - [Detailed Guides](#en-detailed-guides)
-- [MCP Client Config](#en-mcp-client-config)
 - [Japanese](#japanese)
 
 <a id="en-at-a-glance"></a>
 ## At a Glance
 
-- Run your coding agent in tmux, and control/assist it from terminal or mobile browser.
-- Use three input paths: direct terminal text, frontend PTT (JA/EN -> ASR), or frontend text fallback.
-- Send approved input to the agent pane via `operator-bridge` (`tmux send-keys`).
-- Mirror terminal output back to mobile/desktop UI at 500ms change-only snapshots.
-- Broadcast agent state to users through MCP events/speech and browser face animation + audio.
-- Access remotely from phone/tablet via Tailscale Serve.
+- **Control your PC coding agent from your phone** — approve, type, or speak commands via mobile browser.
+- **Works with Claude Code, Codex CLI, and Gemini CLI** — any agent that runs in a terminal.
+- **tmux operator bridge** relays input/output between the browser UI and the agent pane.
+- **3D face + TTS + MCP signaling** give your agent a voice and expressions that reflect its state.
+- **Multi-agent support** (experimental) — spawn helper agents in isolated worktrees with permission presets and durable mission tracking. See [Multi-Agent Guide](doc/guides/multi-agent.md).
+- **Tailscale Serve** for secure remote access from phone or tablet.
 
+<a id="en-features"></a>
 ## Features
 
-- Operator input pipeline:
-  - terminal direct prompt, frontend PTT (JA/EN), and frontend text fallback
-  - browser audio -> ASR proxy -> Parakeet ASR -> append to text fallback -> tmux send
-  - desktop keyboard safety: `Space` / `Shift+Space` PTT starts only after a 1 second hold
-  - key controls (`Esc`, `↑`, `Select`, `↓`) and restart/recovery support
-- Terminal mirror:
-  - read-only tmux tail snapshots
-  - 500ms publish interval (change-only)
-- Multi-agent operator control:
-  - desktop current-agent bar opens the Agents surface from the normal one-agent view
-  - mobile current-agent bar opens the agent list without displacing `Esc`
-  - desktop currently renders `operator + up to 7 helper agents` at once (`8` tiles total)
-  - each desktop face tile keeps its own identity, speech bubble, idle/attention tone, and direct mouse-drag head steering
-  - `+Agent` uses safe auto-generated id/branch/worktree defaults, inherits the active target repository when the operator was started with `--repo`, and restores only helpers from that active repository stream on the next launch
-  - selecting a tile or list row changes the real operator focus target
-  - `Delete` removes the helper agent pane, worktree, and runtime record together
-  - helper reports now land in an app-owned durable owner inbox; unresolved items survive reloads and keep helper/owner attention visible until resolved
-  - helper missions can now be stored in an app-owned assignment store, injected into helper panes through controlled tmux paste-buffer delivery, and tracked as `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout`
-  - `agent.spawn` accepts `permission_preset` (`reviewer`, `implementer`, `full`) to auto-configure helper tool permissions at spawn time, eliminating manual approval prompts for Claude, Gemini, and Codex agents
-  - after full tmux shutdown, helper agents are recreated from saved worktrees on the next startup when possible; helpers from other repositories stay hidden, and helpers whose worktrees are gone appear as `missing`
-- MCP tools for signaling:
-  - `face.event` / `face.say` / `face.ping`
-  - `agent.list` / `agent.spawn` / `agent.focus` / `agent.delete`
-  - `agent.assign` / `agent.inject` / `agent.assignment.list`
-  - `agent.report` / `owner.inbox.list` / `owner.inbox.resolve`
-- Browser 3D face renderer with state-driven animation:
-  - eyebrow/eye/mouth/head movement
-  - state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`)
-  - direct head drag control (mouse/finger) with mode-coupled expression amplification
-  - panel toggle shortcuts (`Esc`, double tap, double click)
-- Looking Glass WebXR support path
-- TTS pipeline:
-  - Kokoro ONNX + Misaki (`af_heart`) by default
-  - optional experimental Qwen3-TTS Japanese backend
-  - freshness-first speech policy (`interrupt`, TTL, generation invalidation)
-  - speech result feedback (`say_result`)
-  - selectable output route (`local`, `browser`, `both`)
+- **Operator input** — terminal direct prompt, browser PTT (JA/EN ASR), text fallback, desktop `Space`/`Shift+Space` hold-to-talk safety, key controls (`Esc`, `↑`, `Select`, `↓`)
+- **Terminal mirror** — read-only tmux tail snapshots at 500ms change-only intervals
+- **Multi-agent** (experimental) — spawn/focus/delete helpers from desktop tiles or mobile list, permission presets, mission assignment and delivery, owner inbox. See [Multi-Agent Guide](doc/guides/multi-agent.md).
+- **MCP signaling** — `face.event` / `face.say` / `face.ping` plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.inject`, `agent.report`, `owner.inbox.*`)
+- **3D face** — eyebrow/eye/mouth/head animation, state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`), drag control, panel toggles
+- **TTS** — Kokoro ONNX + Misaki default, optional Qwen3-TTS Japanese backend, freshness-first speech policy. See [TTS and Speech Guide](doc/guides/tts-and-speech.md).
+- **ASR** — Parakeet batch, optional Voxtral realtime. See [Operator Stack and ASR Guide](doc/guides/operator-stack.md).
+- **Looking Glass** WebXR support path
 
 ## System Flow Diagrams
 
@@ -88,8 +59,8 @@ Static exports: [High-Level Flow PNG](doc/diagrams/high-level-flow.png), [Sequen
 ```mermaid
 flowchart LR
   U[User]
-  TMUX[tmux Terminal<br/>Codex pane]
-  C[Codex]
+  TMUX[tmux Terminal<br/>Agent pane]
+  C[Coding Agent]
   MCP[MCP Server<br/>face_event / face_say / face_ping]
   WS[face-app<br/>WebSocket + HTTP :8765]
   FE[Frontend UI<br/>Browser]
@@ -140,8 +111,8 @@ sequenceDiagram
   participant FA as face-app (:8765, /ws, /api/operator/asr)
   participant ASR as asr-worker (Parakeet)
   participant BR as operator-bridge
-  participant TM as tmux (Codex pane)
-  participant CX as Codex
+  participant TM as tmux (Agent pane)
+  participant CX as Coding Agent
   participant MCP as mcp-server
   participant TTS as tts-worker (Kokoro)
 
@@ -206,7 +177,7 @@ sequenceDiagram
 ## Quick Start
 
 Choose one startup path depending on your goal.
-Before starting, configure MCP server settings for your coding agent (see [MCP Client Config](#en-mcp-client-config)), set up the agent-specific `AGENTS.md`, and reflect `doc/examples/AGENT_RULES.md` in the agent instructions. If you want a ready-to-paste starting point, use `doc/examples/AGENTS.sample.md` as the template for your project-local `AGENTS.md`.
+Before starting, configure your coding agent for MCP (see [Agent Setup](#en-agent-setup)), set up the agent-specific `AGENTS.md`, and reflect `doc/examples/AGENT_RULES.md` in the agent instructions. If you want a ready-to-paste starting point, use `doc/examples/AGENTS.sample.md` as the template for your project-local `AGENTS.md`.
 
 If you plan to use the mobile UI remotely, it is convenient to start Tailscale Serve in advance:
 
@@ -255,15 +226,7 @@ Use this when you want the full tmux-backed operator workflow, browser PTT, term
   - run from this repository and pass `--repo /path/to/target-repo`
   - or `cd` into the target repository and launch `/path/to/MinimumHeadroom/scripts/run-operator-once.sh ...`
 
-After startup, multi-agent use is centered in the operator pane:
-
-- Desktop: click the current-agent bar to open `Agents`, use `+Agent` to spawn a helper, click a tile to retarget the operator pane, and use `Delete` to remove a finished helper agent.
-- Mobile: tap the current-agent bar below the title row to open the agent list, then `+Agent`, tap an agent row to retarget, or `Delete` a helper agent.
-- When the operator was started with `--repo /path/to/target`, new helpers inherit that target repository by default rather than falling back to this app repository, and helper worktrees default under that target repository's `.agent/worktrees`.
-- Helper reports are stored in an app-owned durable owner inbox, so unresolved `blocked` / `question` / `done` / `review_findings` items continue to drive attention after browser reloads.
-- Helper missions can be stored in an app-owned assignment store, then delivered into helper panes through controlled tmux injection. Delivery is tracked as `pending`, `sent_to_tmux`, `acked`, `failed`, or `timeout`, and matching helper `agent.report` calls acknowledge the mission.
-- For review or investigation helpers, keep assignments concrete: prefer `target_paths`, `completion_criteria`, `timebox_minutes`, and `max_findings` so the first helper pass returns one narrow result or a clear blocking question instead of wandering. `target_paths` are interpreted relative to the active stream/source repository root, so they may intentionally point outside the helper worktree itself.
-- If you later shut the whole tmux session down and start fresh with `./scripts/run-operator-once.sh`, saved helper agents are recreated from their existing worktrees for the active target repository stream only; helpers whose worktrees are gone come back as `missing`.
+After startup, multi-agent helpers can be spawned and managed from the browser UI or MCP tools. See the [Multi-Agent Guide](doc/guides/multi-agent.md) for the full workflow.
 
 Useful variants:
 
@@ -288,42 +251,71 @@ cd /path/to/target-repo
 ./scripts/run-operator-once.sh --profile qwen3-realtime
 ```
 
-<a id="en-detailed-guides"></a>
-## Detailed Guides
-
-The top-level README intentionally stays shorter now. Use these files for the full operational playbook:
-
-- [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english)
-  - launcher choice, tmux bridge wiring, operator UI behavior, multi-agent add/focus/delete flow, keyboard shortcuts, hidden mobile recovery, supported shutdown guidance, batch/realtime ASR, and Tailscale remote operation
-- [TTS and Speech Guide](doc/guides/tts-and-speech.md#english)
-  - Kokoro and Qwen3 setup, speech gate, long-speech behavior, and pre-synthesis text normalization
-
-<a id="en-mcp-client-config"></a>
-## MCP Client Config
+<a id="en-agent-setup"></a>
+## Agent Setup
 
 Do not commit your personal local config files.
 
-### Codex CLI example
+### Claude Code
 
-Use `doc/examples/codex/config.toml` as a template. Update absolute paths for your machine.
+Add the MCP server via CLI:
 
-If your MCP client rejects tool names with dots (for example `face.event`), set:
-
-```toml
-env = { FACE_WS_URL = "ws://127.0.0.1:8765/ws", MCP_TOOL_NAME_STYLE = "underscore" }
+```bash
+claude mcp add --transport stdio \
+  --env FACE_WS_URL=ws://127.0.0.1:8765/ws \
+  minimum-headroom -- node /ABS/PATH/minimum-headroom/mcp-server/dist/index.js
 ```
 
-Then tools are published as:
+See [Claude Code setup details](doc/examples/claude-code/README.md) for permission presets and security hardening.
 
-- `face_event`
-- `face_say`
-- `face_ping`
+### Codex CLI
 
-### Antigravity example
+Use `doc/examples/codex/config.toml` as a template. Place at `~/.codex/config.toml` or `.codex/config.toml` within a trusted project. Update absolute paths for your machine.
 
-Use `doc/examples/antigravity/mcp_config.json` as a template with your own absolute path.
+```toml
+[mcp_servers.minimum_headroom]
+command = "node"
+args = ["/ABS/PATH/minimum-headroom/mcp-server/dist/index.js"]
+env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws" }
+```
 
-For agent-side signaling conventions, see `doc/examples/AGENT_RULES.md`.
+### Gemini CLI
+
+Use `doc/examples/antigravity/mcp_config.json` as a template. Place in `~/.gemini/` or a project-local `.gemini/` folder. Gemini requires `MCP_TOOL_NAME_STYLE=underscore`.
+
+```json
+{
+  "mcpServers": {
+    "minimum-headroom": {
+      "command": "node",
+      "args": ["/ABS/PATH/minimum-headroom/mcp-server/dist/index.js"],
+      "env": {
+        "FACE_WS_URL": "ws://127.0.0.1:8765/ws",
+        "MCP_TOOL_NAME_STYLE": "underscore"
+      }
+    }
+  }
+}
+```
+
+See [Gemini setup details](doc/examples/antigravity/README.md) for permission presets and AGENTS.md guidance.
+
+### Agent Instructions
+
+- Place an `AGENTS.md` in your target repository root (use `doc/examples/AGENTS.sample.md` as the starting template).
+- Include signaling rules from `doc/examples/AGENT_RULES.md` in the agent instructions.
+- For Claude Code, you can also use `CLAUDE.md` for Claude-specific project instructions.
+
+### Tool name style
+
+If your MCP client rejects tool names with dots (for example `face.event`), set env `MCP_TOOL_NAME_STYLE=underscore`. Tools are then published as `face_event`, `face_say`, `face_ping`.
+
+<a id="en-detailed-guides"></a>
+## Detailed Guides
+
+- [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english) — launcher choice, tmux bridge, operator UI, keyboard shortcuts, hidden mobile recovery, batch/realtime ASR, Tailscale remote operation
+- [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization
+- [Multi-Agent Guide](doc/guides/multi-agent.md#english) — spawning helpers, permission presets, mission assignment, owner inbox, worktree isolation, security hardening
 
 ## Optional Agent Skills
 
@@ -385,72 +377,36 @@ npm run asr-worker:smoke
 
 コーディングエージェント向けのフェイス・オペレーター支援アプリです。
 
-`minimum-headroom` は次の4つを1つの実行環境としてまとめたアプリです。
-
-- ブラウザで動作するフェイスUI
-- モバイル向けオペレーターパネル
-- オペレーター入力をエージェント用tmuxペインへ届ける `operator-bridge`
-- MCPシグナリング (`face.event` / `face.say` / `face.ping`) によるリアルタイム状態通知（音声・表情）
-
 ## 目次
 
 - [全体像（要点）](#ja-overview)
+- [機能](#ja-features)
 - [クイックスタート](#ja-quick-start)
+- [エージェント設定](#ja-agent-setup)
 - [詳細ガイド](#ja-detailed-guides)
-- [MCPクライアント設定](#ja-mcp-client-config)
 - [English](#english)
 
 <a id="ja-overview"></a>
 ## 全体像（要点）
 
-- エージェントを tmux で動かし、端末またはモバイルブラウザから補助操作できます。
-- 入力経路は3つです: 端末の直接入力、フロントエンドPTT（JA/EN -> ASR）、フロントエンドのテキスト入力。
-- 承認・送信された入力は `operator-bridge` が `tmux send-keys` でエージェントペインへ投入します。
-- 端末出力は 500ms 間隔（差分があるときのみ）でミラー配信されます。
-- `./scripts/run-operator-once.sh --ui-mode pc` はデスクトップ向けUI、`--ui-mode mobile` はモバイル向けUI、`--ui-mode auto` は自動選択です。
-- エージェント状態は MCP イベント/発話とフェイスUI（表情・音声）でユーザーへ通知されます。
-- Tailscale Serve を使うとスマホ/タブレットからリモートアクセスできます。
+- **スマホから PC のコーディングエージェントを操作** — モバイルブラウザで承認・入力・音声コマンドを送信できます。
+- **Claude Code、Codex CLI、Gemini CLI に対応** — ターミナルで動くエージェントなら何でも使えます。
+- **tmux operator bridge** がブラウザ UI とエージェントペイン間の入出力を中継します。
+- **3D フェイス + TTS + MCP シグナリング** でエージェントに声と表情を与え、状態をリアルタイムに反映します。
+- **マルチエージェント対応**（実験的） — 分離 worktree に helper を生成し、権限プリセットとミッション追跡で管理します。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
+- **Tailscale Serve** でスマホ/タブレットから安全にリモートアクセス。
 
+<a id="ja-features"></a>
 ## 機能
 
-- オペレーター入力パイプライン:
-  - 端末直接入力 / フロントエンドPTT（JA/EN）/ フロントエンドテキスト入力
-  - ブラウザ音声 -> ASRプロキシ -> Parakeet ASR -> テキスト入力へ追記 -> tmux送信
-  - デスクトップの誤作動対策として `Space` / `Shift+Space` の PTT は 1 秒長押しで開始
-  - キー操作（`Esc`, `↑`, `Select`, `↓`）と復旧用 `Restart`
-- ターミナルミラー:
-  - tmux末尾出力の読み取り専用スナップショット
-  - 500ms 発行（変更があった場合のみ）
-- マルチエージェントオペレーター制御:
-  - Desktop の現在エージェントバーから `Agents` サーフェスを開く
-  - Mobile の現在エージェントバーから agent list を開く
-  - Desktop は現在 `operator + helper 最大 7 体` を同時表示します（合計 `8` タイル）
-  - 各 Desktop 顔タイルは固有の見た目、speech bubble、idle/attention 色、個別のマウスドラッグ頭部操作を持ちます
-  - `+Agent` は安全な自動 id / branch / worktree を使い、operator を `--repo` 付きで起動している場合はその target repository を helper の既定 source repo / worktree 基点として継承し、次回起動時もその active repository stream の helper だけを復元表示します
-  - タイルや行の選択で operator pane の接続先を切り替えます
-  - `Delete` は helper agent の pane / worktree / runtime record をまとめて削除します
-  - helper report は app 側の durable な owner inbox に保存され、未解決項目は reload 後も helper / owner の attention 表示を維持します
-  - helper mission は app 側の assignment store に保存され、制御された tmux paste-buffer 注入で helper pane へ渡せます。delivery 状態は `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout` として追跡されます
-  - `agent.spawn` で `permission_preset`（`reviewer` / `implementer` / `full`）を指定すると、Claude / Gemini / Codex 各エージェントのツール承認を spawn 時に自動設定し、手動承認プロンプトを排除できます
-  - review や investigation 用 helper の mission は、`target_paths`、`completion_criteria`、`timebox_minutes`、`max_findings` を使って具体化するのが有効です。そうすると helper は最初の pass で狭い結果 1 件か、明確な `question` / `blocked` を返しやすくなります。`target_paths` は active stream / source repository root 基準で解釈されるので、helper worktree の外にある source-repo 側パスを意図的に指定できます
-  - `tmux` session 全体を落として再起動した場合も、active repository stream の helper は worktree が残っていれば再生成され、無ければ `missing` として戻ります。他 repository の helper は hidden のままです
-- MCPシグナリングツール:
-  - `face.event` / `face.say` / `face.ping`
-  - `agent.list` / `agent.spawn` / `agent.focus` / `agent.delete`
-  - `agent.assign` / `agent.inject` / `agent.assignment.list`
-  - `agent.report` / `owner.inbox.list` / `owner.inbox.resolve`
-- ブラウザ3Dフェイス描画:
-  - 眉・目・口・頭の状態駆動アニメーション
-  - 状態モード（`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`）
-  - ドラッグ操作（マウス/タッチ）による頭部制御とモード連動バイアス
-  - パネル表示切替ショートカット（`Esc`, ダブルタップ, ダブルクリック）
-- Looking Glass WebXR 対応経路
-- TTSパイプライン:
-  - 既定は Kokoro ONNX + Misaki (`af_heart`)
-  - 任意で実験的な Qwen3-TTS 日本語 backend
-  - 発話鮮度優先ポリシー（`interrupt`, TTL, generation）
-  - `say_result` フィードバック
-  - 出力先切替（`local`, `browser`, `both`）
+- **オペレーター入力** — 端末直接入力、ブラウザ PTT（JA/EN ASR）、テキスト入力、Desktop `Space`/`Shift+Space` 長押し安全装置、キー操作（`Esc`, `↑`, `Select`, `↓`）
+- **ターミナルミラー** — tmux 末尾出力の読み取り専用スナップショット（500ms、変更時のみ）
+- **マルチエージェント**（実験的） — Desktop タイルまたは Mobile リストから helper の生成/フォーカス/削除、権限プリセット、ミッション割当・配信、owner inbox。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
+- **MCP シグナリング** — `face.event` / `face.say` / `face.ping` およびエージェントライフサイクルツール（`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.inject`, `agent.report`, `owner.inbox.*`）
+- **3D フェイス** — 眉・目・口・頭のアニメーション、状態モード（`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`）、ドラッグ制御、パネル切替
+- **TTS** — Kokoro ONNX + Misaki 既定、任意 Qwen3-TTS 日本語 backend、鮮度優先発話ポリシー。[TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) を参照。
+- **ASR** — Parakeet batch、任意 Voxtral realtime。[Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) を参照。
+- **Looking Glass** WebXR 対応経路
 
 ## システムフロー図
 
@@ -461,8 +417,8 @@ npm run asr-worker:smoke
 ```mermaid
 flowchart LR
   U[ユーザー]
-  TMUX[tmux ターミナル<br/>Codex ペイン]
-  C[Codex]
+  TMUX[tmux ターミナル<br/>Agent ペイン]
+  C[Coding Agent]
   MCP[MCP サーバー<br/>face_event / face_say / face_ping]
   WS[face-app<br/>WebSocket + HTTP :8765]
   FE[フロントエンド UI<br/>ブラウザ]
@@ -513,8 +469,8 @@ sequenceDiagram
   participant FA as face-app (:8765, /ws, /api/operator/asr)
   participant ASR as asr-worker (Parakeet)
   participant BR as operator-bridge
-  participant TM as tmux (Codex pane)
-  participant CX as Codex
+  participant TM as tmux (Agent pane)
+  participant CX as Coding Agent
   participant MCP as mcp-server
   participant TTS as tts-worker (Kokoro)
 
@@ -579,7 +535,7 @@ sequenceDiagram
 ## クイックスタート
 
 目的に合わせて起動パスを選んでください。
-開始前に、利用するコーディングエージェントで MCP サーバー設定を行い（[MCPクライアント設定](#ja-mcp-client-config) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。すぐ使えるひな形が必要なら、`doc/examples/AGENTS.sample.md` を project-local `AGENTS.md` のテンプレートとして使ってください。
+開始前に、利用するコーディングエージェントで MCP 設定を行い（[エージェント設定](#ja-agent-setup) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。すぐ使えるひな形が必要なら、`doc/examples/AGENTS.sample.md` を project-local `AGENTS.md` のテンプレートとして使ってください。
 
 モバイルUIをリモート利用する場合は、先に Tailscale Serve を起動しておくと便利です。
 
@@ -626,16 +582,7 @@ tailscale serve --bg 8765
   - このリポジトリ側から `--repo /path/to/target-repo` を付けて起動する
   - target repository 側へ `cd` してから `/path/to/MinimumHeadroom/scripts/run-operator-once.sh ...` を呼ぶ
 
-起動後のマルチエージェント操作は、operator pane を中心に次の流れで行います。
-
-- Desktop: 現在エージェントバーを押して `Agents` を開き、`+Agent` で helper を追加し、タイルを押して operator pane の接続先を切り替え、完了した helper は `Delete` で削除します。
-- Mobile: タイトル行の下にある現在エージェントバーを押して agent list を開き、`+Agent`、行タップでの切り替え、`Delete` による helper 削除を行います。
-- Desktop は現在 `operator + helper 最大 7 体` を同時表示します（合計 `8` タイル）。
-- operator を `--repo /path/to/target` 付きで起動した場合、新しい helper は既定でその target repository を継承します。
-- helper report は app 側の durable な owner inbox に保持されるため、未解決の `blocked` / `question` / `done` / `review_findings` は browser reload 後も attention を維持します。
-- helper mission は app 側の assignment store に保存され、制御された tmux paste-buffer 注入で helper pane に渡せます。delivery は `pending` / `sent_to_tmux` / `acked` / `failed` / `timeout` として追跡され、matching `agent.report` が ack を返します。
-- `agent.spawn` で `permission_preset` を指定すると、helper のツール承認をエージェント種別（Claude / Gemini / Codex）に応じて自動設定できます。
-- `tmux` session 全体を落としてから `./scripts/run-operator-once.sh` で再起動した場合も、helper の worktree が残っていれば再生成され、worktree が無ければ `missing` として戻ります。
+起動後のマルチエージェント操作については[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照してください。
 
 よく使う派生例:
 
@@ -660,42 +607,71 @@ cd /path/to/target-repo
 ./scripts/run-operator-once.sh --profile qwen3-realtime
 ```
 
-<a id="ja-detailed-guides"></a>
-## 詳細ガイド
-
-トップレベル README は入口に絞っています。詳しい運用手順は次のガイドを見てください。
-
-- [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese)
-  - 起動スクリプトの選び方、tmux bridge、operator UI、キーボードショートカット、batch / realtime ASR、隠し復旧、Tailscale リモート運用
-- [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese)
-  - Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化
-
-<a id="ja-mcp-client-config"></a>
-## MCPクライアント設定
+<a id="ja-agent-setup"></a>
+## エージェント設定
 
 個人用ローカル設定ファイルはリポジトリにコミットしないでください。
 
-### Codex CLI 例
+### Claude Code
 
-`doc/examples/codex/config.toml` をテンプレートとして使い、各自の絶対パスへ置き換えてください。
+CLI で MCP サーバーを追加:
 
-MCPクライアントがドット付きツール名（例: `face.event`）を受け付けない場合:
-
-```toml
-env = { FACE_WS_URL = "ws://127.0.0.1:8765/ws", MCP_TOOL_NAME_STYLE = "underscore" }
+```bash
+claude mcp add --transport stdio \
+  --env FACE_WS_URL=ws://127.0.0.1:8765/ws \
+  minimum-headroom -- node /ABS/PATH/minimum-headroom/mcp-server/dist/index.js
 ```
 
-公開ツール名は次の形になります。
+権限プリセットとセキュリティ強化の詳細は [Claude Code setup](doc/examples/claude-code/README.md) を参照。
 
-- `face_event`
-- `face_say`
-- `face_ping`
+### Codex CLI
 
-### Antigravity 例
+`doc/examples/codex/config.toml` をテンプレートとして使い、`~/.codex/config.toml` またはプロジェクト内 `.codex/config.toml` に配置。絶対パスは各自の環境に合わせてください。
 
-`doc/examples/antigravity/mcp_config.json` をテンプレートとして使い、各自の絶対パスへ置き換えてください。
+```toml
+[mcp_servers.minimum_headroom]
+command = "node"
+args = ["/ABS/PATH/minimum-headroom/mcp-server/dist/index.js"]
+env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws" }
+```
 
-エージェント側シグナリング規約は `doc/examples/AGENT_RULES.md` を参照してください。
+### Gemini CLI
+
+`doc/examples/antigravity/mcp_config.json` をテンプレートとして使い、`~/.gemini/` またはプロジェクト内 `.gemini/` に配置。Gemini は `MCP_TOOL_NAME_STYLE=underscore` が必要です。
+
+```json
+{
+  "mcpServers": {
+    "minimum-headroom": {
+      "command": "node",
+      "args": ["/ABS/PATH/minimum-headroom/mcp-server/dist/index.js"],
+      "env": {
+        "FACE_WS_URL": "ws://127.0.0.1:8765/ws",
+        "MCP_TOOL_NAME_STYLE": "underscore"
+      }
+    }
+  }
+}
+```
+
+権限プリセットと AGENTS.md の詳細は [Gemini setup](doc/examples/antigravity/README.md) を参照。
+
+### エージェント指示の設定
+
+- target repository のルートに `AGENTS.md` を配置（`doc/examples/AGENTS.sample.md` をテンプレートとして使用）。
+- `doc/examples/AGENT_RULES.md` のシグナリング規約をエージェント指示に含める。
+- Claude Code の場合は `CLAUDE.md` で Claude 固有のプロジェクト指示も利用可能。
+
+### ツール名スタイル
+
+MCP クライアントがドット付きツール名（例: `face.event`）を受け付けない場合は、環境変数 `MCP_TOOL_NAME_STYLE=underscore` を設定。ツールは `face_event`, `face_say`, `face_ping` として公開されます。
+
+<a id="ja-detailed-guides"></a>
+## 詳細ガイド
+
+- [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) — 起動スクリプトの選び方、tmux bridge、operator UI、キーボードショートカット、batch / realtime ASR、隠し復旧、Tailscale リモート運用
+- [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化
+- [マルチエージェントガイド](doc/guides/multi-agent.md#japanese) — helper の生成、権限プリセット、ミッション割当、owner inbox、worktree 分離、セキュリティ強化
 
 ## オプションスキル
 

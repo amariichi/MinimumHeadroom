@@ -1434,9 +1434,13 @@ test('buildPermissionConfig returns correct config per agent type and preset', (
   assert.ok(!claudeReviewer.configContent.permissions.allow.includes('Edit'));
   assert.equal(claudeReviewer.cmdSuffix, null);
 
+  assert.deepStrictEqual(claudeReviewer.configContent.permissions.deny, []);
+
   const claudeImpl = buildPermissionConfig('claude', 'implementer');
   assert.ok(claudeImpl.configContent.permissions.allow.includes('Edit'));
   assert.ok(claudeImpl.configContent.permissions.allow.includes('Bash'));
+  assert.ok(claudeImpl.configContent.permissions.deny.includes('Bash(git push:*)'));
+  assert.ok(claudeImpl.configContent.permissions.deny.includes('Bash(git push *)'));
 
   const codexFull = buildPermissionConfig('codex', 'full');
   assert.equal(codexFull.configPath, null);
@@ -1478,6 +1482,8 @@ test('addAgent writes permission config into worktree for claude helper', async 
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   assert.ok(config.permissions.allow.includes('Read'));
   assert.ok(!config.permissions.allow.includes('Edit'));
+  const stat = fs.statSync(configPath);
+  assert.equal(stat.mode & 0o777, 0o444, 'settings.json should be read-only');
 
   cleanup(repoRoot);
 });
@@ -1520,6 +1526,8 @@ test('addAgent writes gemini settings for gemini helper', async () => {
   assert.equal(fs.existsSync(configPath), true);
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   assert.ok(config.tools.core.includes('edit_file'));
+  const stat = fs.statSync(configPath);
+  assert.equal(stat.mode & 0o777, 0o444, 'settings.json should be read-only');
 
   cleanup(repoRoot);
 });
