@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   deriveObservedAgentFromPayload,
   deriveAgentTransientUpdate,
+  filterAgentTransientUpdateForFallback,
   matchesOperatorIdentity,
   resolveAgentIdForPane,
   resolveAgentIdForPayload,
@@ -220,4 +221,32 @@ test('deriveAgentTransientUpdate clears attention when work resumes or completes
     needsAttention: false,
     promptIdle: false
   });
+});
+
+test('filterAgentTransientUpdateForFallback keeps only fallback speech bubbles', () => {
+  assert.deepEqual(
+    filterAgentTransientUpdateForFallback({
+      message: 'approval required',
+      needsAttention: true,
+      speaking: true,
+      speechBubble: 'approval required',
+      speechBubbleTtlMs: 12000,
+      error: true
+    }, {
+      fallbackToOperator: true
+    }),
+    {
+      speechBubble: 'approval required',
+      speechBubbleTtlMs: 8000
+    }
+  );
+  assert.equal(
+    filterAgentTransientUpdateForFallback({
+      message: 'approval required',
+      needsAttention: true
+    }, {
+      fallbackToOperator: true
+    }),
+    null
+  );
 });

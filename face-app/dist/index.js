@@ -97,18 +97,19 @@ const agentRuntimeState = createAgentRuntimeStateStore({
   log: console
 });
 agentRuntimeState.load();
-const ownerInboxState = createOwnerInboxStateStore({
-  repoRoot,
-  statePath: ownerInboxStatePath,
-  log: console
-});
-ownerInboxState.load();
 const agentAssignmentState = createAgentAssignmentStateStore({
   repoRoot,
   statePath: agentAssignmentStatePath,
   log: console
 });
 agentAssignmentState.load();
+const ownerInboxState = createOwnerInboxStateStore({
+  repoRoot,
+  statePath: ownerInboxStatePath,
+  assignmentStateStore: agentAssignmentState,
+  log: console
+});
+ownerInboxState.load();
 let liveServer = null;
 const agentLifecycleRuntime = createAgentLifecycleRuntime({
   stateStore: agentRuntimeState,

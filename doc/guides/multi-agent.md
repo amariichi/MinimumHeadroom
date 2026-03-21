@@ -11,6 +11,8 @@
 
 minimum-headroom supports spawning helper coding agents in isolated worktrees, each with their own tmux pane, face tile, and permission configuration. The operator controls helpers from the browser UI or via MCP tools.
 
+If you are using the minimum-headroom operator/helper runtime, also install the `minimum-headroom-ops` skill. It documents the expected MCP lifecycle flow and the helper reporting contract used by the operator-led workflow.
+
 ### Spawning Helpers
 
 - **Desktop:** click the current-agent bar, open the Agents surface, then click **+Agent**
@@ -23,6 +25,8 @@ minimum-headroom supports spawning helper coding agents in isolated worktrees, e
 ### Permission Presets
 
 `agent.spawn` accepts a `permission_preset` parameter (`reviewer`, `implementer`, `full`) to auto-configure tool permissions for the helper.
+
+For Claude Code, Gemini CLI, and Codex CLI, these presets complement the runtime's own setup. They do not replace project-local agent instructions such as `AGENTS.md` or signaling rules like `doc/examples/AGENT_RULES.md`.
 
 | Preset | Claude Code | Gemini CLI | Codex CLI |
 |--------|-------------|------------|-----------|
@@ -45,6 +49,7 @@ For detailed per-runtime setup, see:
   - `max_findings` — cap on findings before the helper should report back
 - Deliver missions via `agent.inject` using controlled tmux paste-buffer injection
 - Delivery is tracked through states: `pending` → `sent_to_tmux` → `acked` / `failed` / `timeout`
+- Check those delivery and ack states with `agent.assignment.list`
 - A matching `agent.report` from the helper acknowledges the mission
 
 ### Helper Reporting and Owner Inbox
@@ -96,6 +101,8 @@ For detailed per-runtime setup, see:
 
 minimum-headroom は、分離された worktree に helper コーディングエージェントを生成する機能を備えています。各 helper は独自の tmux ペイン、顔タイル、権限設定を持ちます。operator はブラウザ UI または MCP ツールから helper を制御します。
 
+minimum-headroom の operator/helper runtime を使う場合は、`minimum-headroom-ops` スキルも導入してください。operator 主導フローで使う標準 MCP ライフサイクルと helper reporting contract をまとめています。
+
 ### Helper の生成
 
 - **Desktop:** 現在エージェントバーをクリック → Agents サーフェス → **+Agent**
@@ -108,6 +115,8 @@ minimum-headroom は、分離された worktree に helper コーディングエ
 ### 権限プリセット
 
 `agent.spawn` で `permission_preset`（`reviewer` / `implementer` / `full`）を指定すると、ツール承認を自動設定します。
+
+Claude Code / Gemini CLI / Codex CLI では、これらのプリセットは各ランタイムのセットアップを補完するものであり、置き換えるものではありません。project-local の `AGENTS.md` や `doc/examples/AGENT_RULES.md` のようなエージェント指示もあわせて設定してください。
 
 | プリセット | Claude Code | Gemini CLI | Codex CLI |
 |--------|-------------|------------|-----------|
@@ -130,6 +139,7 @@ minimum-headroom は、分離された worktree に helper コーディングエ
   - `max_findings` — 報告前の findings 上限
 - `agent.inject` で制御された tmux paste-buffer 注入により配信
 - 配信状態は `pending` → `sent_to_tmux` → `acked` / `failed` / `timeout` で追跡
+- これらの配信状態や ack は `agent.assignment.list` で確認
 - helper からの `agent.report` の一致で ack（受領確認）
 
 ### Helper レポートと Owner Inbox

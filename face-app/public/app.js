@@ -44,6 +44,7 @@ import { collectObservedDashboardAgentIdsToPrune, resolveObservedAgentUpdatedAt 
 import {
   deriveObservedAgentFromPayload,
   deriveAgentTransientUpdate,
+  filterAgentTransientUpdateForFallback,
   matchesOperatorIdentity,
   resolveAgentIdForPane,
   shouldCountPayloadAsAgentActivity
@@ -1209,6 +1210,15 @@ function resolvePayloadAgentIdForFace(payload) {
   return resolveFaceAgentId(payload, agentDashboardState.agents, {
     operatorAgentId: OPERATOR_DASHBOARD_AGENT_ID,
     operatorSessionId: resolveOperatorSessionId(),
+    operatorAliases: getOperatorIdentityAliases(),
+    allowFallbackToOperator: false
+  });
+}
+
+function resolvePayloadAgentIdForTile(payload) {
+  return resolveFaceAgentId(payload, agentDashboardState.agents, {
+    operatorAgentId: OPERATOR_DASHBOARD_AGENT_ID,
+    operatorSessionId: resolveOperatorSessionId(),
     operatorAliases: getOperatorIdentityAliases()
   });
 }
@@ -1511,7 +1521,7 @@ function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
 }
 
 function isPayloadFallbackMatch(payload) {
-  if (!isOperatorDashboardAgentId(resolvePayloadAgentIdForFace(payload))) {
+  if (!isOperatorDashboardAgentId(resolvePayloadAgentIdForTile(payload))) {
     return false;
   }
   const payloadSessionId = typeof payload?.session_id === 'string' ? payload.session_id.trim() : '';
@@ -1523,18 +1533,21 @@ function isPayloadFallbackMatch(payload) {
 }
 
 function trackAgentTileFromPayload(payload) {
-  const agentId = resolvePayloadAgentIdForFace(payload);
+  const agentId = resolvePayloadAgentIdForTile(payload);
   if (!agentId) {
     return;
   }
-  if (shouldCountPayloadAsAgentActivity(payload)) {
+  const fallback = isPayloadFallbackMatch(payload);
+  if (!fallback && shouldCountPayloadAsAgentActivity(payload)) {
     markAgentActivity(agentId);
   }
-  const update = deriveAgentTransientUpdate(payload);
+  const update = filterAgentTransientUpdateForFallback(
+    deriveAgentTransientUpdate(payload),
+    { fallbackToOperator: fallback }
+  );
   if (!update) {
     return;
   }
-  const fallback = isPayloadFallbackMatch(payload);
   if (typeof update.message === 'string' && update.message.trim() !== '') {
     setAgentTransientMessage(agentId, update.message);
   }

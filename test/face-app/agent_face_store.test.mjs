@@ -49,6 +49,15 @@ test('resolveFaceAgentId maps helper agents then operator session', () => {
     }),
     '__operator__'
   );
+  assert.equal(
+    resolveFaceAgentId({ session_id: 'helper-race' }, agents, {
+      operatorAgentId: '__operator__',
+      operatorSessionId: 'default',
+      operatorAliases: ['operator', '__operator__'],
+      allowFallbackToOperator: false
+    }),
+    null
+  );
 });
 
 test('applyPayloadToAgentFaceRuntime updates event and speech state', () => {

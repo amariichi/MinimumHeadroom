@@ -326,3 +326,21 @@ export function deriveAgentTransientUpdate(payload, options = {}) {
 
   return null;
 }
+
+export function filterAgentTransientUpdateForFallback(update, options = {}) {
+  if (!update || typeof update !== 'object') {
+    return null;
+  }
+  if (options.fallbackToOperator !== true) {
+    return update;
+  }
+  const speechBubble = asNonEmptyString(update.speechBubble);
+  if (!speechBubble) {
+    return null;
+  }
+  const next = { speechBubble };
+  if (Number.isFinite(update.speechBubbleTtlMs)) {
+    next.speechBubbleTtlMs = Math.max(1_200, Math.min(8_000, Math.floor(update.speechBubbleTtlMs)));
+  }
+  return next;
+}
