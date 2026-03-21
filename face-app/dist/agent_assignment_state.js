@@ -603,6 +603,40 @@ export function createAgentAssignmentStateStore(options = {}) {
     };
   }
 
+  function purgeAssignments(filters = {}) {
+    ensureLoaded();
+    refreshTimeouts();
+    const streamId = asNonEmptyString(filters.stream_id);
+    const ownerAgentId = normalizeOwnerAgentId(asNonEmptyString(filters.owner_agent_id));
+    const agentId = asNonEmptyString(filters.agent_id);
+    const missionId = asNonEmptyString(filters.mission_id);
+    const before = state.assignments.length;
+    state.assignments = state.assignments.filter((assignment) => {
+      if (streamId && assignment.stream_id !== streamId) {
+        return true;
+      }
+      if (ownerAgentId && assignment.owner_agent_id !== ownerAgentId) {
+        return true;
+      }
+      if (agentId && assignment.agent_id !== agentId) {
+        return true;
+      }
+      if (missionId && assignment.mission_id !== missionId) {
+        return true;
+      }
+      return false;
+    });
+    const removedCount = before - state.assignments.length;
+    if (removedCount > 0) {
+      commitState();
+    }
+    return {
+      ok: true,
+      removed_count: removedCount,
+      state: clone(state)
+    };
+  }
+
   return {
     statePath,
     load,
@@ -613,6 +647,7 @@ export function createAgentAssignmentStateStore(options = {}) {
     upsertAssignment,
     markDeliverySent,
     markDeliveryFailed,
-    noteReport
+    noteReport,
+    purgeAssignments
   };
 }

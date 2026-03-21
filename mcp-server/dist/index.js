@@ -31,6 +31,14 @@ const DEFAULT_SAY_TTL_MS = (() => {
   }
   return parsed;
 })();
+const DEFAULT_FACE_AGENT_ID = (() => {
+  const raw = process.env.MH_FACE_AGENT_ID;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null;
+})();
+const DEFAULT_FACE_AGENT_LABEL = (() => {
+  const raw = process.env.MH_FACE_AGENT_LABEL;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null;
+})();
 
 const EVENT_NAMES = new Set([
   'cmd_started',
@@ -53,6 +61,8 @@ const BASE_TOOL_DEFINITIONS = [
       required: ['session_id', 'name'],
       properties: {
         session_id: { type: 'string', minLength: 1 },
+        agent_id: { type: ['string', 'null'] },
+        agent_label: { type: ['string', 'null'] },
         name: { type: 'string', enum: [...EVENT_NAMES] },
         severity: { type: 'number', minimum: 0, maximum: 1 },
         meta: { type: 'object' },
@@ -69,6 +79,8 @@ const BASE_TOOL_DEFINITIONS = [
       required: ['session_id', 'text'],
       properties: {
         session_id: { type: 'string', minLength: 1 },
+        agent_id: { type: ['string', 'null'] },
+        agent_label: { type: ['string', 'null'] },
         text: { type: 'string', minLength: 1 },
         priority: { type: 'integer', minimum: 0, maximum: 3 },
         policy: { type: 'string', enum: ['replace', 'interrupt'] },
@@ -112,6 +124,7 @@ const BASE_TOOL_DEFINITIONS = [
       additionalProperties: true,
       properties: {
         id: { type: ['string', 'null'] },
+        agent_id: { type: ['string', 'null'] },
         session_id: { type: ['string', 'null'] },
         source_repo_path: { type: ['string', 'null'] },
         target_repo_root: { type: ['string', 'null'] },
@@ -352,6 +365,18 @@ function requireString(source, key) {
   return value;
 }
 
+function optionalString(source, key, fallback = null) {
+  const value = source[key];
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`${key} must be a string when provided`);
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? fallback : trimmed;
+}
+
 function optionalNumber(source, key, fallback) {
   const value = source[key];
   if (value === undefined || value === null) {
@@ -517,6 +542,8 @@ async function forwardToFace(payload, options = {}) {
 function normalizeEventPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const sessionId = requireString(args, 'session_id');
+  const agentId = optionalString(args, 'agent_id', DEFAULT_FACE_AGENT_ID);
+  const agentLabel = optionalString(args, 'agent_label', DEFAULT_FACE_AGENT_LABEL);
   const name = requireString(args, 'name');
   if (!EVENT_NAMES.has(name)) {
     throw new Error(`name must be one of: ${[...EVENT_NAMES].join(', ')}`);
@@ -536,6 +563,8 @@ function normalizeEventPayload(rawArguments) {
     v: 1,
     type: 'event',
     session_id: sessionId,
+    ...(agentId ? { agent_id: agentId } : {}),
+    ...(agentLabel ? { agent_label: agentLabel } : {}),
     ts: Date.now(),
     name,
     severity,
@@ -547,6 +576,8 @@ function normalizeEventPayload(rawArguments) {
 function normalizeSayPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const sessionId = requireString(args, 'session_id');
+  const agentId = optionalString(args, 'agent_id', DEFAULT_FACE_AGENT_ID);
+  const agentLabel = optionalString(args, 'agent_label', DEFAULT_FACE_AGENT_LABEL);
   const text = requireString(args, 'text');
   const priority = clamp(optionalInteger(args, 'priority', 0), 0, 3);
   const ttlMs = optionalInteger(args, 'ttl_ms', DEFAULT_SAY_TTL_MS);
@@ -580,6 +611,8 @@ function normalizeSayPayload(rawArguments) {
     v: 1,
     type: 'say',
     session_id: sessionId,
+    ...(agentId ? { agent_id: agentId } : {}),
+    ...(agentLabel ? { agent_label: agentLabel } : {}),
     ts: Date.now(),
     utterance_id: utteranceId,
     text,
@@ -680,8 +713,15 @@ function normalizeAgentListPayload(rawArguments) {
 function normalizeAgentSpawnPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const payload = {};
+  const id = optionalString(args, 'id');
+  const agentId = optionalString(args, 'agent_id');
+  if (id && agentId && id !== agentId) {
+    throw new Error('id and agent_id must match when both are provided');
+  }
+  if (id || agentId) {
+    payload.id = id ?? agentId;
+  }
   const optionalStringKeys = [
-    'id',
     'session_id',
     'source_repo_path',
     'target_repo_root',

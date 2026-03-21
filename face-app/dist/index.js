@@ -112,6 +112,8 @@ agentAssignmentState.load();
 let liveServer = null;
 const agentLifecycleRuntime = createAgentLifecycleRuntime({
   stateStore: agentRuntimeState,
+  assignmentStateStore: agentAssignmentState,
+  ownerInboxStateStore: ownerInboxState,
   repoRoot,
   activeTargetRepoRoot,
   activeStreamId,
@@ -191,6 +193,24 @@ function normalizeSayPayload(payload) {
     normalized.revision = Math.floor(normalized.revision);
   }
 
+  if (typeof normalized.agent_id === 'string') {
+    normalized.agent_id = normalized.agent_id.trim();
+    if (normalized.agent_id === '') {
+      delete normalized.agent_id;
+    }
+  } else if (normalized.agent_id !== undefined) {
+    delete normalized.agent_id;
+  }
+
+  if (typeof normalized.agent_label === 'string') {
+    normalized.agent_label = normalized.agent_label.trim();
+    if (normalized.agent_label === '') {
+      delete normalized.agent_label;
+    }
+  } else if (normalized.agent_label !== undefined) {
+    delete normalized.agent_label;
+  }
+
   return normalized;
 }
 
@@ -211,6 +231,8 @@ function toSayResultPayload(payload, result, reasonOverride = null) {
     v: 1,
     type: 'say_result',
     session_id: normalizeSessionId(payload),
+    ...(typeof payload?.agent_id === 'string' ? { agent_id: payload.agent_id } : {}),
+    ...(typeof payload?.agent_label === 'string' ? { agent_label: payload.agent_label } : {}),
     utterance_id: typeof payload?.utterance_id === 'string' ? payload.utterance_id : null,
     message_id: typeof payload?.message_id === 'string' ? payload.message_id : null,
     revision: Number.isFinite(payload?.revision) ? Math.floor(payload.revision) : null,
@@ -317,18 +339,23 @@ const server = await startFaceWebSocketServer({
 liveServer = server;
 
 try {
-  const reconcileResult = await agentLifecycleRuntime.reconcileAgents({
-    recreate_missing_panes: true
-  });
-  const recreated = reconcileResult.results.filter((item) => item.disposition === 'recreated').length;
-  const missing = reconcileResult.results.filter((item) => item.disposition === 'missing').length;
-  if (recreated > 0 || missing > 0) {
+  const cleanupResult = await agentLifecycleRuntime.cleanupAgentsOnStartup();
+  const deleted = cleanupResult.results.filter((item) => item.disposition === 'deleted').length;
+  const purged = cleanupResult.results.filter((item) => item.disposition === 'purged_hidden' || item.disposition === 'purged_state_only').length;
+  const failed = cleanupResult.results.filter((item) => item.disposition === 'failed').length;
+  const orphanAssignments = Number.isFinite(cleanupResult.orphan_assignments?.removed_count)
+    ? cleanupResult.orphan_assignments.removed_count
+    : 0;
+  const orphanInbox =
+    (Number.isFinite(cleanupResult.orphan_inbox?.removed?.missions) ? cleanupResult.orphan_inbox.removed.missions : 0)
+    + (Number.isFinite(cleanupResult.orphan_inbox?.removed?.reports) ? cleanupResult.orphan_inbox.removed.reports : 0);
+  if (deleted > 0 || purged > 0 || failed > 0 || orphanAssignments > 0 || orphanInbox > 0) {
     console.info(
-      `[face-app] agent reconcile: recreated=${recreated} missing=${missing} total=${reconcileResult.results.length}`
+      `[face-app] startup helper cleanup: deleted=${deleted} purged=${purged} failed=${failed} assignments=${orphanAssignments} inbox=${orphanInbox} total=${cleanupResult.results.length}`
     );
   }
 } catch (error) {
-  console.warn(`[face-app] agent reconcile failed: ${error.message}`);
+  console.warn(`[face-app] startup helper cleanup failed: ${error.message}`);
 }
 
 operatorRealtimeAsrProxy = createOperatorRealtimeAsrProxy({

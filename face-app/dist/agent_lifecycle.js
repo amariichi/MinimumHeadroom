@@ -78,6 +78,19 @@ function sanitizeBranchSegment(value, fallback) {
   return source.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+/, '').replace(/-+$/, '') || fallback;
 }
 
+function resolveRequestedAgentId(input = {}) {
+  const id = asNonEmptyString(input.id);
+  const agentId = asNonEmptyString(input.agent_id);
+  if (id && agentId && id !== agentId) {
+    throw createLifecycleError('invalid_request', 'id and agent_id must match when both are provided');
+  }
+  return id ?? agentId;
+}
+
+function shellEscapeSingle(value) {
+  return `'${String(value ?? '').replace(/'/g, `'\\''`)}'`;
+}
+
 function stripAnsi(value) {
   if (typeof value !== 'string' || value === '') {
     return '';
@@ -313,6 +326,8 @@ export function createAgentLifecycleRuntime(options = {}) {
   if (!stateStore || typeof stateStore.getState !== 'function') {
     throw new Error('stateStore is required');
   }
+  const assignmentStateStore = options.assignmentStateStore ?? null;
+  const ownerInboxStateStore = options.ownerInboxStateStore ?? null;
 
   const log = toLogger(options.log ?? console);
   const now = typeof options.now === 'function' ? options.now : Date.now;
@@ -343,6 +358,41 @@ export function createAgentLifecycleRuntime(options = {}) {
 
   function listAgents(optionsInput = {}) {
     return stateStore.listAgents(optionsInput);
+  }
+
+  function generateReadableAgentId() {
+    const existingIds = new Set(
+      stateStore.listAgents({ scope: 'all' }).map((agent) => asNonEmptyString(agent?.id)).filter(Boolean)
+    );
+    for (let index = 1; index <= 9_999; index += 1) {
+      const candidate = `helper-${index}`;
+      if (!existingIds.has(candidate)) {
+        return candidate;
+      }
+    }
+    return randomUUID();
+  }
+
+  function purgeHelperRecords(filters = {}) {
+    const streamId = asNonEmptyString(filters.stream_id);
+    const agentId = asNonEmptyString(filters.agent_id);
+    const assignmentResult = typeof assignmentStateStore?.purgeAssignments === 'function'
+      ? assignmentStateStore.purgeAssignments({
+          stream_id: streamId,
+          agent_id: agentId
+        })
+      : { ok: true, removed_count: 0 };
+    const inboxResult = typeof ownerInboxStateStore?.purgeRecords === 'function'
+      ? ownerInboxStateStore.purgeRecords({
+          stream_id: streamId,
+          from_agent_id: agentId
+        })
+      : { ok: true, removed: { streams: 0, missions: 0, reports: 0 } };
+    return {
+      ok: true,
+      assignments: assignmentResult,
+      inbox: inboxResult
+    };
   }
 
   function getAgentStateOrThrow(agentId) {
@@ -449,6 +499,19 @@ export function createAgentLifecycleRuntime(options = {}) {
     return { paneId, windowName };
   }
 
+  function buildAgentLaunchCommand(baseCommand, options = {}) {
+    const command = asNonEmptyString(baseCommand) ?? defaultAgentCommand;
+    const envEntries = [
+      ['MH_FACE_AGENT_ID', asNonEmptyString(options.agentId)],
+      ['MH_FACE_AGENT_LABEL', asNonEmptyString(options.agentLabel)]
+    ].filter(([, value]) => value);
+    if (envEntries.length === 0) {
+      return command;
+    }
+    const envPrefix = envEntries.map(([key, value]) => `${key}=${shellEscapeSingle(value)}`).join(' ');
+    return `env ${envPrefix} ${command}`;
+  }
+
   function resolveDefaultWorktreePath(agentId) {
     return path.resolve(worktreesRoot, sanitizeBranchSegment(agentId, 'agent'));
   }
@@ -486,7 +549,7 @@ export function createAgentLifecycleRuntime(options = {}) {
   }
 
   async function addAgent(input = {}) {
-    const agentId = asNonEmptyString(input.id) ?? randomUUID();
+    const agentId = resolveRequestedAgentId(input) ?? generateReadableAgentId();
     const sessionId = asNonEmptyString(input.session_id) ?? agentId;
     const sourceRepoPath = resolveRepoPath(input.source_repo_path);
     const targetRepoRoot = normalizeRepoPath(input.target_repo_root) ?? sourceRepoPath ?? activeTargetRepoRoot;
@@ -499,6 +562,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     const createTmux = normalizeBoolean(input.create_tmux, true);
     let agentCommand = asNonEmptyString(input.agent_cmd) ?? defaultAgentCommand;
     const permissionPreset = PERMISSION_PRESETS.has(input.permission_preset) ? input.permission_preset : null;
+    let launchCommand = null;
     let runCwd = worktreePath;
 
     let worktreeCreated = false;
@@ -542,11 +606,16 @@ export function createAgentLifecycleRuntime(options = {}) {
       }
     }
 
+    launchCommand = buildAgentLaunchCommand(agentCommand, {
+      agentId,
+      agentLabel: agentId
+    });
+
     if (createTmux) {
       const pane = await startTmuxAgentPane({
         agentId,
         cwd: runCwd,
-        command: agentCommand
+        command: launchCommand
       });
       paneCreated = true;
       paneId = pane.paneId;
@@ -556,6 +625,8 @@ export function createAgentLifecycleRuntime(options = {}) {
       const result = stateStore.addAgent({
         id: agentId,
         session_id: sessionId,
+        agent_cmd: agentCommand,
+        launch_command: launchCommand,
         status: 'active',
         slot,
         stream_id: streamId,
@@ -1314,13 +1385,20 @@ export function createAgentLifecycleRuntime(options = {}) {
       }
 
       try {
+        const baseAgentCommand = asNonEmptyString(listedAgent.agent_cmd) ?? defaultAgentCommand;
+        const launchCommand = asNonEmptyString(listedAgent.launch_command) ?? buildAgentLaunchCommand(baseAgentCommand, {
+          agentId,
+          agentLabel: agentId
+        });
         const pane = await startTmuxAgentPane({
           agentId,
           cwd: worktreePath,
-          command: defaultAgentCommand
+          command: launchCommand
         });
         stateStore.updateAgentMetadata(agentId, {
-          pane_id: pane.paneId
+          pane_id: pane.paneId,
+          agent_cmd: baseAgentCommand,
+          launch_command: launchCommand
         });
         const result = stateStore.setAgentStatus(agentId, 'active', {
           message: 'agent restored after startup',
@@ -1354,8 +1432,10 @@ export function createAgentLifecycleRuntime(options = {}) {
     };
   }
 
-  async function deleteAgent(agentId) {
+  async function deleteAgent(agentId, input = {}) {
+    const purgeRelatedState = input?.purge_related_state !== false;
     let agent = getAgentStateOrThrow(agentId);
+    const streamId = asNonEmptyString(agent.stream_id);
 
     if (asNonEmptyString(agent.pane_id)) {
       const paneAvailable = await paneExists(agent.pane_id);
@@ -1380,10 +1460,75 @@ export function createAgentLifecycleRuntime(options = {}) {
 
     agent = getAgentStateOrThrow(agent.id);
     const purged = stateStore.purgeAgent(agent.id);
+    const related = purgeRelatedState ? purgeHelperRecords({
+      stream_id: streamId,
+      agent_id: agent.id
+    }) : null;
     return {
       ...purged,
       action: 'delete',
-      deleted_path: deletedPath
+      deleted_path: deletedPath,
+      related
+    };
+  }
+
+  async function cleanupAgentsOnStartup() {
+    const agents = stateStore.listAgents({ scope: 'all' });
+    const results = [];
+
+    for (const agent of agents) {
+      const streamId = asNonEmptyString(agent.stream_id);
+      if (streamId === activeStreamId) {
+        try {
+          const deleted = await deleteAgent(agent.id);
+          results.push({
+            agent_id: agent.id,
+            stream_id: streamId,
+            disposition: 'deleted',
+            result: deleted
+          });
+          continue;
+        } catch (error) {
+          if (error?.code !== 'external_delete_forbidden') {
+            results.push({
+              agent_id: agent.id,
+              stream_id: streamId,
+              disposition: 'failed',
+              error: error.message
+            });
+            continue;
+          }
+        }
+      }
+
+      const purged = stateStore.purgeAgent(agent.id, { force: true });
+      const related = purgeHelperRecords({
+        stream_id: streamId,
+        agent_id: agent.id
+      });
+      results.push({
+        agent_id: agent.id,
+        stream_id: streamId,
+        disposition: streamId === activeStreamId ? 'purged_state_only' : 'purged_hidden',
+        result: purged,
+        related
+      });
+    }
+
+    const orphanAssignments = typeof assignmentStateStore?.purgeAssignments === 'function'
+      ? assignmentStateStore.purgeAssignments({})
+      : { ok: true, removed_count: 0 };
+    const orphanInbox = typeof ownerInboxStateStore?.purgeRecords === 'function'
+      ? ownerInboxStateStore.purgeRecords({})
+      : { ok: true, removed: { streams: 0, missions: 0, reports: 0 } };
+
+    return {
+      ok: true,
+      action: 'startup_cleanup',
+      results,
+      orphan_assignments: orphanAssignments,
+      orphan_inbox: orphanInbox,
+      state: stateStore.getState()
     };
   }
 
@@ -1467,7 +1612,8 @@ export function createAgentLifecycleRuntime(options = {}) {
     addAgent,
     dispatchAgentAction,
     injectAgent,
-    reconcileAgents
+    reconcileAgents,
+    cleanupAgentsOnStartup
   };
 }
 

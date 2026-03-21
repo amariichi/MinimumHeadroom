@@ -40,8 +40,11 @@ import {
 import { resolveAgentsFromActionResult } from './agent_dashboard_apply_result.js';
 import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
 import { summarizeAgentActionFailure, summarizeAgentActionSuccess } from './agent_dashboard_action_feedback.js';
+import { collectObservedDashboardAgentIdsToPrune, resolveObservedAgentUpdatedAt } from './agent_dashboard_observed.js';
 import {
+  deriveObservedAgentFromPayload,
   deriveAgentTransientUpdate,
+  matchesOperatorIdentity,
   resolveAgentIdForPane,
   shouldCountPayloadAsAgentActivity
 } from './agent_dashboard_feed.js';
@@ -387,6 +390,7 @@ let agentDashboardState = {
   activeStreamId: null,
   activeTargetRepoRoot: null,
   hiddenAgentCount: 0,
+  updatedAt: 0,
   loaded: false
 };
 let ownerInboxViewState = {
@@ -420,6 +424,7 @@ let agentAssignmentViewState = {
   }
 };
 const agentTransientStateById = new Map();
+const observedDashboardAgentsById = new Map();
 const operatorEscRecoveryTracker = createTapBurstTrigger({
   requiredCount: OPERATOR_ESC_RECOVERY_REQUIRED_TAPS,
   windowMs: OPERATOR_ESC_RECOVERY_WINDOW_MS
@@ -560,6 +565,15 @@ function resolveOperatorSessionId() {
     return operatorBridgeSessionId;
   }
   return OPERATOR_BRIDGE_SESSION_ID_DEFAULT;
+}
+
+function getOperatorIdentityAliases() {
+  return [
+    OPERATOR_DASHBOARD_AGENT_ID,
+    OPERATOR_DASHBOARD_AGENT_LABEL,
+    OPERATOR_BRIDGE_SESSION_ID_DEFAULT,
+    resolveOperatorSessionId()
+  ];
 }
 
 function normalizeOperatorUiMode(value) {
@@ -778,12 +792,88 @@ function normalizeDashboardStatePayload(rawState) {
       : null,
     hiddenAgentCount: Number.isFinite(rawState.hidden_agent_count)
       ? Math.max(0, Math.floor(rawState.hidden_agent_count))
+      : 0,
+    updatedAt: Number.isFinite(rawState.updated_at)
+      ? Math.max(0, Math.floor(rawState.updated_at))
       : 0
   };
 }
 
-function getTrackedDashboardAgents() {
-  return agentDashboardState.agents;
+function pruneObservedDashboardAgents(nowMs = Date.now()) {
+  const idsToPrune = collectObservedDashboardAgentIdsToPrune(
+    Array.from(observedDashboardAgentsById.entries()),
+    agentDashboardState.agents,
+    {
+      authoritativeUpdatedAt: agentDashboardState.updatedAt,
+      nowMs,
+      retentionMs: AGENT_TILE_MIRROR_ACTIVITY_RETENTION_MS
+    }
+  );
+  for (const agentId of idsToPrune) {
+    observedDashboardAgentsById.delete(agentId);
+  }
+}
+
+function forgetDashboardAgent(agentId) {
+  const normalizedAgentId = typeof agentId === 'string' && agentId.trim() !== '' ? agentId.trim() : null;
+  if (!normalizedAgentId || isOperatorDashboardAgentId(normalizedAgentId)) {
+    return;
+  }
+  observedDashboardAgentsById.delete(normalizedAgentId);
+  agentTransientStateById.delete(normalizedAgentId);
+  agentTileFocusSuppressUntilById.delete(normalizedAgentId);
+  agentFaceRuntimeById.delete(normalizedAgentId);
+  if (operatorFocusPending?.agentId === normalizedAgentId) {
+    clearPendingOperatorFocus();
+  }
+  if (agentDashboardState.selectedAgentId === normalizedAgentId) {
+    operatorMirrorPaneId = null;
+    agentDashboardState.selectedAgentId = operatorPanelEnabled ? OPERATOR_DASHBOARD_AGENT_ID : null;
+  }
+}
+
+function upsertObservedDashboardAgentFromPayload(payload, nowMs = Date.now()) {
+  const observed = deriveObservedAgentFromPayload(payload, {
+    operatorAgentId: OPERATOR_DASHBOARD_AGENT_ID
+  });
+  if (!observed) {
+    return null;
+  }
+  const existing = observedDashboardAgentsById.get(observed.id) ?? null;
+  observedDashboardAgentsById.set(observed.id, {
+    ...existing,
+    ...observed,
+    label: observed.label ?? existing?.label ?? observed.id,
+    session_id: observed.session_id ?? existing?.session_id ?? null,
+    updated_at: resolveObservedAgentUpdatedAt(payload, nowMs),
+    provisional: true
+  });
+  return observed.id;
+}
+
+function getTrackedDashboardAgents(nowMs = Date.now()) {
+  pruneObservedDashboardAgents(nowMs);
+  if (observedDashboardAgentsById.size === 0) {
+    return agentDashboardState.agents;
+  }
+
+  const mergedById = new Map();
+  for (const agent of agentDashboardState.agents) {
+    const observed = observedDashboardAgentsById.get(agent.id) ?? null;
+    mergedById.set(agent.id, {
+      ...observed,
+      ...agent,
+      label: agent.label ?? observed?.label ?? agent.id,
+      session_id: agent.session_id ?? observed?.session_id ?? null,
+      provisional: false
+    });
+  }
+  for (const [agentId, observed] of observedDashboardAgentsById.entries()) {
+    if (!mergedById.has(agentId)) {
+      mergedById.set(agentId, observed);
+    }
+  }
+  return sortDashboardAgents(Array.from(mergedById.values()));
 }
 
 function getOperatorDashboardAdditionalCount() {
@@ -808,7 +898,7 @@ function getCurrentDashboardAgent() {
       last_message: operatorRecoverPending ? 'recovering operator...' : 'primary operator'
     };
   }
-  return agentDashboardState.agents.find((agent) => agent.id === agentDashboardState.selectedAgentId) ?? null;
+  return getTrackedDashboardAgents().find((agent) => agent.id === agentDashboardState.selectedAgentId) ?? null;
 }
 
 function createEmptyOwnerInboxViewState() {
@@ -976,7 +1066,7 @@ function syncSelectedDashboardAgentToMirrorPane() {
   if (!operatorMirrorPaneId) {
     return;
   }
-  const focusedAgent = agentDashboardState.agents.find((agent) => agent.pane_id === operatorMirrorPaneId) ?? null;
+  const focusedAgent = getTrackedDashboardAgents().find((agent) => agent.pane_id === operatorMirrorPaneId) ?? null;
   agentDashboardState.selectedAgentId = focusedAgent ? focusedAgent.id : OPERATOR_DASHBOARD_AGENT_ID;
 }
 
@@ -1065,7 +1155,7 @@ function ensureSelectedDashboardAgent() {
     if (agentDashboardState.selectedAgentId === OPERATOR_DASHBOARD_AGENT_ID && operatorPanelEnabled) {
       return;
     }
-    const existing = agentDashboardState.agents.find((agent) => agent.id === agentDashboardState.selectedAgentId);
+    const existing = getTrackedDashboardAgents().find((agent) => agent.id === agentDashboardState.selectedAgentId);
     if (existing) {
       return;
     }
@@ -1074,7 +1164,7 @@ function ensureSelectedDashboardAgent() {
     agentDashboardState.selectedAgentId = OPERATOR_DASHBOARD_AGENT_ID;
     return;
   }
-  const fallback = getTrackedDashboardAgents()[0] ?? agentDashboardState.agents[0] ?? null;
+  const fallback = getTrackedDashboardAgents()[0] ?? null;
   agentDashboardState.selectedAgentId = fallback?.id ?? null;
 }
 
@@ -1085,7 +1175,7 @@ function getAgentFaceIdentitySource(agentId) {
       session_id: resolveOperatorSessionId()
     };
   }
-  return agentDashboardState.agents.find((agent) => agent.id === agentId) ?? { id: agentId };
+  return getTrackedDashboardAgents().find((agent) => agent.id === agentId) ?? { id: agentId };
 }
 
 function getOrCreateAgentFaceRuntime(agentId, nowMs = Date.now()) {
@@ -1110,7 +1200,7 @@ function getOrCreateAgentFaceRuntime(agentId, nowMs = Date.now()) {
 
 function syncKnownAgentFaceRuntimes(nowMs = Date.now()) {
   getOrCreateAgentFaceRuntime(OPERATOR_DASHBOARD_AGENT_ID, nowMs);
-  for (const agent of agentDashboardState.agents) {
+  for (const agent of getTrackedDashboardAgents(nowMs)) {
     getOrCreateAgentFaceRuntime(agent.id, nowMs);
   }
 }
@@ -1118,7 +1208,8 @@ function syncKnownAgentFaceRuntimes(nowMs = Date.now()) {
 function resolvePayloadAgentIdForFace(payload) {
   return resolveFaceAgentId(payload, agentDashboardState.agents, {
     operatorAgentId: OPERATOR_DASHBOARD_AGENT_ID,
-    operatorSessionId: resolveOperatorSessionId()
+    operatorSessionId: resolveOperatorSessionId(),
+    operatorAliases: getOperatorIdentityAliases()
   });
 }
 
@@ -1424,8 +1515,11 @@ function isPayloadFallbackMatch(payload) {
     return false;
   }
   const payloadSessionId = typeof payload?.session_id === 'string' ? payload.session_id.trim() : '';
-  const operatorSessionId = resolveOperatorSessionId();
-  return payloadSessionId !== '' && payloadSessionId !== operatorSessionId;
+  return payloadSessionId !== '' && !matchesOperatorIdentity(payloadSessionId, {
+    operatorAgentId: OPERATOR_DASHBOARD_AGENT_ID,
+    operatorSessionId: resolveOperatorSessionId(),
+    operatorAliases: getOperatorIdentityAliases()
+  });
 }
 
 function trackAgentTileFromPayload(payload) {
@@ -1659,6 +1753,9 @@ function bindAgentActionButton(button, agent, action, options = {}) {
       if (typeof feedback.tileMessage === 'string' && feedback.tileMessage.trim() !== '') {
         setAgentTransientMessage(agent.id, feedback.tileMessage);
       }
+      if (action === 'delete') {
+        forgetDashboardAgent(agent.id);
+      }
       const nextAgents = resolveAgentsFromActionResult(agentDashboardState.agents, payload?.result);
       if (nextAgents.length !== agentDashboardState.agents.length || nextAgents !== agentDashboardState.agents) {
         agentDashboardState.agents = nextAgents;
@@ -1788,7 +1885,8 @@ function renderAgentDashboard() {
     drag: operatorRuntime.drag
   });
 
-  for (const agent of agentDashboardState.agents) {
+  const dashboardAgents = getTrackedDashboardAgents(Date.now());
+  for (const agent of dashboardAgents) {
     const nowMs = Date.now();
     const transient = agentTransientStateById.get(agent.id) ?? null;
     const toneOptions = resolveAgentTransientToneOptions(agent.id, agent, nowMs);
@@ -1814,8 +1912,19 @@ function renderAgentDashboard() {
     const focusButton = document.createElement('button');
     focusButton.type = 'button';
     focusButton.className = 'agent-tile-focus';
-    focusButton.setAttribute('aria-label', `Focus ${agent.id}`);
+    const agentLabel = agent.label ?? agent.id;
+    const canFocusAgent = typeof agent.pane_id === 'string' && agent.pane_id.trim() !== '';
+    focusButton.setAttribute('aria-label', `Focus ${agentLabel}`);
+    if (!canFocusAgent) {
+      focusButton.disabled = true;
+      focusButton.title = 'Awaiting helper registration';
+    }
     focusButton.addEventListener('click', (event) => {
+      if (!canFocusAgent) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (shouldSuppressAgentTileFocus(agent.id)) {
         event.preventDefault();
         event.stopPropagation();
@@ -1835,7 +1944,7 @@ function renderAgentDashboard() {
     bindAgentTileFaceDrag(faceSlot, agent.id);
     const idEl = document.createElement('span');
     idEl.className = 'agent-tile-id';
-    idEl.textContent = agent.id;
+    idEl.textContent = agentLabel;
     const statusEl = document.createElement('span');
     statusEl.className = 'agent-tile-status';
     statusEl.textContent = summarizeAgentOperationalState(operationalState);
@@ -1858,10 +1967,12 @@ function renderAgentDashboard() {
 
     const actions = document.createElement('div');
     actions.className = 'agent-tile-actions';
-    for (const item of listAgentLifecycleActions(agent)) {
-      const button = createDashboardActionButton(agent, item.label, item.action, () => {});
-      bindAgentActionButton(button, agent, item.action, { stopPropagation: true });
-      actions.appendChild(button);
+    if (!agent.provisional) {
+      for (const item of listAgentLifecycleActions(agent)) {
+        const button = createDashboardActionButton(agent, item.label, item.action, () => {});
+        bindAgentActionButton(button, agent, item.action, { stopPropagation: true });
+        actions.appendChild(button);
+      }
     }
 
     focusButton.append(faceSlot, header, sessionEl, messageEl);
@@ -1888,7 +1999,8 @@ function renderOperatorMobileAgentList() {
   if (operatorAgentListAddButtonEl) {
     operatorAgentListAddButtonEl.disabled = agentDashboardAddPending;
   }
-  const shouldShow = shouldShowMobileAgentList(agentDashboardState.agents, {
+  const trackedAgents = getTrackedDashboardAgents(Date.now());
+  const shouldShow = shouldShowMobileAgentList(trackedAgents, {
     isMobileUi: operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE,
     operatorPanelEnabled,
     pickerOpen: operatorAgentPickerOpen
@@ -1941,7 +2053,7 @@ function renderOperatorMobileAgentList() {
   operatorItem.append(operatorItemFocus);
   operatorAgentListItemsEl.appendChild(operatorItem);
 
-  for (const agent of agentDashboardState.agents) {
+  for (const agent of trackedAgents) {
     const transient = agentTransientStateById.get(agent.id) ?? null;
     const nowMs = Date.now();
     const ownerInboxSummary = getOwnerInboxAgentSummary(agent.id);
@@ -1970,8 +2082,17 @@ function renderOperatorMobileAgentList() {
     const itemFocus = document.createElement('button');
     itemFocus.type = 'button';
     itemFocus.className = 'operator-agent-item-focus';
-    itemFocus.setAttribute('aria-label', `Focus ${agent.id}`);
+    const agentLabel = agent.label ?? agent.id;
+    const canFocusAgent = typeof agent.pane_id === 'string' && agent.pane_id.trim() !== '';
+    itemFocus.setAttribute('aria-label', `Focus ${agentLabel}`);
+    if (!canFocusAgent) {
+      itemFocus.disabled = true;
+      itemFocus.title = 'Awaiting helper registration';
+    }
     itemFocus.addEventListener('click', () => {
+      if (!canFocusAgent) {
+        return;
+      }
       void focusDashboardAgent(agent.id).catch((error) => {
         setAgentDashboardStatus(error.message, 'warn');
         renderOperatorMobileAgentList();
@@ -1982,7 +2103,7 @@ function renderOperatorMobileAgentList() {
     header.className = 'operator-agent-item-header';
     const idEl = document.createElement('span');
     idEl.className = 'operator-agent-item-id';
-    idEl.textContent = agent.id;
+    idEl.textContent = agentLabel;
     const statusEl = document.createElement('span');
     statusEl.className = 'operator-agent-item-status';
     statusEl.textContent = summarizeAgentOperationalState(operationalState);
@@ -1994,10 +2115,12 @@ function renderOperatorMobileAgentList() {
 
     const actions = document.createElement('div');
     actions.className = 'operator-agent-item-actions';
-    for (const actionItem of listAgentLifecycleActions(agent)) {
-      const button = createDashboardActionButton(agent, actionItem.label, actionItem.action, () => {});
-      bindAgentActionButton(button, agent, actionItem.action, { stopPropagation: true });
-      actions.appendChild(button);
+    if (!agent.provisional) {
+      for (const actionItem of listAgentLifecycleActions(agent)) {
+        const button = createDashboardActionButton(agent, actionItem.label, actionItem.action, () => {});
+        bindAgentActionButton(button, agent, actionItem.action, { stopPropagation: true });
+        actions.appendChild(button);
+      }
     }
     itemFocus.append(header, messageEl);
     item.append(itemFocus, actions);
@@ -2028,6 +2151,7 @@ async function refreshAgentDashboardState(options = {}) {
     agentDashboardState.activeStreamId = nextDashboardState.activeStreamId;
     agentDashboardState.activeTargetRepoRoot = nextDashboardState.activeTargetRepoRoot;
     agentDashboardState.hiddenAgentCount = nextDashboardState.hiddenAgentCount;
+    agentDashboardState.updatedAt = nextDashboardState.updatedAt;
     ownerInboxViewState = nextOwnerInboxState ?? createEmptyOwnerInboxViewState();
     agentAssignmentViewState = nextAssignmentState ?? createEmptyAgentAssignmentViewState();
     agentDashboardState.loaded = true;
@@ -3206,11 +3330,19 @@ function resolvePayloadSessionId(payload) {
   return sessionId;
 }
 
+function resolvePayloadIdentityKey(payload) {
+  const agentId = typeof payload?.agent_id === 'string' && payload.agent_id.trim() !== '' ? payload.agent_id.trim() : null;
+  if (agentId) {
+    return `agent:${agentId}`;
+  }
+  return `session:${resolvePayloadSessionId(payload)}`;
+}
+
 function shouldUseLatestPayload(payload, latestBySession) {
-  const sessionId = resolvePayloadSessionId(payload);
+  const identityKey = resolvePayloadIdentityKey(payload);
   const revision = resolvePayloadRevision(payload);
   const messageId = resolvePayloadMessageId(payload);
-  const latest = latestBySession.get(sessionId);
+  const latest = latestBySession.get(identityKey);
 
   if (latest && Number.isFinite(latest.revision)) {
     if (revision < latest.revision) {
@@ -3221,7 +3353,7 @@ function shouldUseLatestPayload(payload, latestBySession) {
     }
   }
 
-  latestBySession.set(sessionId, { revision, messageId });
+  latestBySession.set(identityKey, { revision, messageId });
   return true;
 }
 
@@ -4099,6 +4231,7 @@ function handlePayload(payload) {
     return;
   }
 
+  upsertObservedDashboardAgentFromPayload(payload, Date.now());
   appendEvent(payload);
   trackAgentTileFromPayload(payload);
   applyPayloadToFaceRuntimeStore(payload, Date.now());

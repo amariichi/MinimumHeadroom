@@ -26,6 +26,29 @@ test('resolveFaceAgentId maps helper agents then operator session', () => {
     }),
     '__operator__'
   );
+  assert.equal(
+    resolveFaceAgentId({ agent_id: 'helper-ephemeral', session_id: 'default' }, agents, {
+      operatorAgentId: '__operator__',
+      operatorSessionId: 'default'
+    }),
+    'helper-ephemeral'
+  );
+  assert.equal(
+    resolveFaceAgentId({ session_id: '__operator__' }, agents, {
+      operatorAgentId: '__operator__',
+      operatorSessionId: 'default',
+      operatorAliases: ['operator', '__operator__']
+    }),
+    '__operator__'
+  );
+  assert.equal(
+    resolveFaceAgentId({ agent_id: 'operator', session_id: 'different' }, agents, {
+      operatorAgentId: '__operator__',
+      operatorSessionId: 'default',
+      operatorAliases: ['operator', '__operator__']
+    }),
+    '__operator__'
+  );
 });
 
 test('applyPayloadToAgentFaceRuntime updates event and speech state', () => {

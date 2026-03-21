@@ -41,13 +41,15 @@ function normalizeAssignmentReportKind(value) {
 export function normalizeDashboardAgent(rawAgent = {}, index = 0) {
   return {
     id: asNonEmptyString(rawAgent?.id) ?? `agent-${index + 1}`,
+    label: asNonEmptyString(rawAgent?.label),
     status: normalizeAgentStatus(rawAgent?.status),
     slot: asInteger(rawAgent?.slot, null, 0),
     pane_id: asNonEmptyString(rawAgent?.pane_id),
     session_id: asNonEmptyString(rawAgent?.session_id),
     last_message: asNonEmptyString(rawAgent?.last_message),
     message_source: asNonEmptyString(rawAgent?.message_source),
-    updated_at: asInteger(rawAgent?.updated_at, 0, 0)
+    updated_at: asInteger(rawAgent?.updated_at, 0, 0),
+    provisional: rawAgent?.provisional === true
   };
 }
 

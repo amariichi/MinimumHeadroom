@@ -211,7 +211,7 @@ test('face-app e2e helper creation inherits configured external source repo defa
   }
 });
 
-test('face-app e2e only exposes agents from the active stream', async () => {
+test('face-app e2e startup cleanup removes helper state before serving agents', async () => {
   const repoA = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-face-app-repo-a-'));
   const repoB = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-face-app-repo-b-'));
   const { child, baseUrl, stateRoot } = await startFaceAppE2e({
@@ -250,11 +250,8 @@ test('face-app e2e only exposes agents from the active stream', async () => {
     assert.equal(stateResponse.ok, true);
     const statePayload = await stateResponse.json();
     assert.equal(statePayload?.state?.active_stream_id, `repo:${repoB}`);
-    assert.equal(statePayload?.state?.hidden_agent_count, 1);
-    assert.deepEqual(
-      (statePayload?.state?.agents ?? []).map((agent) => agent.id),
-      ['repo-b-helper']
-    );
+    assert.equal(statePayload?.state?.hidden_agent_count, 0);
+    assert.deepEqual(statePayload?.state?.agents ?? [], []);
   } finally {
     await stopChild(child);
     fs.rmSync(stateRoot, { recursive: true, force: true });

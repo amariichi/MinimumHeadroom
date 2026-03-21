@@ -279,6 +279,42 @@ test('agent assignment store promotes late reports after timeout to acked_late',
   cleanup(rootDir);
 });
 
+test('agent assignment store purges helper records by stream and agent', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-purge-');
+  const store = createAgentAssignmentStateStore({
+    statePath,
+    now: createClock(),
+    log: quietLog
+  });
+  store.load();
+
+  store.upsertAssignment({
+    stream_id: 'repo:/tmp/target-a',
+    mission_id: 'mission-a',
+    owner_agent_id: '__operator__',
+    agent_id: 'helper-a',
+    goal: 'Keep none'
+  });
+  store.upsertAssignment({
+    stream_id: 'repo:/tmp/target-b',
+    mission_id: 'mission-b',
+    owner_agent_id: '__operator__',
+    agent_id: 'helper-b',
+    goal: 'Keep none'
+  });
+
+  const purged = store.purgeAssignments({
+    stream_id: 'repo:/tmp/target-a',
+    agent_id: 'helper-a'
+  });
+
+  assert.equal(purged.removed_count, 1);
+  assert.equal(store.listAssignments({ stream_id: 'repo:/tmp/target-a' }).length, 0);
+  assert.equal(store.listAssignments({ stream_id: 'repo:/tmp/target-b' }).length, 1);
+
+  cleanup(rootDir);
+});
+
 test('agent assignment view exposes a grace window before completion rescue is recommended', () => {
   const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-rescue-grace-');
   let tick = 1_700_460_000_000;

@@ -257,12 +257,13 @@ export function renderAssignmentPrompt(assignment, options = {}) {
   const protocolLines = [
     `1. Before reading repo files, skills, or running broad exploration, call the agent.report MCP tool (shown in some clients as minimum_headroom.agent_report) with stream_id=${assignment.stream_id}, mission_id=${assignment.mission_id}, owner_agent_id=${assignment.owner_agent_id}, from_agent_id=${assignment.agent_id}, kind=progress, summary='Mission accepted'.`,
     '2. Wait until that first report call succeeds.',
-    '3. If blocked or uncertain, send blocked or question to the owner instead of asking the user directly.',
-    '4. Inspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration unless blocked without them.',
-    '5. Send done or review_findings as soon as the current completion criteria are satisfied.',
-    '6. If this is a narrow review or investigation pass, return the first qualifying finding immediately instead of hunting for more.',
-    '7. If no qualifying finding appears within the stated scope or timebox, send done with a short no-findings summary instead of lingering.',
-    '8. After your final done/review_findings report, stop and wait for the owner.'
+    `3. face.event and face.say should inherit your helper identity automatically; if your client does not, include agent_id=${assignment.agent_id} manually so speech and status stay attributed to you.`,
+    '4. If blocked or uncertain, send blocked or question to the owner instead of asking the user directly.',
+    '5. Inspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration unless blocked without them.',
+    '6. Send done or review_findings as soon as the current completion criteria are satisfied.',
+    '7. If this is a narrow review or investigation pass, return the first qualifying finding immediately instead of hunting for more.',
+    '8. If no qualifying finding appears within the stated scope or timebox, send done with a short no-findings summary instead of lingering.',
+    '9. After your final done/review_findings report, stop and wait for the owner.'
   ];
   const shapingLines = [
     `- Stream root: ${streamRoot ?? '(not available)'}.`,

@@ -5,7 +5,9 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createAgentRuntimeStateStore } from '../../face-app/dist/agent_runtime_state.js';
+import { createAgentAssignmentStateStore } from '../../face-app/dist/agent_assignment_state.js';
 import { createAgentLifecycleApi, createAgentLifecycleRuntime, inferAgentType, buildPermissionConfig } from '../../face-app/dist/agent_lifecycle.js';
+import { createOwnerInboxStateStore } from '../../face-app/dist/owner_inbox_state.js';
 
 const quietLog = {
   info() {},
@@ -98,6 +100,8 @@ function createPasteInterceptor(onPaste) {
 function createRuntimeHarness(options = {}) {
   const repoRoot = createTempRoot('mh-agent-lifecycle-runtime-');
   const statePath = path.join(repoRoot, '.agent/runtime/agents-state.json');
+  const assignmentStatePath = path.join(repoRoot, '.agent/runtime/agent-assignment-state.json');
+  const ownerInboxStatePath = path.join(repoRoot, '.agent/runtime/owner-inbox-state.json');
   const activeTargetRepoRoot = options.activeTargetRepoRoot ?? repoRoot;
   const activeStreamId = options.activeStreamId ?? `repo:${activeTargetRepoRoot}`;
   const stateStore = createAgentRuntimeStateStore({
@@ -109,16 +113,33 @@ function createRuntimeHarness(options = {}) {
     log: quietLog
   });
   stateStore.load();
+  const assignmentStateStore = createAgentAssignmentStateStore({
+    repoRoot,
+    statePath: assignmentStatePath,
+    now: createClock(1_700_100_000_000),
+    log: quietLog
+  });
+  assignmentStateStore.load();
+  const ownerInboxStateStore = createOwnerInboxStateStore({
+    repoRoot,
+    statePath: ownerInboxStatePath,
+    now: createClock(1_700_200_000_000),
+    log: quietLog
+  });
+  ownerInboxStateStore.load();
 
   const commands = [];
   const focusCalls = [];
   const externalCommandRunner = typeof options.commandRunner === 'function' ? options.commandRunner : null;
   const runtime = createAgentLifecycleRuntime({
     stateStore,
+    assignmentStateStore,
+    ownerInboxStateStore,
     repoRoot,
     activeTargetRepoRoot,
     activeStreamId,
     defaultSourceRepoPath: options.defaultSourceRepoPath ?? '',
+    defaultAgentCommand: options.defaultAgentCommand ?? 'codex',
     tmuxEnabled: options.tmuxEnabled ?? true,
     worktreeEnabled: options.worktreeEnabled ?? true,
     allowExternalDelete: options.allowExternalDelete ?? false,
@@ -144,7 +165,7 @@ function createRuntimeHarness(options = {}) {
     log: quietLog
   });
 
-  return { repoRoot, stateStore, runtime, commands, focusCalls };
+  return { repoRoot, stateStore, assignmentStateStore, ownerInboxStateStore, runtime, commands, focusCalls };
 }
 
 test('agent lifecycle runtime adds agent without worktree/tmux orchestration', async () => {
@@ -163,6 +184,44 @@ test('agent lifecycle runtime adds agent without worktree/tmux orchestration', a
   assert.equal(result.orchestration.worktree_created, false);
   assert.equal(result.orchestration.pane_created, false);
   assert.equal(result.agent.branch.startsWith('agent/agent-a/'), true);
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime auto-generates readable helper ids when none are provided', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+
+  const first = await runtime.addAgent({
+    create_worktree: false,
+    create_tmux: false,
+    source_repo_path: repoRoot
+  });
+  const second = await runtime.addAgent({
+    create_worktree: false,
+    create_tmux: false,
+    source_repo_path: repoRoot
+  });
+
+  assert.equal(first.agent.id, 'helper-1');
+  assert.equal(first.agent.session_id, 'helper-1');
+  assert.equal(second.agent.id, 'helper-2');
+  assert.equal(second.agent.session_id, 'helper-2');
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime accepts agent_id as a spawn alias', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+
+  const result = await runtime.addAgent({
+    agent_id: 'review-readme-a',
+    create_worktree: false,
+    create_tmux: false,
+    source_repo_path: repoRoot
+  });
+
+  assert.equal(result.agent.id, 'review-readme-a');
+  assert.equal(result.agent.session_id, 'review-readme-a');
 
   cleanup(repoRoot);
 });
@@ -1071,6 +1130,154 @@ test('agent lifecycle runtime delete action marks stale pane as missing before p
   cleanup(repoRoot);
 });
 
+test('agent lifecycle runtime delete purges helper assignment and inbox records', async () => {
+  const { repoRoot, runtime, assignmentStateStore, ownerInboxStateStore } = createRuntimeHarness();
+
+  await runtime.addAgent({
+    id: 'agent-delete-state',
+    create_worktree: false,
+    create_tmux: false,
+    source_repo_path: repoRoot
+  });
+  assignmentStateStore.upsertAssignment({
+    stream_id: `repo:${repoRoot}`,
+    mission_id: 'mission-delete-state',
+    owner_agent_id: '__operator__',
+    agent_id: 'agent-delete-state',
+    goal: 'Delete helper state'
+  });
+  ownerInboxStateStore.submitReport({
+    stream_id: `repo:${repoRoot}`,
+    mission_id: 'mission-delete-state',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'agent-delete-state',
+    kind: 'done',
+    summary: 'Done',
+    report_id: 'report-delete-state'
+  });
+
+  const result = await runtime.dispatchAgentAction('agent-delete-state', 'delete', {});
+
+  assert.equal(result.ok, true);
+  assert.equal(result.related?.assignments?.removed_count, 1);
+  assert.equal(result.related?.inbox?.removed?.missions, 1);
+  assert.equal(result.related?.inbox?.removed?.reports, 1);
+  assert.equal(
+    assignmentStateStore.listAssignments({ stream_id: `repo:${repoRoot}` }).some((item) => item.agent_id === 'agent-delete-state'),
+    false
+  );
+  assert.equal(
+    ownerInboxStateStore.getInboxView({
+      stream_id: `repo:${repoRoot}`,
+      owner_agent_id: '__operator__',
+      include_resolved: true
+    }).reports.some((item) => item.from_agent_id === 'agent-delete-state'),
+    false
+  );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime startup cleanup deletes active helpers and purges leftover helper state', async () => {
+  const externalRepoRoot = createTempRoot('mh-agent-startup-hidden-');
+  const { repoRoot, runtime, stateStore, assignmentStateStore, ownerInboxStateStore, commands } = createRuntimeHarness({
+    allowExternalDelete: true,
+    commandRunner: async (command, args) => {
+      if (command === 'git' && args[1] === 'worktree' && args[2] === 'remove') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%94') {
+        return { stdout: '%94\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'kill-pane') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%45\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  const managedWorktree = path.join(repoRoot, '.agent/worktrees/agent-startup-clean');
+  fs.mkdirSync(managedWorktree, { recursive: true });
+
+  await runtime.addAgent({
+    id: 'agent-startup-clean',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%94',
+    worktree_path: managedWorktree,
+    source_repo_path: repoRoot
+  });
+  stateStore.addAgent({
+    id: 'hidden-ghost',
+    session_id: 'hidden-ghost',
+    source_repo_path: externalRepoRoot,
+    target_repo_root: externalRepoRoot,
+    stream_id: `repo:${externalRepoRoot}`,
+    worktree_path: path.join(externalRepoRoot, '.agent/worktrees/hidden-ghost'),
+    pane_id: null
+  });
+  assignmentStateStore.upsertAssignment({
+    stream_id: `repo:${repoRoot}`,
+    mission_id: 'mission-active',
+    owner_agent_id: '__operator__',
+    agent_id: 'agent-startup-clean',
+    goal: 'Clean active helper'
+  });
+  assignmentStateStore.upsertAssignment({
+    stream_id: `repo:${externalRepoRoot}`,
+    mission_id: 'mission-hidden',
+    owner_agent_id: '__operator__',
+    agent_id: 'hidden-ghost',
+    goal: 'Clean hidden helper'
+  });
+  ownerInboxStateStore.submitReport({
+    stream_id: `repo:${repoRoot}`,
+    mission_id: 'mission-active',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'agent-startup-clean',
+    kind: 'progress',
+    summary: 'Active helper state',
+    report_id: 'report-active'
+  });
+  ownerInboxStateStore.submitReport({
+    stream_id: `repo:${externalRepoRoot}`,
+    mission_id: 'mission-hidden',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'hidden-ghost',
+    kind: 'done',
+    summary: 'Hidden helper state',
+    report_id: 'report-hidden'
+  });
+
+  const result = await runtime.cleanupAgentsOnStartup();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results.some((item) => item.agent_id === 'agent-startup-clean' && item.disposition === 'deleted'), true);
+  assert.equal(result.results.some((item) => item.agent_id === 'hidden-ghost' && item.disposition === 'purged_hidden'), true);
+  assert.equal(runtime.getState({ scope: 'all' }).agents.length, 0);
+  assert.equal(assignmentStateStore.listAssignments({}).length, 0);
+  assert.equal(ownerInboxStateStore.getState().missions.length, 0);
+  assert.equal(ownerInboxStateStore.getState().reports.length, 0);
+  assert.equal(
+    commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'kill-pane' && entry[3] === '%94'),
+    true
+  );
+  assert.equal(
+    commands.some(
+      (entry) => entry[0] === 'git' && entry[3] === 'worktree' && entry[4] === 'remove' && entry[6] === managedWorktree
+    ),
+    true
+  );
+
+  cleanup(repoRoot);
+  cleanup(externalRepoRoot);
+});
+
 test('agent lifecycle runtime focus action emits focus callback and updates message', async () => {
   const { repoRoot, runtime, focusCalls } = createRuntimeHarness();
   await runtime.addAgent({
@@ -1285,6 +1492,44 @@ test('agent lifecycle api serves state and add endpoints', async () => {
   assert.equal(listSnapshot.statusCode, 200);
   assert.equal(Array.isArray(listSnapshot.body?.agents), true);
   assert.equal(listSnapshot.body?.agents.some((agent) => agent.id === 'agent-http'), true);
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle api accepts agent_id as an add alias and auto-generates readable ids', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+  const api = createAgentLifecycleApi({ runtime });
+
+  const aliasReq = createRequest({
+    method: 'POST',
+    url: '/api/agents/add',
+    body: {
+      agent_id: 'agent-http-alias',
+      create_worktree: false,
+      create_tmux: false
+    }
+  });
+  const aliasRes = createResponseCapture();
+  await api.handleHttpRequest(aliasReq, aliasRes);
+  const aliasSnapshot = aliasRes.snapshot();
+
+  assert.equal(aliasSnapshot.statusCode, 200);
+  assert.equal(aliasSnapshot.body?.result?.agent?.id, 'agent-http-alias');
+
+  const autoReq = createRequest({
+    method: 'POST',
+    url: '/api/agents/add',
+    body: {
+      create_worktree: false,
+      create_tmux: false
+    }
+  });
+  const autoRes = createResponseCapture();
+  await api.handleHttpRequest(autoReq, autoRes);
+  const autoSnapshot = autoRes.snapshot();
+
+  assert.equal(autoSnapshot.statusCode, 200);
+  assert.equal(autoSnapshot.body?.result?.agent?.id, 'helper-1');
 
   cleanup(repoRoot);
 });
@@ -1505,6 +1750,89 @@ test('addAgent appends approval mode flag for codex helper', async () => {
     (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('--full-auto'))
   );
   assert.ok(launchCmd, 'expected codex launch command to include --full-auto');
+
+  cleanup(repoRoot);
+});
+
+test('addAgent auto-injects helper face identity into the launch command', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness();
+
+  const result = await runtime.addAgent({
+    id: 'agent-face-auto',
+    create_worktree: false,
+    create_tmux: true,
+    source_repo_path: repoRoot,
+    agent_cmd: 'codex --profile helper'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.agent.agent_cmd, 'codex --profile helper');
+  assert.match(result.agent.launch_command, /MH_FACE_AGENT_ID='agent-face-auto'/);
+  assert.match(result.agent.launch_command, /MH_FACE_AGENT_LABEL='agent-face-auto'/);
+  assert.match(result.agent.launch_command, /codex --profile helper/);
+  const launchCmd = commands.find(
+    (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('MH_FACE_AGENT_ID'))
+  );
+  assert.ok(launchCmd, 'expected helper launch command to include MH_FACE_AGENT_ID');
+
+  cleanup(repoRoot);
+});
+
+test('reconcileAgents recreates helper panes with the stored launch command', async () => {
+  const { repoRoot, runtime, stateStore, commands } = createRuntimeHarness({
+    defaultAgentCommand: 'codex --default',
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message' && args[3] === '%404') {
+        const error = new Error('pane missing');
+        error.code = 'command_failed';
+        throw error;
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%45\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  stateStore.addAgent({
+    id: 'agent-recreate-launch',
+    session_id: 'agent-recreate-launch',
+    agent_cmd: 'codex --profile restore-me',
+    launch_command: "env MH_FACE_AGENT_ID='agent-recreate-launch' MH_FACE_AGENT_LABEL='agent-recreate-launch' codex --profile restore-me",
+    source_repo_path: repoRoot,
+    target_repo_root: repoRoot,
+    stream_id: `repo:${repoRoot}`,
+    worktree_path: repoRoot,
+    pane_id: '%404'
+  });
+
+  const result = await runtime.reconcileAgents({
+    recreate_missing_panes: true
+  });
+
+  assert.equal(result.results[0]?.disposition, 'recreated');
+  const launchCmd = commands.find(
+    (entry) =>
+      entry[0] === 'tmux' &&
+      entry[1] === 'send-keys' &&
+      entry.some((arg) => typeof arg === 'string' && arg.includes("codex --profile restore-me"))
+  );
+  assert.ok(launchCmd, 'expected reconcile to reuse stored helper launch command');
+  assert.equal(
+    commands.some(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry.some((arg) => typeof arg === 'string' && arg.includes('codex --default'))
+    ),
+    false
+  );
 
   cleanup(repoRoot);
 });

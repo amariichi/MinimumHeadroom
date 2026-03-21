@@ -117,6 +117,8 @@ function normalizeAgent(rawAgent, index, now, hardCap, fallbackRoot) {
   return {
     id: asNonEmptyString(rawAgent?.id) ?? `agent-${index + 1}`,
     session_id: asNonEmptyString(rawAgent?.session_id),
+    agent_cmd: asNonEmptyString(rawAgent?.agent_cmd),
+    launch_command: asNonEmptyString(rawAgent?.launch_command),
     status: normalizedStatus,
     slot: asInteger(rawAgent?.slot, index < hardCap ? index : null, 0),
     stream_id: streamId,
@@ -380,6 +382,8 @@ export function createAgentRuntimeStateStore(options = {}) {
     const agent = {
       id,
       session_id: asNonEmptyString(input.session_id),
+      agent_cmd: asNonEmptyString(input.agent_cmd),
+      launch_command: asNonEmptyString(input.launch_command),
       status,
       slot: resolvedSlot,
       stream_id: streamId,
@@ -506,6 +510,12 @@ export function createAgentRuntimeStateStore(options = {}) {
     const nextSessionId = Object.prototype.hasOwnProperty.call(updates, 'session_id')
       ? asNonEmptyString(updates.session_id)
       : undefined;
+    const nextAgentCmd = Object.prototype.hasOwnProperty.call(updates, 'agent_cmd')
+      ? asNonEmptyString(updates.agent_cmd)
+      : undefined;
+    const nextLaunchCommand = Object.prototype.hasOwnProperty.call(updates, 'launch_command')
+      ? asNonEmptyString(updates.launch_command)
+      : undefined;
     const nextSlot = Object.prototype.hasOwnProperty.call(updates, 'slot')
       ? asInteger(updates.slot, null, 0)
       : undefined;
@@ -557,6 +567,14 @@ export function createAgentRuntimeStateStore(options = {}) {
         agent.session_id = nextSessionId;
         changed = true;
       }
+      if (nextAgentCmd !== undefined && nextAgentCmd !== agent.agent_cmd) {
+        agent.agent_cmd = nextAgentCmd;
+        changed = true;
+      }
+      if (nextLaunchCommand !== undefined && nextLaunchCommand !== agent.launch_command) {
+        agent.launch_command = nextLaunchCommand;
+        changed = true;
+      }
       if (nextSlot !== undefined && nextSlot !== agent.slot) {
         agent.slot = nextSlot;
         changed = true;
@@ -566,21 +584,22 @@ export function createAgentRuntimeStateStore(options = {}) {
     });
   }
 
-  function purgeAgent(agentId) {
+  function purgeAgent(agentId, options = {}) {
     ensureLoaded();
     const id = asNonEmptyString(agentId);
     if (!id) {
       throw createStoreError('invalid_agent_id', 'agent id is empty');
     }
+    const force = options?.force === true;
     const index = state.agents.findIndex((agent) => agent.id === id);
     if (index < 0) {
       throw createStoreError('agent_not_found', `agent not found: ${id}`);
     }
     const agent = state.agents[index];
-    if (asNonEmptyString(agent.pane_id)) {
+    if (!force && asNonEmptyString(agent.pane_id)) {
       throw createStoreError('invalid_state', 'purge requires pane to be detached first');
     }
-    if (asNonEmptyString(agent.worktree_path)) {
+    if (!force && asNonEmptyString(agent.worktree_path)) {
       throw createStoreError('invalid_state', 'purge requires worktree to be absent first');
     }
     state.agents.splice(index, 1);

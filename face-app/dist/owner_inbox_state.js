@@ -795,6 +795,65 @@ export function createOwnerInboxStateStore(options = {}) {
     };
   }
 
+  function purgeRecords(filters = {}) {
+    ensureLoaded();
+    const streamId = asNonEmptyString(filters.stream_id);
+    const ownerAgentId = normalizeOwnerAgentId(asNonEmptyString(filters.owner_agent_id));
+    const fromAgentId = asNonEmptyString(filters.from_agent_id);
+    const missionId = asNonEmptyString(filters.mission_id);
+
+    const matchesScopedRecord = (record) => {
+      if (streamId && record.stream_id !== streamId) {
+        return false;
+      }
+      if (ownerAgentId && record.owner_agent_id !== ownerAgentId) {
+        return false;
+      }
+      if (missionId && record.mission_id !== missionId) {
+        return false;
+      }
+      if (fromAgentId && record.from_agent_id !== fromAgentId) {
+        return false;
+      }
+      return true;
+    };
+
+    const before = {
+      streams: state.streams.length,
+      missions: state.missions.length,
+      reports: state.reports.length
+    };
+
+    state.reports = state.reports.filter((report) => !matchesScopedRecord(report));
+    state.missions = state.missions.filter((mission) => !matchesScopedRecord(mission));
+    state.streams = state.streams.filter((stream) => {
+      if (streamId && stream.stream_id !== streamId) {
+        return true;
+      }
+      if (ownerAgentId && stream.owner_agent_id !== ownerAgentId) {
+        return true;
+      }
+      const stillReferenced =
+        state.missions.some((mission) => mission.stream_id === stream.stream_id)
+        || state.reports.some((report) => report.stream_id === stream.stream_id);
+      return stillReferenced;
+    });
+
+    const removed = {
+      streams: before.streams - state.streams.length,
+      missions: before.missions - state.missions.length,
+      reports: before.reports - state.reports.length
+    };
+    if (removed.streams > 0 || removed.missions > 0 || removed.reports > 0) {
+      commitState();
+    }
+    return {
+      ok: true,
+      removed,
+      state: clone(state)
+    };
+  }
+
   return {
     statePath,
     load,
@@ -803,7 +862,8 @@ export function createOwnerInboxStateStore(options = {}) {
     getInboxView,
     submitReport,
     updateReportLifecycle,
-    closeStream
+    closeStream,
+    purgeRecords
   };
 }
 

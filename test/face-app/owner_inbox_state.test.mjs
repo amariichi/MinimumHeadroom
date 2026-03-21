@@ -234,3 +234,53 @@ test('owner inbox store rejects late reports for closed streams', () => {
 
   cleanup(rootDir);
 });
+
+test('owner inbox store purges helper missions and reports and removes empty streams', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-owner-inbox-purge-');
+  const store = createOwnerInboxStateStore({
+    statePath,
+    now: createClock(),
+    log: quietLog
+  });
+  store.load();
+
+  store.submitReport({
+    stream_id: 'operator-default',
+    mission_id: 'helper-a',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'helper-a',
+    kind: 'progress',
+    summary: 'Keep nothing',
+    report_id: 'rpt-a'
+  });
+  store.submitReport({
+    stream_id: 'operator-other',
+    mission_id: 'helper-b',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'helper-b',
+    kind: 'done',
+    summary: 'Leave this one',
+    report_id: 'rpt-b'
+  });
+
+  const purged = store.purgeRecords({
+    stream_id: 'operator-default',
+    from_agent_id: 'helper-a'
+  });
+
+  assert.equal(purged.removed.streams, 1);
+  assert.equal(purged.removed.missions, 1);
+  assert.equal(purged.removed.reports, 1);
+  assert.equal(store.getInboxView({
+    stream_id: 'operator-default',
+    owner_agent_id: '__operator__',
+    include_resolved: true
+  }).reports.length, 0);
+  assert.equal(store.getInboxView({
+    stream_id: 'operator-other',
+    owner_agent_id: '__operator__',
+    include_resolved: true
+  }).reports.length, 1);
+
+  cleanup(rootDir);
+});
