@@ -203,3 +203,63 @@ test('phase1 connectivity forwards face.event and face.say to face-app', async (
 
   assert.match(stderrLog, /ready; forwarding to/);
 });
+
+test('phase1 connectivity auto-injects helper face identity from environment defaults', async (t) => {
+  const receivedPayloads = [];
+  const silentLog = { info: () => {}, error: () => {} };
+  const faceServer = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    onPayload(payload) {
+      receivedPayloads.push(payload);
+    },
+    log: silentLog
+  });
+  t.after(async () => {
+    await faceServer.stop();
+  });
+
+  const childProcess = spawn(process.execPath, ['mcp-server/dist/index.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      FACE_WS_URL: faceServer.url,
+      MH_FACE_AGENT_ID: 'helper-auto-env',
+      MH_FACE_AGENT_LABEL: 'Helper Auto Env'
+    },
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+
+  t.after(async () => {
+    await stopChildProcess(childProcess);
+  });
+
+  const client = new McpStdioClient(childProcess);
+  t.after(() => {
+    client.close();
+  });
+
+  await client.request('initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: {},
+    clientInfo: { name: 'phase1-env-default-test', version: '0.0.0' }
+  });
+  client.notify('notifications/initialized', {});
+
+  const sayCallResult = await client.request('tools/call', {
+    name: 'face.say',
+    arguments: {
+      session_id: 'phase1#env-default',
+      text: '自動注入テスト',
+      priority: 2
+    }
+  });
+  assert.equal(sayCallResult.isError, undefined);
+
+  await waitFor(() => receivedPayloads.some((payload) => payload.type === 'say'), 3000, 'say payload with env defaults');
+  const sayPayload = receivedPayloads.find((payload) => payload.type === 'say');
+  assert.equal(sayPayload.session_id, 'phase1#env-default');
+  assert.equal(sayPayload.agent_id, 'helper-auto-env');
+  assert.equal(sayPayload.agent_label, 'Helper Auto Env');
+});

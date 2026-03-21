@@ -89,6 +89,8 @@ test('renderAssignmentPrompt prepends helper bootstrap guidance for generated pr
   assert.match(prompt, /Immediate protocol:/);
   assert.match(prompt, /Before reading repo files, skills, or running broad exploration/);
   assert.match(prompt, /kind=progress, summary='Mission accepted'/);
+  assert.match(prompt, /inherit your helper identity automatically/i);
+  assert.match(prompt, /include agent_id=helper-a manually/i);
   assert.match(prompt, /[Ii]nspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration/);
   assert.match(prompt, /Send done or review_findings as soon as the current completion criteria are satisfied/);
   assert.match(prompt, /return the first qualifying finding immediately instead of hunting for more/);
@@ -116,6 +118,8 @@ test('renderAssignmentPrompt wraps explicit prompt_text with helper bootstrap gu
 
   assert.match(prompt, /^Owner assignment for helper agent helper-b\./);
   assert.match(prompt, /Immediate protocol:/);
+  assert.match(prompt, /inherit your helper identity automatically/i);
+  assert.match(prompt, /include agent_id=helper-b manually/i);
   assert.match(prompt, /[Ii]nspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration/);
   assert.match(prompt, /Send done or review_findings as soon as the current completion criteria are satisfied/);
   assert.match(prompt, /return the first qualifying finding immediately instead of hunting for more/);

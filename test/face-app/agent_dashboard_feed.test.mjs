@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  deriveObservedAgentFromPayload,
   deriveAgentTransientUpdate,
+  matchesOperatorIdentity,
   resolveAgentIdForPane,
   resolveAgentIdForPayload,
   shouldCountPayloadAsAgentActivity,
@@ -15,6 +17,23 @@ test('resolveAgentIdForPayload matches explicit agent_id first', () => {
     { id: 'b', session_id: 'session-b' }
   ];
   assert.equal(resolveAgentIdForPayload({ agent_id: 'b', session_id: 'session-a' }, agents), 'b');
+  assert.equal(resolveAgentIdForPayload({ agent_id: 'helper-ephemeral' }, agents), 'helper-ephemeral');
+});
+
+test('resolveAgentIdForPayload canonicalizes operator aliases when configured', () => {
+  const agents = [
+    { id: 'a', session_id: 'session-a' },
+    { id: 'b', session_id: 'session-b' }
+  ];
+  const options = {
+    operatorAgentId: '__operator__',
+    operatorSessionId: 'prod-operator',
+    operatorAliases: ['operator', 'default']
+  };
+  assert.equal(resolveAgentIdForPayload({ agent_id: 'operator' }, agents, options), '__operator__');
+  assert.equal(resolveAgentIdForPayload({ session_id: '__operator__' }, agents, options), '__operator__');
+  assert.equal(resolveAgentIdForPayload({ session_id: 'default' }, agents, options), '__operator__');
+  assert.equal(resolveAgentIdForPayload({ session_id: 'prod-operator' }, agents, options), '__operator__');
 });
 
 test('resolveAgentIdForPayload falls back to session_id mapping', () => {
@@ -25,6 +44,60 @@ test('resolveAgentIdForPayload falls back to session_id mapping', () => {
   assert.equal(resolveAgentIdForPayload({ session_id: 'session-b' }, agents), 'b');
   assert.equal(resolveAgentIdForPayload({ session_id: 'a' }, agents), 'a');
   assert.equal(resolveAgentIdForPayload({ session_id: 'missing' }, agents), null);
+});
+
+test('deriveObservedAgentFromPayload builds a provisional helper tile model from explicit identity', () => {
+  assert.deepEqual(
+    deriveObservedAgentFromPayload({
+      type: 'say',
+      agent_id: 'helper-review',
+      agent_label: 'Review Helper',
+      session_id: 'default',
+      ts: 1234
+    }, {
+      operatorAgentId: '__operator__'
+    }),
+    {
+      id: 'helper-review',
+      label: 'Review Helper',
+      status: 'active',
+      slot: null,
+      pane_id: null,
+      session_id: 'default',
+      last_message: 'observed helper activity',
+      message_source: 'speech',
+      updated_at: 1234,
+      provisional: true
+    }
+  );
+  assert.equal(
+    deriveObservedAgentFromPayload({ agent_id: '__operator__' }, { operatorAgentId: '__operator__' }),
+    null
+  );
+  assert.equal(
+    deriveObservedAgentFromPayload(
+      { agent_id: 'operator' },
+      {
+        operatorAgentId: '__operator__',
+        operatorSessionId: 'prod-operator',
+        operatorAliases: ['operator', 'default']
+      }
+    ),
+    null
+  );
+});
+
+test('matchesOperatorIdentity recognizes configured operator aliases', () => {
+  const options = {
+    operatorAgentId: '__operator__',
+    operatorSessionId: 'prod-operator',
+    operatorAliases: ['operator', 'default']
+  };
+  assert.equal(matchesOperatorIdentity('__operator__', options), true);
+  assert.equal(matchesOperatorIdentity('operator', options), true);
+  assert.equal(matchesOperatorIdentity('default', options), true);
+  assert.equal(matchesOperatorIdentity('prod-operator', options), true);
+  assert.equal(matchesOperatorIdentity('helper-1', options), false);
 });
 
 test('resolveAgentIdForPane maps helper panes and falls back to operator', () => {

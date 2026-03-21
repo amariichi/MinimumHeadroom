@@ -198,6 +198,22 @@ test('mcp agent lifecycle tools call the face-app HTTP API', async () => {
       }
     });
     assert.match(spawnResponse.result.content[0].text, /spawned agent id=helper-a/);
+    const spawnRequest = requests.find((item) => item.url === '/api/agents/add' && item.body?.id === 'helper-a');
+    assert.equal(spawnRequest?.body?.id, 'helper-a');
+
+    const aliasSpawnResponse = await rpc.call('tools/call', {
+      name: 'agent.spawn',
+      arguments: {
+        agent_id: 'helper-b',
+        source_repo_path: '/tmp/target',
+        target_repo_root: '/tmp/target',
+        create_worktree: false,
+        create_tmux: false
+      }
+    });
+    assert.match(aliasSpawnResponse.result.content[0].text, /spawned agent id=helper-a/);
+    const aliasSpawnRequest = requests.find((item) => item.url === '/api/agents/add' && item.body?.id === 'helper-b');
+    assert.equal(aliasSpawnRequest?.body?.id, 'helper-b');
 
     const focusResponse = await rpc.call('tools/call', {
       name: 'agent.focus',

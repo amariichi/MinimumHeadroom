@@ -37,6 +37,14 @@ function normalizeSessionId(value) {
   return trimmed === '' ? '-' : trimmed;
 }
 
+function normalizeOptionalIdentity(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
 function clampPriority(value) {
   const normalized = Number.isInteger(value) ? value : Number.parseInt(value ?? '0', 10);
   if (Number.isNaN(normalized)) {
@@ -280,12 +288,14 @@ export function createTtsController(options = {}) {
     broadcast(payload);
   }
 
-  function emitMouth(sessionId, utteranceId, open, generationValue = null, messageId = null, revision = null) {
+  function emitMouth(sessionId, utteranceId, open, generationValue = null, messageId = null, revision = null, extra = {}) {
     const value = Number.isFinite(open) ? Math.max(0, Math.min(1, open)) : 0;
     broadcast({
       v: 1,
       type: 'tts_mouth',
       session_id: normalizeSessionId(sessionId),
+      ...(extra.agent_id ? { agent_id: extra.agent_id } : {}),
+      ...(extra.agent_label ? { agent_label: extra.agent_label } : {}),
       utterance_id: utteranceId ?? null,
       generation: generationValue,
       message_id: messageId,
@@ -306,6 +316,8 @@ export function createTtsController(options = {}) {
     }
 
     const sessionId = normalizeSessionId(payload?.session_id);
+    const agentId = normalizeOptionalIdentity(payload?.agent_id);
+    const agentLabel = normalizeOptionalIdentity(payload?.agent_label);
     const policy = normalizePolicy(payload?.policy);
     const priority = clampPriority(payload?.priority ?? 0);
     const ttlMs = normalizeTtlMs(payload?.ttl_ms, defaultTtlMs);
@@ -321,6 +333,8 @@ export function createTtsController(options = {}) {
     return {
       generation: currentGeneration,
       sessionId,
+      agentId,
+      agentLabel,
       utteranceId: typeof payload?.utterance_id === 'string' && payload.utterance_id.trim() !== '' ? payload.utterance_id : `${sessionId}:${currentGeneration}`,
       messageId: normalizeMessageId(payload?.message_id, fallbackMessageId),
       revision,
@@ -351,6 +365,8 @@ export function createTtsController(options = {}) {
 
     if (!workerReady) {
       emitState(entry.sessionId, entry.utteranceId, 'dropped', {
+        ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+        ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
         reason: 'worker_unavailable',
         generation: entry.generation,
         voice: entry.speaker ?? workerVoice,
@@ -362,6 +378,8 @@ export function createTtsController(options = {}) {
 
     if (isEntryExpired(entry)) {
       emitState(entry.sessionId, entry.utteranceId, 'dropped', {
+        ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+        ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
         reason: 'ttl_expired',
         generation: entry.generation,
         voice: entry.speaker ?? workerVoice,
@@ -391,6 +409,8 @@ export function createTtsController(options = {}) {
 
     if (!sent) {
       emitState(entry.sessionId, entry.utteranceId, 'dropped', {
+        ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+        ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
         reason: 'worker_send_failed',
         generation: entry.generation,
         voice: entry.speaker ?? workerVoice,
@@ -404,6 +424,8 @@ export function createTtsController(options = {}) {
     activeQueuedAt = now();
     activePlayStartedAt = null;
     emitState(entry.sessionId, entry.utteranceId, 'queued', {
+      ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+      ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
       reason,
       generation: entry.generation,
       voice: entry.speaker ?? workerVoice,
@@ -464,6 +486,8 @@ export function createTtsController(options = {}) {
     });
 
     emitState(active.sessionId, active.utteranceId, 'interrupt_requested', {
+      ...(active.agentId ? { agent_id: active.agentId } : {}),
+      ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
       reason,
       generation: active.generation,
       by_generation: byGeneration,
@@ -513,7 +537,10 @@ export function createTtsController(options = {}) {
       if (!active || !Number.isInteger(message.generation) || message.generation !== active.generation) {
         return;
       }
-      emitMouth(active.sessionId, active.utteranceId, message.open, active.generation, active.messageId, active.revision);
+      emitMouth(active.sessionId, active.utteranceId, message.open, active.generation, active.messageId, active.revision, {
+        agent_id: active.agentId,
+        agent_label: active.agentLabel
+      });
       return;
     }
 
@@ -532,6 +559,8 @@ export function createTtsController(options = {}) {
         v: 1,
         type: 'tts_audio',
         session_id: active.sessionId,
+        ...(active.agentId ? { agent_id: active.agentId } : {}),
+        ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
         utterance_id: active.utteranceId,
         generation: active.generation,
         message_id: active.messageId,
@@ -561,6 +590,8 @@ export function createTtsController(options = {}) {
     const revision = Number.isFinite(message.revision) ? Math.floor(message.revision) : (active?.revision ?? null);
 
     emitState(sessionId, utteranceId, phase, {
+      ...(active?.agentId ? { agent_id: active.agentId } : {}),
+      ...(active?.agentLabel ? { agent_label: active.agentLabel } : {}),
       reason: message.reason ?? null,
       generation: messageGeneration,
       message_id: messageId,
@@ -573,7 +604,10 @@ export function createTtsController(options = {}) {
 
     if (phase === 'play_stop' || phase === 'dropped' || phase === 'error') {
       if (active && (messageGeneration === null || messageGeneration === active.generation)) {
-        emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision);
+        emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision, {
+          agent_id: active.agentId,
+          agent_label: active.agentLabel
+        });
         active = null;
         activeQueuedAt = null;
         activePlayStartedAt = null;
@@ -632,6 +666,8 @@ export function createTtsController(options = {}) {
 
     if (isEntryExpired(entry, acceptedAt)) {
       emitState(entry.sessionId, entry.utteranceId, 'dropped', {
+        ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+        ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
         reason: 'ttl_expired',
         generation: entry.generation,
         message_id: entry.messageId,
@@ -658,6 +694,8 @@ export function createTtsController(options = {}) {
 
     if (!gateResult.allow) {
       emitState(entry.sessionId, entry.utteranceId, 'dropped', {
+        ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+        ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
         reason: gateResult.reason,
         generation: entry.generation,
         message_id: entry.messageId,
@@ -689,6 +727,8 @@ export function createTtsController(options = {}) {
     if (active) {
       pending = entry;
       emitState(entry.sessionId, entry.utteranceId, 'queued', {
+        ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+        ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
         reason: 'pending_replace',
         generation: entry.generation,
         message_id: entry.messageId,
@@ -724,7 +764,10 @@ export function createTtsController(options = {}) {
     pending = null;
 
     if (active) {
-      emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision);
+      emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision, {
+        agent_id: active.agentId,
+        agent_label: active.agentLabel
+      });
       active = null;
       activeQueuedAt = null;
       activePlayStartedAt = null;

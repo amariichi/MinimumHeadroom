@@ -15,9 +15,10 @@ minimum-headroom supports spawning helper coding agents in isolated worktrees, e
 
 - **Desktop:** click the current-agent bar, open the Agents surface, then click **+Agent**
 - **Mobile:** tap the current-agent bar, open the agent list, then tap **+Agent**
-- **+Agent** uses auto-generated id, branch, and worktree defaults
+- **+Agent** uses auto-generated readable helper ids (`helper-1`, `helper-2`, ...), plus generated branch and worktree defaults
 - When the operator was started with `--repo`, helpers inherit that target repository
 - Desktop renders the operator plus up to 7 helpers (8 tiles total)
+- Via MCP, `agent.spawn` accepts `id` as the canonical helper-name field and also accepts `agent_id` as a compatibility alias
 
 ### Permission Presets
 
@@ -74,15 +75,15 @@ For detailed per-runtime setup, see:
 
 ### Deleting Helpers
 
-- The **Delete** button removes the tmux pane, worktree, and runtime record together
+- The **Delete** button removes the tmux pane, worktree, runtime record, assignment records, and owner-inbox records together
 - Via MCP: `agent.delete`
 
 ### Shutdown and Recovery
 
-- After a full tmux shutdown, helpers are recreated from saved worktrees on next startup
-- Only helpers from the active repository stream are restored
-- Helpers whose worktrees are gone appear as `missing`
-- Helpers from other repositories stay `hidden`
+- Startup is cleanup-first: previously registered helpers are deleted or purged instead of being auto-restored
+- Active-stream helpers are removed from tmux, worktrees, runtime state, assignment state, and owner inbox state
+- Hidden helper records from other repositories are purged from the current repository's runtime state instead of lingering as ghosts
+- If explicit helper resume is added later, it should be an operator action, not an automatic startup side effect
 
 ---
 
@@ -99,9 +100,10 @@ minimum-headroom は、分離された worktree に helper コーディングエ
 
 - **Desktop:** 現在エージェントバーをクリック → Agents サーフェス → **+Agent**
 - **Mobile:** 現在エージェントバーをタップ → agent list → **+Agent**
-- **+Agent** は自動生成の id / branch / worktree デフォルトを使用
+- **+Agent** は `helper-1`, `helper-2`, ... のような読みやすい自動 id と、branch / worktree のデフォルトを使用
 - `--repo` 付きで operator を起動した場合、helper は target repository を継承
 - Desktop は operator + helper 最大 7 体を同時表示（合計 8 タイル）
+- MCP の `agent.spawn` では canonical な helper 名フィールドは `id` ですが、互換 alias として `agent_id` も受け付けます
 
 ### 権限プリセット
 
@@ -158,12 +160,12 @@ minimum-headroom は、分離された worktree に helper コーディングエ
 
 ### Helper の削除
 
-- **Delete** ボタンで tmux ペイン、worktree、runtime record をまとめて削除
+- **Delete** ボタンで tmux ペイン、worktree、runtime record、assignment record、owner inbox record をまとめて削除
 - MCP 経由: `agent.delete`
 
 ### シャットダウンと復旧
 
-- tmux session 全体の停止後、次回起動時に worktree が残っていれば helper を再生成
-- active repository stream の helper のみ復元
-- worktree がない helper は `missing` として表示
-- 他 repository の helper は `hidden` のまま
+- 起動時の既定動作は cleanup-first です。以前の helper は自動復元せず、削除または state から purge します
+- active stream の helper は tmux / worktree / runtime state / assignment state / owner inbox state から除去されます
+- 他 repository に属する hidden helper record も、現在の repository 側 state には残さず purge します
+- 将来 resume を足す場合でも、起動時の自動復元ではなく operator の明示操作で行う想定です

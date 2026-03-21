@@ -1,4 +1,4 @@
-import { resolveAgentIdForPayload } from './agent_dashboard_feed.js';
+import { matchesOperatorIdentity, resolveAgentIdForPayload } from './agent_dashboard_feed.js';
 import { applyDragEmotionBias, applyEventToFaceState, createInitialFaceState, stepFaceState } from './state_engine.js';
 
 function asNonEmptyString(value) {
@@ -51,19 +51,21 @@ export function createAgentFaceRuntime(options = {}) {
 }
 
 export function resolveFaceAgentId(payload, agents = [], options = {}) {
-  const mappedAgentId = resolveAgentIdForPayload(payload, agents);
+  const mappedAgentId = resolveAgentIdForPayload(payload, agents, {
+    operatorAgentId: options.operatorAgentId,
+    operatorSessionId: options.operatorSessionId,
+    operatorAliases: options.operatorAliases
+  });
   if (mappedAgentId) {
     return mappedAgentId;
   }
 
-  const explicitAgentId = asNonEmptyString(payload?.agent_id);
-  if (explicitAgentId && explicitAgentId === options.operatorAgentId) {
-    return explicitAgentId;
-  }
-
   const payloadSessionId = asNonEmptyString(payload?.session_id);
-  const operatorSessionId = asNonEmptyString(options.operatorSessionId);
-  if (payloadSessionId && operatorSessionId && payloadSessionId === operatorSessionId) {
+  if (matchesOperatorIdentity(payloadSessionId, {
+    operatorAgentId: options.operatorAgentId,
+    operatorSessionId: options.operatorSessionId,
+    operatorAliases: options.operatorAliases
+  })) {
     return options.operatorAgentId ?? '__operator__';
   }
 

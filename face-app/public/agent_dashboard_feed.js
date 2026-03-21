@@ -6,6 +6,34 @@ function asNonEmptyString(value) {
   return trimmed === '' ? null : trimmed;
 }
 
+function collectOperatorIdentityValues(options = {}) {
+  const values = new Set();
+  const operatorAgentId = asNonEmptyString(options.operatorAgentId);
+  const operatorSessionId = asNonEmptyString(options.operatorSessionId);
+  const operatorAliases = Array.isArray(options.operatorAliases) ? options.operatorAliases : [];
+  if (operatorAgentId) {
+    values.add(operatorAgentId);
+  }
+  if (operatorSessionId) {
+    values.add(operatorSessionId);
+  }
+  for (const alias of operatorAliases) {
+    const normalized = asNonEmptyString(alias);
+    if (normalized) {
+      values.add(normalized);
+    }
+  }
+  return values;
+}
+
+export function matchesOperatorIdentity(value, options = {}) {
+  const normalized = asNonEmptyString(value);
+  if (!normalized) {
+    return false;
+  }
+  return collectOperatorIdentityValues(options).has(normalized);
+}
+
 function truncateText(value, maxLength = 84) {
   if (typeof value !== 'string') {
     return '';
@@ -57,10 +85,13 @@ export function summarizeSpeechBubbleText(value, maxLength = 60) {
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
 }
 
-export function resolveAgentIdForPayload(payload, agents = []) {
+export function resolveAgentIdForPayload(payload, agents = [], options = {}) {
   const list = Array.isArray(agents) ? agents : [];
   const explicit = asNonEmptyString(payload?.agent_id);
-  if (explicit && list.some((agent) => agent?.id === explicit)) {
+  if (explicit) {
+    if (matchesOperatorIdentity(explicit, options)) {
+      return asNonEmptyString(options.operatorAgentId) ?? explicit;
+    }
     return explicit;
   }
 
@@ -73,7 +104,41 @@ export function resolveAgentIdForPayload(payload, agents = []) {
     return bySession.id;
   }
   const byId = list.find((agent) => agent?.id === sessionId);
-  return byId?.id ?? null;
+  if (byId?.id) {
+    return byId.id;
+  }
+  if (matchesOperatorIdentity(sessionId, options)) {
+    return asNonEmptyString(options.operatorAgentId) ?? sessionId;
+  }
+  return null;
+}
+
+export function deriveObservedAgentFromPayload(payload, options = {}) {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const agentId = asNonEmptyString(payload?.agent_id);
+  if (!agentId) {
+    return null;
+  }
+  if (matchesOperatorIdentity(agentId, options)) {
+    return null;
+  }
+  const sessionId = asNonEmptyString(payload?.session_id);
+  const label = asNonEmptyString(payload?.agent_label) ?? agentId;
+  const updatedAt = Number.isFinite(payload?.ts) ? Math.floor(payload.ts) : Date.now();
+  return {
+    id: agentId,
+    label,
+    status: 'active',
+    slot: null,
+    pane_id: null,
+    session_id: sessionId,
+    last_message: 'observed helper activity',
+    message_source: 'speech',
+    updated_at: updatedAt,
+    provisional: true
+  };
 }
 
 export function resolveAgentIdForPane(paneId, agents = [], options = {}) {
