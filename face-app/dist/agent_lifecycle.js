@@ -1515,12 +1515,8 @@ export function createAgentLifecycleRuntime(options = {}) {
       });
     }
 
-    const orphanAssignments = typeof assignmentStateStore?.purgeAssignments === 'function'
-      ? assignmentStateStore.purgeAssignments({})
-      : { ok: true, removed_count: 0 };
-    const orphanInbox = typeof ownerInboxStateStore?.purgeRecords === 'function'
-      ? ownerInboxStateStore.purgeRecords({})
-      : { ok: true, removed: { streams: 0, missions: 0, reports: 0 } };
+    const orphanAssignments = { ok: true, removed_count: 0 };
+    const orphanInbox = { ok: true, removed: { streams: 0, missions: 0, reports: 0 } };
 
     return {
       ok: true,

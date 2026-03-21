@@ -186,7 +186,8 @@ test('mcp owner inbox tools call the face-app HTTP API', async () => {
       name: 'owner.inbox.resolve',
       arguments: {
         stream_id: 'operator-default',
-        report_id: 'rpt-1'
+        report_id: 'rpt-1',
+        action: 'resolve'
       }
     });
     assert.match(resolveResponse.result.content[0].text, /state=resolved/);
@@ -194,6 +195,13 @@ test('mcp owner inbox tools call the face-app HTTP API', async () => {
     assert.equal(requests.some((item) => item.url?.startsWith('/api/owner-inbox/report')), true);
     assert.equal(requests.some((item) => item.url?.startsWith('/api/owner-inbox/list')), true);
     assert.equal(requests.some((item) => item.url?.startsWith('/api/owner-inbox/resolve')), true);
+    assert.equal(
+      requests.some((item) =>
+        item.url?.startsWith('/api/owner-inbox/resolve') &&
+        item.body?.action === 'resolved'
+      ),
+      true
+    );
   } finally {
     await stopChild(child);
     await new Promise((resolve) => server.close(resolve));

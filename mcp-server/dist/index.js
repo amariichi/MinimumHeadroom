@@ -285,7 +285,7 @@ const BASE_TOOL_DEFINITIONS = [
       properties: {
         stream_id: { type: 'string', minLength: 1 },
         report_id: { type: 'string', minLength: 1 },
-        action: { type: ['string', 'null'], enum: ['seen_by_owner', 'acted_on', 'resolved', 'dismissed', null] }
+        action: { type: ['string', 'null'], enum: ['seen_by_owner', 'acted_on', 'resolve', 'resolved', 'dismissed', null] }
       }
     }
   }
@@ -909,9 +909,10 @@ function normalizeOwnerInboxResolvePayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const streamId = requireString(args, 'stream_id');
   const reportId = requireString(args, 'report_id');
-  const action = args.action ?? 'resolved';
+  const rawAction = args.action ?? 'resolved';
+  const action = rawAction === 'resolve' ? 'resolved' : rawAction;
   if (!['seen_by_owner', 'acted_on', 'resolved', 'dismissed'].includes(action)) {
-    throw new Error('action must be one of: seen_by_owner, acted_on, resolved, dismissed');
+    throw new Error('action must be one of: seen_by_owner, acted_on, resolve, resolved, dismissed');
   }
   return {
     stream_id: streamId,

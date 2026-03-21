@@ -116,7 +116,7 @@ test('owner inbox api handles submit, list, and resolve flows', async () => {
     body: {
       stream_id: 'operator-default',
       report_id: 'rpt-1',
-      action: 'resolved'
+      action: 'resolve'
     }
   });
   const resolveResponse = createResponseCapture();
@@ -153,18 +153,19 @@ test('owner inbox api rejects unsupported methods cleanly', async () => {
 test('owner inbox api can acknowledge assignment delivery through submit callback', async () => {
   const { rootDir, statePath } = createTempStatePath('mh-owner-inbox-api-ack-');
   const assignmentStatePath = path.join(rootDir, '.agent/runtime/agent-assignment-state.json');
-  const ownerInboxStore = createOwnerInboxStateStore({
-    statePath,
-    now: createClock(),
-    log: quietLog
-  });
-  ownerInboxStore.load();
   const assignmentStore = createAgentAssignmentStateStore({
     statePath: assignmentStatePath,
     now: createClock(1_700_210_000_000),
     log: quietLog
   });
   assignmentStore.load();
+  const ownerInboxStore = createOwnerInboxStateStore({
+    statePath,
+    assignmentStateStore: assignmentStore,
+    now: createClock(),
+    log: quietLog
+  });
+  ownerInboxStore.load();
   assignmentStore.upsertAssignment({
     stream_id: 'operator-default',
     mission_id: 'helper-a',

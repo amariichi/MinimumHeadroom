@@ -123,6 +123,7 @@ function createRuntimeHarness(options = {}) {
   const ownerInboxStateStore = createOwnerInboxStateStore({
     repoRoot,
     statePath: ownerInboxStatePath,
+    assignmentStateStore,
     now: createClock(1_700_200_000_000),
     log: quietLog
   });
@@ -1235,6 +1236,13 @@ test('agent lifecycle runtime startup cleanup deletes active helpers and purges 
     agent_id: 'hidden-ghost',
     goal: 'Clean hidden helper'
   });
+  assignmentStateStore.upsertAssignment({
+    stream_id: `repo:${repoRoot}`,
+    mission_id: 'mission-preserved',
+    owner_agent_id: '__operator__',
+    agent_id: 'manual-preserved',
+    goal: 'Preserve non-helper assignment state'
+  });
   ownerInboxStateStore.submitReport({
     stream_id: `repo:${repoRoot}`,
     mission_id: 'mission-active',
@@ -1253,6 +1261,15 @@ test('agent lifecycle runtime startup cleanup deletes active helpers and purges 
     summary: 'Hidden helper state',
     report_id: 'report-hidden'
   });
+  ownerInboxStateStore.submitReport({
+    stream_id: `repo:${repoRoot}`,
+    mission_id: 'mission-preserved',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'manual-preserved',
+    kind: 'progress',
+    summary: 'Preserved state',
+    report_id: 'report-preserved'
+  });
 
   const result = await runtime.cleanupAgentsOnStartup();
 
@@ -1260,9 +1277,21 @@ test('agent lifecycle runtime startup cleanup deletes active helpers and purges 
   assert.equal(result.results.some((item) => item.agent_id === 'agent-startup-clean' && item.disposition === 'deleted'), true);
   assert.equal(result.results.some((item) => item.agent_id === 'hidden-ghost' && item.disposition === 'purged_hidden'), true);
   assert.equal(runtime.getState({ scope: 'all' }).agents.length, 0);
-  assert.equal(assignmentStateStore.listAssignments({}).length, 0);
-  assert.equal(ownerInboxStateStore.getState().missions.length, 0);
-  assert.equal(ownerInboxStateStore.getState().reports.length, 0);
+  assert.deepEqual(
+    assignmentStateStore.listAssignments({}).map((assignment) => assignment.mission_id),
+    ['mission-preserved']
+  );
+  assert.deepEqual(
+    ownerInboxStateStore.getState().missions.map((mission) => mission.mission_id),
+    ['mission-preserved']
+  );
+  assert.deepEqual(
+    ownerInboxStateStore.getState().reports.map((report) => report.report_id),
+    ['report-preserved']
+  );
+  assert.equal(result.orphan_assignments.removed_count, 0);
+  assert.equal(result.orphan_inbox.removed.missions, 0);
+  assert.equal(result.orphan_inbox.removed.reports, 0);
   assert.equal(
     commands.some((entry) => entry[0] === 'tmux' && entry[1] === 'kill-pane' && entry[3] === '%94'),
     true

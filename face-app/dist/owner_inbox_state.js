@@ -17,6 +17,7 @@ const REPORT_LIFECYCLE_STATES = new Set([
 ]);
 const TERMINAL_REPORT_STATES = new Set(['resolved', 'superseded', 'dismissed']);
 const RESOLVABLE_REPORT_STATES = new Set(['seen_by_owner', 'acted_on', 'resolved', 'dismissed']);
+const DEFAULT_TERMINAL_REPORT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 const CANONICAL_OPERATOR_ID = '__operator__';
 const OPERATOR_ALIASES = /^_*operator_*$/i;
@@ -167,6 +168,12 @@ function normalizeLifecycleState(raw, fallback = 'delivered_to_inbox') {
   const normalized = asNonEmptyString(raw)?.toLowerCase();
   if (!normalized) {
     return fallback;
+  }
+  if (normalized === 'resolve') {
+    return 'resolved';
+  }
+  if (normalized === 'dismiss') {
+    return 'dismissed';
   }
   return REPORT_LIFECYCLE_STATES.has(normalized) ? normalized : fallback;
 }
@@ -519,6 +526,12 @@ export function createOwnerInboxStateStore(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const log = toLogger(options.log ?? console);
   const statePath = normalizeStatePath(options.statePath, options.repoRoot);
+  const assignmentStateStore = options.assignmentStateStore ?? null;
+  const terminalReportRetentionMs = asInteger(
+    options.terminalReportRetentionMs,
+    DEFAULT_TERMINAL_REPORT_RETENTION_MS,
+    0
+  ) ?? DEFAULT_TERMINAL_REPORT_RETENTION_MS;
 
   let loaded = false;
   let state = createEmptyState(now);
@@ -535,6 +548,91 @@ export function createOwnerInboxStateStore(options = {}) {
     return clone(state);
   }
 
+  function terminalStateTimestamp(report) {
+    return (
+      asTimestamp(report?.resolved_at, 0)
+      || asTimestamp(report?.dismissed_at, 0)
+      || asTimestamp(report?.superseded_at, 0)
+      || asTimestamp(report?.accepted_at, 0)
+    );
+  }
+
+  function pruneUnreferencedRecords(scope = {}) {
+    const scopedStreamId = asNonEmptyString(scope.stream_id);
+    const scopedOwnerAgentId = normalizeOwnerAgentId(asNonEmptyString(scope.owner_agent_id));
+    const before = {
+      streams: state.streams.length,
+      missions: state.missions.length
+    };
+    state.missions = state.missions.filter((mission) => {
+      if (scopedStreamId && mission.stream_id !== scopedStreamId) {
+        return true;
+      }
+      if (scopedOwnerAgentId && mission.owner_agent_id !== scopedOwnerAgentId) {
+        return true;
+      }
+      const stillReferenced = state.reports.some(
+        (report) => report.stream_id === mission.stream_id && report.mission_id === mission.mission_id
+      );
+      return stillReferenced;
+    });
+    state.streams = state.streams.filter((stream) => {
+      if (scopedStreamId && stream.stream_id !== scopedStreamId) {
+        return true;
+      }
+      if (scopedOwnerAgentId && stream.owner_agent_id !== scopedOwnerAgentId) {
+        return true;
+      }
+      const stillReferenced =
+        state.missions.some((mission) => mission.stream_id === stream.stream_id)
+        || state.reports.some((report) => report.stream_id === stream.stream_id);
+      return stillReferenced;
+    });
+    return {
+      streams: before.streams - state.streams.length,
+      missions: before.missions - state.missions.length
+    };
+  }
+
+  function pruneTerminalReports(filters = {}) {
+    ensureLoaded();
+    const olderThanMs = asInteger(filters.older_than_ms, terminalReportRetentionMs, 0) ?? terminalReportRetentionMs;
+    const streamId = asNonEmptyString(filters.stream_id);
+    const ownerAgentId = normalizeOwnerAgentId(asNonEmptyString(filters.owner_agent_id));
+    const nowTs = asTimestamp(filters.now_ts, nowMs(now));
+    const cutoff = Math.max(0, nowTs - olderThanMs);
+    const beforeReports = state.reports.length;
+    state.reports = state.reports.filter((report) => {
+      if (!TERMINAL_REPORT_STATES.has(report.lifecycle_state)) {
+        return true;
+      }
+      if (streamId && report.stream_id !== streamId) {
+        return true;
+      }
+      if (ownerAgentId && report.owner_agent_id !== ownerAgentId) {
+        return true;
+      }
+      return terminalStateTimestamp(report) > cutoff;
+    });
+    const removedReports = beforeReports - state.reports.length;
+    const removedAncillary = pruneUnreferencedRecords({
+      stream_id: streamId,
+      owner_agent_id: ownerAgentId
+    });
+    if (removedReports > 0 || removedAncillary.streams > 0 || removedAncillary.missions > 0) {
+      commitState();
+    }
+    return {
+      ok: true,
+      removed: {
+        reports: removedReports,
+        missions: removedAncillary.missions,
+        streams: removedAncillary.streams
+      },
+      state: clone(state)
+    };
+  }
+
   function load() {
     if (!fs.existsSync(statePath)) {
       state = createEmptyState(now);
@@ -548,6 +646,10 @@ export function createOwnerInboxStateStore(options = {}) {
       const parsed = JSON.parse(raw);
       state = normalizeState(parsed, now);
       loaded = true;
+      pruneTerminalReports({
+        older_than_ms: terminalReportRetentionMs,
+        now_ts: nowMs(now)
+      });
       commitState();
       return clone(state);
     } catch (error) {
@@ -563,6 +665,17 @@ export function createOwnerInboxStateStore(options = {}) {
   function getState() {
     ensureLoaded();
     return clone(state);
+  }
+
+  function findMatchingAssignment(input = {}) {
+    if (typeof assignmentStateStore?.getAssignment !== 'function') {
+      return null;
+    }
+    return assignmentStateStore.getAssignment({
+      stream_id: input.stream_id,
+      mission_id: input.mission_id,
+      agent_id: input.from_agent_id
+    });
   }
 
   function listReports(filters = {}) {
@@ -611,6 +724,7 @@ export function createOwnerInboxStateStore(options = {}) {
     }
 
     const stream = findStream(state, streamId);
+    const mission = findMission(state, streamId, missionId);
     if (stream && stream.status !== 'active') {
       return {
         ok: true,
@@ -634,6 +748,22 @@ export function createOwnerInboxStateStore(options = {}) {
         stream: clone(findStream(state, streamId)),
         mission: clone(findMission(state, streamId, missionId)),
         idempotent: true
+      };
+    }
+
+    if (!mission && typeof assignmentStateStore?.getAssignment === 'function' && !findMatchingAssignment({
+      stream_id: streamId,
+      mission_id: missionId,
+      from_agent_id: fromAgentId
+    })) {
+      return {
+        ok: true,
+        transport_state: 'rejected',
+        reason: 'unknown_assignment',
+        report: null,
+        stream: clone(stream),
+        mission: null,
+        idempotent: false
       };
     }
 
@@ -787,11 +917,20 @@ export function createOwnerInboxStateStore(options = {}) {
     } else if (nextStatus === 'orphaned') {
       stream.orphaned_at = ts;
     }
+    const archivedTerminalPurge = nextStatus === 'archived'
+      ? pruneTerminalReports({
+          stream_id: streamId,
+          owner_agent_id: stream.owner_agent_id,
+          older_than_ms: 0,
+          now_ts: ts
+        })
+      : { ok: true, removed: { reports: 0, missions: 0, streams: 0 }, state: clone(state) };
     commitState();
     return {
       ok: true,
       noop: false,
-      stream: clone(stream)
+      stream: clone(findStream(state, streamId)),
+      archived_terminal_purge: archivedTerminalPurge
     };
   }
 
@@ -863,6 +1002,7 @@ export function createOwnerInboxStateStore(options = {}) {
     submitReport,
     updateReportLifecycle,
     closeStream,
+    pruneTerminalReports,
     purgeRecords
   };
 }

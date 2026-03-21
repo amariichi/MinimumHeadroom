@@ -69,8 +69,9 @@ export function resolveFaceAgentId(payload, agents = [], options = {}) {
     return options.operatorAgentId ?? '__operator__';
   }
 
-  // Unmatched payloads fall back to operator so speech bubbles and mouth sync always work
-  if (options.operatorAgentId) {
+  // Tile-level speech bubbles may choose to fall back to operator, but face-runtime
+  // routing can disable that so helper payloads do not animate the operator face.
+  if (options.operatorAgentId && options.allowFallbackToOperator !== false) {
     return options.operatorAgentId;
   }
 
