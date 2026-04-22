@@ -8,6 +8,16 @@ Purpose: provide a practical baseline so coding agents continuously report inten
 - `face_event` (primary status channel)
 - `face_say` (spoken status channel for key moments)
 
+### 1.1 Always pass `agent_id`
+
+Every `face_ping` / `face_event` / `face_say` call must include an explicit `agent_id` that matches the caller's real identity:
+
+- **Operator pane** (user-facing agent started by `run-operator-once.sh` / `start-mobile.sh`): `agent_id="__operator__"`.
+- **Helper agent** (running under an owner assignment): `agent_id="<assigned helper id>"` (for example `"helper-1"`).
+- **Ad-hoc caller**: pick the agent id whose face the user is actually watching.
+
+Skipping `agent_id` makes the main 3D head stop animating its mouth even though the text bubble and TTS audio still arrive — face-app routes every `tts_mouth` payload through per-agent runtime state, and without an explicit `agent_id` the routing falls back to null. `session_id` does not substitute for `agent_id`; it can be any stable tracking string.
+
 ## 2. Required signaling moments
 
 1. Task start / before major command blocks

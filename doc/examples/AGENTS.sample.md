@@ -10,6 +10,7 @@ Paste this into your project `AGENTS.md` and customize.
 - Before any approval prompt, send `face_event(permission_required)` and then `face_say(priority=3, policy=interrupt)`.
 - Never ask for approval before those two signals are sent.
 - Treat approval wait as attention, not idle.
+- **Always pass `agent_id`** on every `face_ping` / `face_event` / `face_say` call: `"__operator__"` when running as the user-facing operator pane, or the assigned helper id (e.g. `"helper-1"`) when running as a helper. Without an explicit `agent_id` the main 3D head stops animating its mouth even though the text bubble and audio still arrive. `session_id` does not substitute for `agent_id`.
 
 ## Compatibility baseline (recommended)
 
