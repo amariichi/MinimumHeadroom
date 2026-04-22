@@ -185,6 +185,18 @@ If you plan to use the mobile UI remotely, it is convenient to start Tailscale S
 tailscale serve --bg 8765
 ```
 
+### Binding to 0.0.0.0 for docker / remote agents
+
+If an MCP client runs in docker or another network namespace, face-app must bind to a non-loopback address. Set `FACE_WS_HOST=0.0.0.0` in your shell environment.
+
+Note: face-app has no built-in auth. When bound to `0.0.0.0`, port 8765 is reachable from the LAN as well. If you do not want LAN devices to reach it, deny the LAN interface explicitly at the OS firewall (leave `lo`, `tailscale0`, and `docker0` untouched so tailscale and containers still work):
+
+```bash
+sudo ufw deny in on <lan-interface> to any port 8765 proto tcp
+```
+
+Replace `<lan-interface>` with your actual Ethernet/Wi-Fi name (for example `enp129s0`, `eth0`, `wlan0`; check with `ip -brief addr`).
+
 ### Path A: Face + MCP (minimal)
 
 From repository root:
@@ -542,6 +554,18 @@ sequenceDiagram
 ```bash
 tailscale serve --bg 8765
 ```
+
+### docker / リモートエージェント向けに 0.0.0.0 でバインドする場合
+
+MCP クライアントが docker など別ネットワーク名前空間で動く構成では、face-app をループバック以外にバインドする必要があります。シェル環境で `FACE_WS_HOST=0.0.0.0` を設定してください。
+
+注意: face-app に組み込みの認証はありません。`0.0.0.0` にすると LAN からも 8765 に到達可能になります。LAN 端末から触らせたくない場合は、LAN インタフェースだけを OS ファイアウォールで明示的に拒否してください(`lo` / `tailscale0` / `docker0` には触らないので tailscale・コンテナはそのまま動きます):
+
+```bash
+sudo ufw deny in on <lan-interface> to any port 8765 proto tcp
+```
+
+`<lan-interface>` は実際の有線/Wi-Fi 名(例: `enp129s0`, `eth0`, `wlan0`、`ip -brief addr` で確認)に置き換えてください。
 
 ### Path A: Face + MCP（最小構成）
 

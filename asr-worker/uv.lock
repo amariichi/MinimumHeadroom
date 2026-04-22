@@ -247,7 +247,7 @@ wheels = [
 
 [[package]]
 name = "asr-worker"
-version = "1.13.11"
+version = "1.13.12"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
