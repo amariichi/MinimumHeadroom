@@ -331,7 +331,7 @@ wheels = [
 
 [[package]]
 name = "minimum-headroom-tts-worker"
-version = "1.13.9"
+version = "1.13.10"
 source = { editable = "." }
 dependencies = [
     { name = "fugashi" },
