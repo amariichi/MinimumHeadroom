@@ -3540,6 +3540,78 @@ function buildPlaybackSource(mimeType, audioBase64) {
   };
 }
 
+function ensureBrowserAudioMixerFilled() {
+  const mixer = ensureBrowserAudioMixer();
+  const cap = clampBrowserAudioMaxChannels(browserAudioMaxChannels);
+  while (mixer.channels.length < cap) {
+    mixer.channels.push(createBrowserAudioChannel());
+  }
+  return mixer;
+}
+
+function primeBrowserAudioChannelInGesture(channel) {
+  if (!channel || channel.active || !channel.player) {
+    return;
+  }
+  const player = channel.player;
+  const prevOnended = player.onended;
+  const prevOnerror = player.onerror;
+  const originalSrc = player.src;
+  player.onended = null;
+  player.onerror = null;
+  let playPromise;
+  try {
+    player.src = createSilentAudioDataUrl();
+    player.currentTime = 0;
+    playPromise = Promise.resolve(player.play());
+  } catch {
+    playPromise = Promise.reject(new Error('channel prime sync error'));
+  }
+  void withTimeout(playPromise, UNLOCK_TIMEOUT_MS)
+    .catch(() => {
+      // Prime is best-effort; NotAllowedError just means this channel stays locked until replay.
+    })
+    .finally(() => {
+      try {
+        player.pause();
+      } catch {
+        // Ignore pause errors during channel prime cleanup.
+      }
+      try {
+        player.currentTime = 0;
+      } catch {
+        // Ignore seek errors during channel prime cleanup.
+      }
+      if (originalSrc) {
+        try {
+          player.src = originalSrc;
+        } catch {
+          // Ignore src restore errors during channel prime cleanup.
+        }
+      } else {
+        try {
+          player.removeAttribute('src');
+          player.load();
+        } catch {
+          // Ignore removeAttribute/load failures during channel prime cleanup.
+        }
+      }
+      player.onended = prevOnended;
+      player.onerror = prevOnerror;
+    });
+}
+
+function primeAllBrowserAudioChannelsInGesture() {
+  ensureBrowserAudioMixerFilled();
+  const mixer = browserAudioMixer;
+  if (!mixer) {
+    return;
+  }
+  for (const channel of mixer.channels) {
+    primeBrowserAudioChannelInGesture(channel);
+  }
+}
+
 async function unlockPlaybackAudio() {
   if (audioUnlocked) {
     return true;
@@ -4653,8 +4725,10 @@ function installGestureShortcuts() {
 }
 
 function installAudioUnlockHooks() {
+  ensureBrowserAudioMixerFilled();
   const triggerUnlock = () => {
     void unlockPlaybackAudio();
+    primeAllBrowserAudioChannelsInGesture();
   };
 
   window.addEventListener('pointerdown', triggerUnlock, { passive: true });
