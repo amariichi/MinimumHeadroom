@@ -247,6 +247,14 @@ test('phase1 connectivity auto-injects helper face identity from environment def
   });
   client.notify('notifications/initialized', {});
 
+  const pingCallResult = await client.request('tools/call', {
+    name: 'face.ping',
+    arguments: {
+      session_id: 'phase1#env-default'
+    }
+  });
+  assert.equal(pingCallResult.isError, undefined);
+
   const sayCallResult = await client.request('tools/call', {
     name: 'face.say',
     arguments: {
@@ -258,8 +266,14 @@ test('phase1 connectivity auto-injects helper face identity from environment def
   assert.equal(sayCallResult.isError, undefined);
 
   await waitFor(() => receivedPayloads.some((payload) => payload.type === 'say'), 3000, 'say payload with env defaults');
+  await waitFor(() => receivedPayloads.some((payload) => payload.type === 'ping'), 3000, 'ping payload with env defaults');
   const sayPayload = receivedPayloads.find((payload) => payload.type === 'say');
   assert.equal(sayPayload.session_id, 'phase1#env-default');
   assert.equal(sayPayload.agent_id, 'helper-auto-env');
   assert.equal(sayPayload.agent_label, 'Helper Auto Env');
+
+  const pingPayload = receivedPayloads.find((payload) => payload.type === 'ping');
+  assert.equal(pingPayload.session_id, 'phase1#env-default');
+  assert.equal(pingPayload.agent_id, 'helper-auto-env');
+  assert.equal(pingPayload.agent_label, 'Helper Auto Env');
 });

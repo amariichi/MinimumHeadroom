@@ -80,6 +80,10 @@ export function normalizeOperatorKeyToken(value) {
   if (!normalized) {
     return null;
   }
+  const ctrlChord = normalized.match(/^(?:ctrl\+|c-)([a-z])$/);
+  if (ctrlChord) {
+    return `C-${ctrlChord[1]}`;
+  }
   return KEY_TOKEN_MAP.get(normalized) ?? null;
 }
 
@@ -508,10 +512,9 @@ export function createOperatorBridgeRuntime(options = {}) {
     const active = activeRequestBySession.get(sessionId) ?? null;
     const suppliedRequestId = asNonEmptyString(payload.request_id);
     const requestId = suppliedRequestId ?? (active ? active.request_id : null);
-    const isManualFreeText = !requestId && !active && responseKind === 'text';
     const isManualFreeChoice = !requestId && !active && responseKind === 'choice_single';
 
-    if (responseKind !== 'key' && responseKind !== 'restart' && !requestId && !isManualFreeText && !isManualFreeChoice) {
+    if (responseKind !== 'key' && responseKind !== 'restart' && !requestId && responseKind !== 'text' && !isManualFreeChoice) {
       emitAck(sessionId, null, false, 'rejected', 'request_missing', 'request_id is required');
       return;
     }
@@ -539,7 +542,7 @@ export function createOperatorBridgeRuntime(options = {}) {
         }
         await tmuxController.sendText(text, {
           submit: payload.submit !== false,
-          reinforceSubmit: isManualFreeText
+          reinforceSubmit: false
         });
       } else if (responseKind === 'choice_single') {
         const choice = normalizeChoiceValue(payload.value);

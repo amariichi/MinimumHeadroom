@@ -508,8 +508,88 @@ export function createAgentLifecycleRuntime(options = {}) {
     if (envEntries.length === 0) {
       return command;
     }
+    const dockerCommand = injectDockerExecEnv(command, envEntries);
+    if (dockerCommand) {
+      return dockerCommand;
+    }
     const envPrefix = envEntries.map(([key, value]) => `${key}=${shellEscapeSingle(value)}`).join(' ');
     return `env ${envPrefix} ${command}`;
+  }
+
+  function splitSimpleShellWords(input) {
+    const words = [];
+    let current = '';
+    let quote = null;
+    let escaping = false;
+    for (const ch of String(input)) {
+      if (escaping) {
+        current += ch;
+        escaping = false;
+        continue;
+      }
+      if (ch === '\\' && quote !== "'") {
+        escaping = true;
+        continue;
+      }
+      if ((ch === '"' || ch === "'") && quote === null) {
+        quote = ch;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+        continue;
+      }
+      if (quote === null && /\s/.test(ch)) {
+        if (current) {
+          words.push(current);
+          current = '';
+        }
+        continue;
+      }
+      current += ch;
+    }
+    if (escaping) {
+      current += '\\';
+    }
+    if (quote !== null) {
+      return null;
+    }
+    if (current) {
+      words.push(current);
+    }
+    return words;
+  }
+
+  function dockerExecOptionConsumesValue(option) {
+    return new Set(['-e', '--env', '--env-file', '-u', '--user', '-w', '--workdir']).has(option);
+  }
+
+  function injectDockerExecEnv(command, envEntries) {
+    const words = splitSimpleShellWords(command);
+    if (!Array.isArray(words) || words.length < 3 || words[0] !== 'docker' || words[1] !== 'exec') {
+      return null;
+    }
+    let insertAt = 2;
+    while (insertAt < words.length) {
+      const word = words[insertAt];
+      if (word === '--') {
+        insertAt += 1;
+        break;
+      }
+      if (!word.startsWith('-')) {
+        break;
+      }
+      insertAt += 1;
+      if (dockerExecOptionConsumesValue(word) && insertAt < words.length) {
+        insertAt += 1;
+      }
+    }
+    if (insertAt >= words.length) {
+      return null;
+    }
+    const envArgs = envEntries.flatMap(([key, value]) => ['-e', `${key}=${value}`]);
+    const updated = [...words.slice(0, insertAt), ...envArgs, ...words.slice(insertAt)];
+    return updated.map((word) => shellEscapeSingle(word)).join(' ');
   }
 
   function resolveDefaultWorktreePath(agentId) {

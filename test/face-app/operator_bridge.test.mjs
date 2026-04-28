@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createOperatorBridgeRuntime, createTmuxController } from '../../face-app/dist/operator_bridge.js';
+import { createOperatorBridgeRuntime, createTmuxController, normalizeOperatorKeyToken } from '../../face-app/dist/operator_bridge.js';
 
 function createFakeTmux() {
   const calls = [];
@@ -174,7 +174,7 @@ test('unsupported key returns failed ack with stable reason', async () => {
     type: 'operator_response',
     session_id: 's1',
     response_kind: 'key',
-    value: 'Ctrl+C'
+    value: 'F13'
   });
 
   const acks = payloads.filter((item) => item.type === 'operator_ack');
@@ -182,6 +182,29 @@ test('unsupported key returns failed ack with stable reason', async () => {
   assert.equal(acks[acks.length - 1].ok, false);
   assert.equal(acks[acks.length - 1].stage, 'failed');
   assert.equal(acks[acks.length - 1].reason, 'unsupported_key');
+});
+
+test('operator key normalization supports ctrl-letter chords', async () => {
+  assert.equal(normalizeOperatorKeyToken('C-c'), 'C-c');
+  assert.equal(normalizeOperatorKeyToken('ctrl+x'), 'C-x');
+});
+
+test('operator response sends ctrl-letter key chords to tmux', async () => {
+  const { runtime, payloads, tmux } = createRuntimeHarness();
+
+  await runtime.handlePayload({
+    v: 1,
+    type: 'operator_response',
+    session_id: 's1',
+    response_kind: 'key',
+    value: 'C-c'
+  });
+
+  const ack = findLatestAck(payloads);
+  assert.ok(ack);
+  assert.equal(ack.ok, true);
+  assert.equal(ack.stage, 'sent_to_tmux');
+  assert.deepEqual(tmux.calls.at(-1), { kind: 'key', token: 'C-c' });
 });
 
 test('manual text without request_id is accepted when no active request exists', async () => {
@@ -202,7 +225,7 @@ test('manual text without request_id is accepted when no active request exists',
   assert.equal(ack.stage, 'sent_to_tmux');
   assert.equal(ack.request_id, null);
   assert.equal(
-    tmux.calls.some((entry) => entry.kind === 'text' && entry.text === '聞こえますか?' && entry.options?.reinforceSubmit === true),
+    tmux.calls.some((entry) => entry.kind === 'text' && entry.text === '聞こえますか?' && entry.options?.reinforceSubmit === false),
     true
   );
 });

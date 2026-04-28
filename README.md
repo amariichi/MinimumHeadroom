@@ -6,7 +6,7 @@
 </p>
 <p>
   <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/fa7f65d5-f314-4118-90c7-3853fddd6668" />
-  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/07930388-e991-4686-8a3c-f2e7e1c64b89" />
+  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/4692887d-56fd-4c3f-8a0d-3ed975f50f4b" />
 </p>
 
 [English](#english) | [日本語](#japanese)
@@ -228,6 +228,9 @@ After `./scripts/setup.sh`, recommended one-shot startup:
 Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring. Start with `--profile default` or `--profile realtime` unless you specifically want Qwen3 TTS.
 
 - `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. `qwen3` / `qwen3-realtime` profiles work by passing `TTS_ENGINE=qwen3` into that spawned worker path.
+- `run-operator-once.sh` exports `MH_FACE_AGENT_ID=__operator__` / `MH_FACE_AGENT_LABEL=Operator` for the operator pane so face signaling can be attributed without manual `agent_id` guessing. Helper panes get their assigned helper id at spawn time; Docker-based helper commands receive it through `docker exec -e`.
+- Some MCP clients auto-fill that identity from the environment; others do not. If mouth animation is important, pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call, using `MH_FACE_AGENT_ID` as the source of truth. This is especially important for Docker-based agent setups.
+- `--agent-cmd` controls only the primary operator pane. `MH_AGENT_DEFAULT_CMD` is the helper-agent launch template used by `face-app` when you add helpers later. If that helper template starts with `docker exec`, Minimum Headroom inserts the per-helper `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` with `docker exec -e`; otherwise it prefixes the helper command with `env ...`. See [Operator Stack Guide](doc/guides/operator-stack.md#docker-and-helper-agent-commands) for Docker examples.
 - Profile shorthand:
   - `--profile default`: Kokoro TTS + batch ASR only
   - `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
@@ -596,6 +599,9 @@ sudo ufw deny in on <lan-interface> to any port 8765 proto tcp
 これは、tmux 連携、browser PTT、terminal mirror、隠し復旧、bridge の安全な既定配線まで含む、いちばん実用的な構成です。特に Qwen3 TTS を使いたい理由がなければ、`--profile default` か `--profile realtime` から始めてください。
 
 - `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`qwen3` / `qwen3-realtime` profile は、この子起動 worker に `TTS_ENGINE=qwen3` を渡して切り替えます。
+- `run-operator-once.sh` は operator pane に `MH_FACE_AGENT_ID=__operator__` / `MH_FACE_AGENT_LABEL=Operator` を export するため、face signaling の `agent_id` を毎回推測する必要がありません。helper pane は spawn 時に割り当てられた helper id を受け取り、Docker 経由の helper command には `docker exec -e` でコンテナ内へ渡されます。
+- MCP client によっては環境変数からの自動補完が効かないため、口パクを確実に動かしたい場合は `MH_FACE_AGENT_ID` を正として、`face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。Docker 経由の agent 構成では特にこの運用が安全です。
+- `--agent-cmd` は primary operator pane だけを指定します。`MH_AGENT_DEFAULT_CMD` は、あとで helper を追加するときに `face-app` が使う helper-agent 起動テンプレートです。この helper テンプレートが `docker exec` で始まる場合、Minimum Headroom は helper ごとの `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` を `docker exec -e` で挿入します。Docker でない場合は `env ...` を command の前に付けます。Docker の具体例は[Operator Stack Guide](doc/guides/operator-stack.md#ja-docker-and-helper-agent-commands)を参照してください。
 - profile の意味:
   - `--profile default`: Kokoro TTS + batch ASR のみ
   - `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback

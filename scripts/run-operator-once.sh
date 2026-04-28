@@ -8,12 +8,15 @@ cd "$ROOT_DIR"
 SESSION_NAME="agent"
 WINDOW_BASE="operator"
 AGENT_CMD="codex"
+AGENT_DEFAULT_CMD="${MH_AGENT_DEFAULT_CMD:-}"
 STACK_CMD="./scripts/run-operator-stack.sh"
 AGENT_CWD="$CALLER_DIR"
 BRIDGE_TARGET="agent"
 FACE_UI_MODE=""
 FACE_AUDIO_TARGET=""
 ASR_BASE_URL=""
+OPERATOR_FACE_AGENT_ID="${MH_OPERATOR_FACE_AGENT_ID:-__operator__}"
+OPERATOR_FACE_AGENT_LABEL="${MH_OPERATOR_FACE_AGENT_LABEL:-Operator}"
 PROFILE_NAME="default"
 ATTACH_AFTER_START=1
 STACK_CMD_SET=0
@@ -218,6 +221,9 @@ done
 apply_profile_defaults
 AGENT_CWD="$(resolve_agent_cwd "$AGENT_CWD")"
 AGENT_REPO_ROOT="$(derive_agent_repo_root "$AGENT_CWD")"
+if [[ -z "$AGENT_DEFAULT_CMD" ]]; then
+  AGENT_DEFAULT_CMD="$AGENT_CMD"
+fi
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "[run-operator-once] tmux is required but not found in PATH." >&2
@@ -296,10 +302,13 @@ if [[ "$BRIDGE_TARGET" == "agent" ]]; then
   bridge_pane="$agent_pane"
 fi
 
-# Launch agent command in the first pane.
+# Launch agent command in the first pane. Keep the operator identity in the
+# pane environment so host-based agents can let the MCP server auto-fill it.
 printf -v quoted_agent_cwd '%q' "$AGENT_CWD"
+printf -v quoted_operator_face_agent_id '%q' "$OPERATOR_FACE_AGENT_ID"
+printf -v quoted_operator_face_agent_label '%q' "$OPERATOR_FACE_AGENT_LABEL"
 tmux send-keys -t "$agent_pane" "cd $quoted_agent_cwd" C-m
-tmux send-keys -t "$agent_pane" "$AGENT_CMD" C-m
+tmux send-keys -t "$agent_pane" "export MH_FACE_AGENT_ID=$quoted_operator_face_agent_id MH_FACE_AGENT_LABEL=$quoted_operator_face_agent_label; $AGENT_CMD" C-m
 
 # Launch operator stack in the second pane with resolved pane id.
 stack_launch="env"
@@ -312,7 +321,9 @@ append_env() {
 }
 append_env "MH_BRIDGE_TMUX_PANE" "$bridge_pane"
 append_env "MH_BRIDGE_RECOVERY_TMUX_PANE" "$agent_pane"
-append_env "MH_AGENT_DEFAULT_CMD" "$AGENT_CMD"
+append_env "MH_AGENT_DEFAULT_CMD" "$AGENT_DEFAULT_CMD"
+append_env "MH_OPERATOR_FACE_AGENT_ID" "$OPERATOR_FACE_AGENT_ID"
+append_env "MH_OPERATOR_FACE_AGENT_LABEL" "$OPERATOR_FACE_AGENT_LABEL"
 append_env "MH_AGENT_SOURCE_REPO_DEFAULT" "$AGENT_REPO_ROOT"
 append_env "MH_AGENT_STREAM_ID" "repo:${AGENT_REPO_ROOT}"
 append_env "MH_AGENT_WORKTREES_ROOT" "${AGENT_REPO_ROOT}/.agent/worktrees"
@@ -334,6 +345,8 @@ tmux send-keys -t "$stack_pane" "$stack_launch" C-m
 echo "[run-operator-once] session=${SESSION_NAME} window=${window_name}"
 echo "[run-operator-once] profile=${PROFILE_NAME}"
 echo "[run-operator-once] agent pane=${agent_pane} cwd=${AGENT_CWD} repo=${AGENT_REPO_ROOT} command=${AGENT_CMD}"
+echo "[run-operator-once] operator face agent=${OPERATOR_FACE_AGENT_ID} label=${OPERATOR_FACE_AGENT_LABEL}"
+echo "[run-operator-once] helper default command=${AGENT_DEFAULT_CMD}"
 echo "[run-operator-once] stack pane=${stack_pane} command=${STACK_CMD}"
 echo "[run-operator-once] MH_BRIDGE_TMUX_PANE=${bridge_pane} (${BRIDGE_TARGET})"
 
