@@ -118,7 +118,7 @@
               aria-expanded="false"
               title="Keyboard shortcuts"
             >?</button>
-            <button id="operator-restart" type="button" class="operator-btn">Restart</button>
+            <button id="operator-restart" type="button" class="operator-btn hidden">Restart</button>
             <button id="operator-close" type="button" class="operator-btn">Close</button>
           </div>
         </header>
@@ -181,14 +181,17 @@
           <div class="operator-text-actions">
             <button id="operator-text-send" type="button" class="operator-btn">Send Text</button>
             <button id="operator-text-clear" type="button" class="operator-btn">Clear</button>
-            <button id="operator-text-cancel" type="button" class="operator-btn">Hide KB</button>
+            <button id="operator-text-ctrl" type="button" class="operator-btn operator-ctrl-btn" aria-pressed="false">Ctrl</button>
+            <button id="operator-text-slash" type="button" class="operator-btn" aria-label="Insert slash">/</button>
           </div>
         </div>
 
         <div class="operator-keypad">
+          <button id="operator-key-left" type="button" class="operator-key-btn" aria-label="Left">←</button>
           <button id="operator-key-up" type="button" class="operator-key-btn" aria-label="Up">↑</button>
           <button id="operator-key-enter" type="button" class="operator-key-btn">Select</button>
           <button id="operator-key-down" type="button" class="operator-key-btn" aria-label="Down">↓</button>
+          <button id="operator-key-right" type="button" class="operator-key-btn" aria-label="Right">→</button>
         </div>
 
         <pre id="operator-mirror" class="operator-mirror" aria-label="Read only terminal mirror"></pre>

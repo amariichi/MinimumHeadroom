@@ -8,15 +8,15 @@ Purpose: provide a practical baseline so coding agents continuously report inten
 - `face_event` (primary status channel)
 - `face_say` (spoken status channel for key moments)
 
-### 1.1 Always pass `agent_id`
+### 1.1 Stable `agent_id` identity
 
-Every `face_ping` / `face_event` / `face_say` call must include an explicit `agent_id` that matches the caller's real identity:
+Every `face_ping` / `face_event` / `face_say` payload must carry an `agent_id` that matches the caller's real identity. Prefer setting `MH_FACE_AGENT_ID` in the agent process environment so the MCP server can auto-fill `agent_id` for all three tools. If that environment default is unavailable, pass `agent_id` explicitly.
 
 - **Operator pane** (user-facing agent started by `run-operator-once.sh` / `start-mobile.sh`): `agent_id="__operator__"`.
 - **Helper agent** (running under an owner assignment): `agent_id="<assigned helper id>"` (for example `"helper-1"`).
 - **Ad-hoc caller**: pick the agent id whose face the user is actually watching.
 
-Skipping `agent_id` makes the main 3D head stop animating its mouth even though the text bubble and TTS audio still arrive — face-app routes every `tts_mouth` payload through per-agent runtime state, and without an explicit `agent_id` the routing falls back to null. `session_id` does not substitute for `agent_id`; it can be any stable tracking string.
+Do not hard-code `__operator__` from habit. If this process is a helper, use the assigned helper id. Skipping or misrouting `agent_id` makes the visible 3D head stop animating its mouth even though the text bubble and TTS audio still arrive, because face-app routes every `tts_mouth` payload through per-agent runtime state. `session_id` does not substitute for `agent_id`; it can be any stable tracking string.
 
 ## 2. Required signaling moments
 

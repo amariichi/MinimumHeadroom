@@ -1807,6 +1807,30 @@ test('addAgent auto-injects helper face identity into the launch command', async
   cleanup(repoRoot);
 });
 
+test('addAgent injects helper face identity inside docker exec launch commands', async () => {
+  const { repoRoot, runtime, commands } = createRuntimeHarness();
+
+  const result = await runtime.addAgent({
+    id: 'agent-docker-face',
+    create_worktree: false,
+    create_tmux: true,
+    source_repo_path: repoRoot,
+    agent_cmd: 'docker exec -it -u agent-user agent-container agent-cli chat'
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.agent.launch_command, /docker' 'exec'/);
+  assert.match(result.agent.launch_command, /'-e' 'MH_FACE_AGENT_ID=agent-docker-face'/);
+  assert.match(result.agent.launch_command, /'-e' 'MH_FACE_AGENT_LABEL=agent-docker-face'/);
+  assert.doesNotMatch(result.agent.launch_command, /^env /);
+  const launchCmd = commands.find(
+    (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('MH_FACE_AGENT_ID=agent-docker-face'))
+  );
+  assert.ok(launchCmd, 'expected docker helper launch command to pass MH_FACE_AGENT_ID into docker exec');
+
+  cleanup(repoRoot);
+});
+
 test('reconcileAgents recreates helper panes with the stored launch command', async () => {
   const { repoRoot, runtime, stateStore, commands } = createRuntimeHarness({
     defaultAgentCommand: 'codex --default',

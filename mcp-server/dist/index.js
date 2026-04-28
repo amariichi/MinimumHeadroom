@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.2.2';
+const SERVER_VERSION = '1.13.13';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_HTTP_BASE_URL = (() => {
@@ -100,7 +100,9 @@ const BASE_TOOL_DEFINITIONS = [
       additionalProperties: true,
       required: ['session_id'],
       properties: {
-        session_id: { type: 'string', minLength: 1 }
+        session_id: { type: 'string', minLength: 1 },
+        agent_id: { type: ['string', 'null'] },
+        agent_label: { type: ['string', 'null'] }
       }
     }
   },
@@ -628,11 +630,15 @@ function normalizeSayPayload(rawArguments) {
 function normalizePingPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const sessionId = requireString(args, 'session_id');
+  const agentId = optionalString(args, 'agent_id', DEFAULT_FACE_AGENT_ID);
+  const agentLabel = optionalString(args, 'agent_label', DEFAULT_FACE_AGENT_LABEL);
 
   return {
     v: 1,
     type: 'ping',
     session_id: sessionId,
+    ...(agentId ? { agent_id: agentId } : {}),
+    ...(agentLabel ? { agent_label: agentLabel } : {}),
     ts: Date.now()
   };
 }

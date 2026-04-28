@@ -79,6 +79,6 @@ When MCP is available, emit:
 - `face_event` on important boundaries
 - `face_say` for high-value notices
 
-Always pass `agent_id` on every face_* call (`"__operator__"` for the user-facing operator pane, `"<assigned helper id>"` for a helper). Without an explicit `agent_id` the main 3D head stops animating its mouth even though the text bubble and audio still arrive.
+Keep `agent_id` stable on every face_* payload. Prefer setting `MH_FACE_AGENT_ID` in the agent process environment so the MCP server auto-fills `agent_id`; pass it explicitly only when that default is unavailable. Use `"__operator__"` for the user-facing operator pane and `"<assigned helper id>"` for helpers. Do not hard-code `"__operator__"` when running as a helper. Without the correct `agent_id`, the visible 3D head may stop animating its mouth even though the text bubble and audio still arrive.
 
 For concrete timing and priority rules, follow `doc/examples/AGENT_RULES.md`.

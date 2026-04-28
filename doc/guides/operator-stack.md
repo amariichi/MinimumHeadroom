@@ -61,6 +61,43 @@ All launchers also accept `--ui-mode <auto|pc|mobile>` (the CLI form of `FACE_UI
 
 `run-operator-once.sh` creates or reuses a tmux session, splits a window into two panes, launches your coding agent in pane 0, launches the integrated stack in pane 1, and wires the bridge target to pane 0 by default.
 
+It also exports `MH_FACE_AGENT_ID=__operator__` and `MH_FACE_AGENT_LABEL=Operator` into the operator pane. Helper panes receive their assigned helper id at spawn time, and Docker-based helper commands receive that identity through `docker exec -e`. Some clients inherit this automatically, but clients that do not auto-fill tool arguments must pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call.
+
+### Docker and helper agent commands
+
+The primary operator command and the helper-agent command template are separate:
+
+- `--agent-cmd <command>` starts the primary operator pane.
+- `MH_AGENT_DEFAULT_CMD=<command>` is the template `face-app` uses later when it spawns helper agents.
+
+`run-operator-once.sh` sets `MH_FACE_AGENT_ID=__operator__` in the operator pane environment, but it does not rewrite an arbitrary Docker command passed to `--agent-cmd`. If the primary operator itself runs through Docker, include the operator identity in that command:
+
+```bash
+./scripts/run-operator-once.sh --profile realtime \
+  --agent-cmd 'docker exec -it -e MH_FACE_AGENT_ID=__operator__ -e MH_FACE_AGENT_LABEL=Operator agent-container agent-cli'
+```
+
+Helper agents are different because `face-app` creates them and knows each helper id. When `MH_AGENT_DEFAULT_CMD` starts with `docker exec`, `face-app` inserts the helper identity before the container name:
+
+```bash
+MH_AGENT_DEFAULT_CMD='docker exec -it agent-container agent-cli' \
+  ./scripts/run-operator-once.sh --profile realtime
+```
+
+For a helper named `helper-1`, that helper launch is effectively:
+
+```bash
+docker exec -it -e MH_FACE_AGENT_ID=helper-1 -e MH_FACE_AGENT_LABEL=helper-1 agent-container agent-cli
+```
+
+When the helper template is not a `docker exec` command, `face-app` prefixes it with normal process environment variables instead:
+
+```bash
+env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
+```
+
+This only makes the identity available to the agent process. Some MCP clients still do not copy environment defaults into tool-call arguments, so agents that need reliable mouth animation should pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call. If the agent process runs in a separate Docker network namespace, also see the `FACE_WS_HOST=0.0.0.0` guidance in the README.
+
 `run-operator-stack.sh` starts:
 
 - `face-app`
@@ -324,6 +361,44 @@ Wrong pane is mirrored on mobile:
 ### フル operator stack の中身
 
 `run-operator-once.sh` は tmux セッションを作成または再利用し、ウィンドウを 2 ペインに分け、0 番にエージェント、1 番に統合スタックを起動し、bridge の接続先を既定で 0 番へ向けます。
+
+また、operator pane には `MH_FACE_AGENT_ID=__operator__` と `MH_FACE_AGENT_LABEL=Operator` を export します。helper pane は spawn 時に割り当てられた helper id を受け取り、Docker 経由の helper command には `docker exec -e` でその identity が渡されます。client によってはこれを自動継承しますが、tool 引数を自動補完しない client では `face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。
+
+<a id="ja-docker-and-helper-agent-commands"></a>
+### Docker と helper agent の command
+
+primary operator の command と helper-agent の起動テンプレートは別です。
+
+- `--agent-cmd <command>` は primary operator pane を起動します。
+- `MH_AGENT_DEFAULT_CMD=<command>` は、あとで helper agent を spawn するときに `face-app` が使うテンプレートです。
+
+`run-operator-once.sh` は operator pane の環境に `MH_FACE_AGENT_ID=__operator__` を設定しますが、`--agent-cmd` に渡された任意の Docker command を書き換えるわけではありません。primary operator 自体を Docker 経由で動かす場合は、その command に operator identity を明示してください。
+
+```bash
+./scripts/run-operator-once.sh --profile realtime \
+  --agent-cmd 'docker exec -it -e MH_FACE_AGENT_ID=__operator__ -e MH_FACE_AGENT_LABEL=Operator agent-container agent-cli'
+```
+
+helper agent は `face-app` が作成し、各 helper id を知っているため扱いが異なります。`MH_AGENT_DEFAULT_CMD` が `docker exec` で始まる場合、`face-app` はコンテナ名の前に helper identity を挿入します。
+
+```bash
+MH_AGENT_DEFAULT_CMD='docker exec -it agent-container agent-cli' \
+  ./scripts/run-operator-once.sh --profile realtime
+```
+
+`helper-1` という helper の場合、実質的には次のような起動になります。
+
+```bash
+docker exec -it -e MH_FACE_AGENT_ID=helper-1 -e MH_FACE_AGENT_LABEL=helper-1 agent-container agent-cli
+```
+
+helper テンプレートが `docker exec` でない場合は、通常の process environment として command の前に付けます。
+
+```bash
+env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
+```
+
+これは agent process に identity を渡すだけです。MCP client によっては環境変数の既定値を tool call 引数へコピーしないため、口パクを確実に動かしたい agent は `face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。agent process が Docker の別 network namespace で動く場合は、README の `FACE_WS_HOST=0.0.0.0` の説明も参照してください。
 
 `run-operator-stack.sh` が起動するもの:
 

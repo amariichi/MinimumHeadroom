@@ -257,7 +257,7 @@ export function renderAssignmentPrompt(assignment, options = {}) {
   const protocolLines = [
     `1. Before reading repo files, skills, or running broad exploration, call the agent.report MCP tool (shown in some clients as minimum_headroom.agent_report) with stream_id=${assignment.stream_id}, mission_id=${assignment.mission_id}, owner_agent_id=${assignment.owner_agent_id}, from_agent_id=${assignment.agent_id}, kind=progress, summary='Mission accepted'.`,
     '2. Wait until that first report call succeeds.',
-    `3. face.event and face.say should inherit your helper identity automatically; if your client does not, include agent_id=${assignment.agent_id} manually so speech and status stay attributed to you.`,
+    `3. face.ping, face.event, and face.say should inherit your helper identity from MH_FACE_AGENT_ID=${assignment.agent_id}; if your client does not, include agent_id=${assignment.agent_id} manually so speech, mouth animation, and status stay attributed to you.`,
     '4. If blocked or uncertain, send blocked or question to the owner instead of asking the user directly.',
     '5. Inspect the target paths before optional skill lookup, slash commands, or unrelated repo exploration unless blocked without them.',
     '6. Send done or review_findings as soon as the current completion criteria are satisfied.',

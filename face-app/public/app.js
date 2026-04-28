@@ -114,8 +114,12 @@ const operatorTextInputEl = document.getElementById('operator-text-input');
 const operatorTextSendButtonEl = document.getElementById('operator-text-send');
 const operatorTextClearButtonEl = document.getElementById('operator-text-clear');
 const operatorTextCancelButtonEl = document.getElementById('operator-text-cancel');
+const operatorTextCtrlButtonEl = document.getElementById('operator-text-ctrl');
+const operatorTextSlashButtonEl = document.getElementById('operator-text-slash');
+const operatorKeyLeftEl = document.getElementById('operator-key-left');
 const operatorKeyUpEl = document.getElementById('operator-key-up');
 const operatorKeyDownEl = document.getElementById('operator-key-down');
+const operatorKeyRightEl = document.getElementById('operator-key-right');
 const operatorKeyEnterEl = document.getElementById('operator-key-enter');
 const operatorMirrorToggleEl = document.getElementById('operator-mirror-toggle');
 const operatorHelpToggleEl = document.getElementById('operator-help-toggle');
@@ -334,6 +338,7 @@ let operatorTerminalSnapshotLines = [];
 let operatorMirrorAutoFollow = true;
 let operatorMirrorInitialScrollDone = false;
 let operatorKeyboardHelpOpen = false;
+let operatorCtrlChordArmed = false;
 const operatorBatchAsrConfig = {
   enabled: false
 };
@@ -2507,6 +2512,54 @@ function appendOperatorTextInput(value, language = 'en') {
   syncOperatorTextInputHeight();
   setOperatorStatusLine(`asr appended (${language})`, 'ok');
   return true;
+}
+
+function insertOperatorTextLiteral(value) {
+  if (!operatorTextInputEl || typeof value !== 'string' || value === '') {
+    return false;
+  }
+  const selection = normalizeOperatorTextSelection(
+    operatorTextInputEl.value,
+    operatorTextInputEl.selectionStart,
+    operatorTextInputEl.selectionEnd
+  );
+  operatorTextInputEl.value = `${operatorTextInputEl.value.slice(0, selection.start)}${value}${operatorTextInputEl.value.slice(selection.end)}`;
+  const caret = selection.start + value.length;
+  try {
+    operatorTextInputEl.setSelectionRange(caret, caret);
+  } catch {
+    // Ignore selection update errors on unsupported input states.
+  }
+  syncOperatorTextInputHeight();
+  focusOperatorTextInput();
+  return true;
+}
+
+function updateOperatorCtrlButtonState() {
+  if (!operatorTextCtrlButtonEl) {
+    return;
+  }
+  operatorTextCtrlButtonEl.classList.toggle('is-armed', operatorCtrlChordArmed);
+  operatorTextCtrlButtonEl.setAttribute('aria-pressed', operatorCtrlChordArmed ? 'true' : 'false');
+}
+
+function setOperatorCtrlChordArmed(armed, { focusTextInput = false, updateStatus = true } = {}) {
+  operatorCtrlChordArmed = armed === true;
+  updateOperatorCtrlButtonState();
+  if (focusTextInput) {
+    focusOperatorTextInput();
+  }
+  if (updateStatus) {
+    setOperatorStatusLine(operatorCtrlChordArmed ? 'ctrl: press a-z' : 'ctrl cancelled', 'default');
+  }
+}
+
+function normalizeOperatorCtrlChordKey(event) {
+  if (!event || typeof event.key !== 'string' || event.key.length !== 1) {
+    return null;
+  }
+  const key = event.key.toLowerCase();
+  return /^[a-z]$/.test(key) ? `C-${key}` : null;
 }
 
 function shouldUseOperatorRealtimeAsr() {
@@ -4968,6 +5021,9 @@ function installOperatorKeyboardCommands() {
 }
 
 async function handleOperatorEscButtonClick() {
+  if (operatorCtrlChordArmed) {
+    setOperatorCtrlChordArmed(false, { updateStatus: false });
+  }
   hideOperatorKeyboard();
   if (operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE && operatorEscRecoveryTracker.recordTap(Date.now())) {
     await requestOperatorRecoverDefault();
@@ -5043,7 +5099,25 @@ function installOperatorControls() {
       event.preventDefault();
     });
     operatorTextClearButtonEl.addEventListener('click', () => {
+      if (operatorCtrlChordArmed) {
+        setOperatorCtrlChordArmed(false, { updateStatus: false });
+      }
       clearOperatorTextInput({ focusTextInput: true });
+    });
+  }
+  if (operatorTextCtrlButtonEl) {
+    operatorTextCtrlButtonEl.addEventListener('click', () => {
+      setOperatorCtrlChordArmed(!operatorCtrlChordArmed, { focusTextInput: !operatorCtrlChordArmed });
+    });
+  }
+  if (operatorTextSlashButtonEl) {
+    operatorTextSlashButtonEl.addEventListener('click', () => {
+      if (operatorCtrlChordArmed) {
+        setOperatorCtrlChordArmed(false, { updateStatus: false });
+      }
+      if (insertOperatorTextLiteral('/')) {
+        setOperatorStatusLine('slash inserted', 'ok');
+      }
     });
   }
   if (operatorTextCancelButtonEl) {
@@ -5057,6 +5131,23 @@ function installOperatorControls() {
       syncOperatorTextInputHeight();
     });
     operatorTextInputEl.addEventListener('keydown', (event) => {
+      if (operatorCtrlChordArmed) {
+        const token = normalizeOperatorCtrlChordKey(event);
+        if (token) {
+          event.preventDefault();
+          event.stopPropagation();
+          setOperatorCtrlChordArmed(false, { updateStatus: false });
+          hideOperatorKeyboard(false);
+          sendOperatorResponse('key', token, { requestId: null, submit: false });
+          setOperatorStatusLine(`sent ${token}`, 'ok');
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setOperatorCtrlChordArmed(false);
+          return;
+        }
+      }
       if (event.key === 'Escape') {
         event.preventDefault();
         hideOperatorKeyboard();
@@ -5070,8 +5161,10 @@ function installOperatorControls() {
   }
 
   const keyBindings = [
+    [operatorKeyLeftEl, 'Left'],
     [operatorKeyUpEl, 'Up'],
     [operatorKeyDownEl, 'Down'],
+    [operatorKeyRightEl, 'Right'],
     [operatorKeyEnterEl, 'Enter']
   ];
   for (const [button, token] of keyBindings) {
@@ -5079,9 +5172,13 @@ function installOperatorControls() {
       continue;
     }
     button.addEventListener('click', () => {
+      if (operatorCtrlChordArmed) {
+        setOperatorCtrlChordArmed(false, { updateStatus: false });
+      }
       sendOperatorResponse('key', token, { submit: false });
     });
   }
+  updateOperatorCtrlButtonState();
 
   registerOperatorPttButton(operatorPttJaButtonEl, 'ja');
   registerOperatorPttButton(operatorPttEnButtonEl, 'en');
