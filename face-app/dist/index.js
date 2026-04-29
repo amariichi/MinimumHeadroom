@@ -20,6 +20,7 @@ const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
 const wsPath = process.env.FACE_WS_PATH ?? '/ws';
 const audioTargetInput = process.env.FACE_AUDIO_TARGET ?? 'local';
 const uiModeInput = process.env.FACE_UI_MODE ?? 'auto';
+const faceDisplayInput = process.env.FACE_FACE_DISPLAY ?? 'full';
 
 function normalizeAudioTarget(value) {
   if (typeof value !== 'string') {
@@ -38,6 +39,17 @@ function normalizeUiMode(value) {
   }
   const normalized = value.trim().toLowerCase();
   if (normalized === 'auto' || normalized === 'pc' || normalized === 'mobile') {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeFaceDisplay(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'full' || normalized === 'mini' || normalized === 'hidden') {
     return normalized;
   }
   return null;
@@ -64,6 +76,12 @@ if (!uiMode) {
   process.exit(2);
 }
 console.info(`[face-app] ui mode=${uiMode}`);
+const faceDisplay = normalizeFaceDisplay(faceDisplayInput);
+if (!faceDisplay) {
+  console.error(`[face-app] invalid FACE_FACE_DISPLAY: ${faceDisplayInput} (expected full|mini|hidden)`);
+  process.exit(2);
+}
+console.info(`[face-app] face display=${faceDisplay}`);
 const operatorPanelEnabled = (process.env.FACE_OPERATOR_PANEL_ENABLED ?? '1') !== '0';
 console.info(`[face-app] operator panel=${operatorPanelEnabled ? 'enabled' : 'disabled'}`);
 
@@ -319,6 +337,7 @@ const server = await startFaceWebSocketServer({
       writeJson(response, 200, {
         ok: true,
         uiMode,
+        faceDisplay,
         operatorPanelEnabled,
         batchAsr: {
           enabled: operatorAsrProxy?.enabled === true
