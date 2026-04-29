@@ -21,6 +21,8 @@ cd "$ROOT_DIR"
 : "${MH_OPERATOR_REALTIME_ASR_WS_URL:=ws://${REALTIME_ASR_HOST}:${REALTIME_ASR_PORT}${REALTIME_ASR_PATH}}"
 : "${MH_OPERATOR_REALTIME_ASR_MODEL:=mistralai/Voxtral-Mini-4B-Realtime-2602}"
 : "${MH_STACK_START_MCP:=0}"
+: "${MH_OPERATOR_FACE_AGENT_ID:=__operator__}"
+: "${MH_OPERATOR_FACE_AGENT_LABEL:=Operator}"
 
 DEFAULT_OPERATOR_ASR_BASE_URL="http://${ASR_HOST}:${ASR_PORT}"
 STACK_OPERATOR_ASR_BASE_URL="$MH_OPERATOR_ASR_BASE_URL"
@@ -75,6 +77,7 @@ echo "[run-operator-stack] MH_OPERATOR_REALTIME_ASR_ENABLED=${MH_OPERATOR_REALTI
 echo "[run-operator-stack] MH_OPERATOR_REALTIME_ASR_WS_URL=${MH_OPERATOR_REALTIME_ASR_WS_URL}"
 echo "[run-operator-stack] MH_STACK_START_REALTIME_ASR=${MH_STACK_START_REALTIME_ASR}"
 echo "[run-operator-stack] MH_STACK_START_MCP=${MH_STACK_START_MCP}"
+echo "[run-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${MH_OPERATOR_FACE_AGENT_ID}"
 
 if [[ "${MH_STACK_SKIP_ASR}" == "1" ]]; then
   echo "[run-operator-stack] skipping asr-worker startup (MH_STACK_SKIP_ASR=1)."
@@ -110,7 +113,7 @@ start_proc "operator-bridge" \
 
 if [[ "${MH_STACK_START_MCP}" == "1" ]]; then
   start_proc "mcp-server" \
-    env FACE_WS_URL="$FACE_WS_URL" \
+    env FACE_WS_URL="$FACE_WS_URL" MH_FACE_AGENT_ID="$MH_OPERATOR_FACE_AGENT_ID" MH_FACE_AGENT_LABEL="$MH_OPERATOR_FACE_AGENT_LABEL" \
     ./scripts/run-mcp-server.sh
 else
   echo "[run-operator-stack] skipping mcp-server startup (MH_STACK_START_MCP=0)."

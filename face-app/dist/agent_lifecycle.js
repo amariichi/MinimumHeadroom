@@ -473,7 +473,7 @@ export function createAgentLifecycleRuntime(options = {}) {
     return candidate;
   }
 
-  async function startTmuxAgentPane({ agentId, cwd, command }) {
+  async function startTmuxAgentPane({ agentId, cwd, command, paneEnvCommand = null }) {
     const baseName = `agent-${sanitizeBranchSegment(agentId.slice(0, 8), 'node')}`;
     const windowName = await nextWindowName(baseName);
     const created = await runTmux([
@@ -493,18 +493,34 @@ export function createAgentLifecycleRuntime(options = {}) {
     if (!paneId) {
       throw createLifecycleError('tmux_failed', 'failed to get new pane id from tmux');
     }
+    if (paneEnvCommand) {
+      await runTmux(['send-keys', '-t', paneId, paneEnvCommand, 'C-m']);
+    }
     if (command) {
       await runTmux(['send-keys', '-t', paneId, command, 'C-m']);
     }
     return { paneId, windowName };
   }
 
-  function buildAgentLaunchCommand(baseCommand, options = {}) {
-    const command = asNonEmptyString(baseCommand) ?? defaultAgentCommand;
-    const envEntries = [
+  function buildAgentIdentityEnvEntries(options = {}) {
+    return [
       ['MH_FACE_AGENT_ID', asNonEmptyString(options.agentId)],
       ['MH_FACE_AGENT_LABEL', asNonEmptyString(options.agentLabel)]
     ].filter(([, value]) => value);
+  }
+
+  function buildAgentPaneEnvCommand(options = {}) {
+    const envEntries = buildAgentIdentityEnvEntries(options);
+    if (envEntries.length === 0) {
+      return null;
+    }
+    const envPrefix = envEntries.map(([key, value]) => `${key}=${shellEscapeSingle(value)}`).join(' ');
+    return `export ${envPrefix}`;
+  }
+
+  function buildAgentLaunchCommand(baseCommand, options = {}) {
+    const command = asNonEmptyString(baseCommand) ?? defaultAgentCommand;
+    const envEntries = buildAgentIdentityEnvEntries(options);
     if (envEntries.length === 0) {
       return command;
     }
@@ -686,16 +702,18 @@ export function createAgentLifecycleRuntime(options = {}) {
       }
     }
 
-    launchCommand = buildAgentLaunchCommand(agentCommand, {
+    const identityEnvOptions = {
       agentId,
       agentLabel: agentId
-    });
+    };
+    launchCommand = buildAgentLaunchCommand(agentCommand, identityEnvOptions);
 
     if (createTmux) {
       const pane = await startTmuxAgentPane({
         agentId,
         cwd: runCwd,
-        command: launchCommand
+        command: launchCommand,
+        paneEnvCommand: buildAgentPaneEnvCommand(identityEnvOptions)
       });
       paneCreated = true;
       paneId = pane.paneId;

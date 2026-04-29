@@ -290,3 +290,61 @@ export function summarizeAgentTileMessage(agent, transientMessage = null, ownerI
       return 'idle';
   }
 }
+
+export function normalizePersistedDashboardSelection(rawSelection = null) {
+  const source = typeof rawSelection === 'string'
+    ? { agentId: rawSelection }
+    : rawSelection && typeof rawSelection === 'object'
+      ? rawSelection
+      : null;
+  if (!source) {
+    return null;
+  }
+  const agentId = asNonEmptyString(source.agentId ?? source.agent_id);
+  if (!agentId) {
+    return null;
+  }
+  return {
+    agentId,
+    streamId: asNonEmptyString(source.streamId ?? source.stream_id),
+    targetRepoRoot: asNonEmptyString(source.targetRepoRoot ?? source.target_repo_root),
+    paneId: asNonEmptyString(source.paneId ?? source.pane_id),
+    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0) ?? 0
+  };
+}
+
+export function resolveRestoredDashboardSelection(rawSelection = null, agents = [], options = {}) {
+  const selection = normalizePersistedDashboardSelection(rawSelection);
+  if (!selection) {
+    return null;
+  }
+
+  const operatorAgentId = asNonEmptyString(options.operatorAgentId) ?? '__operator__';
+  if (selection.agentId === operatorAgentId) {
+    return {
+      agentId: operatorAgentId,
+      agent: null,
+      selection
+    };
+  }
+
+  const activeStreamId = asNonEmptyString(options.activeStreamId);
+  if (selection.streamId && activeStreamId && selection.streamId !== activeStreamId) {
+    return null;
+  }
+  const activeTargetRepoRoot = asNonEmptyString(options.activeTargetRepoRoot);
+  if (selection.targetRepoRoot && activeTargetRepoRoot && selection.targetRepoRoot !== activeTargetRepoRoot) {
+    return null;
+  }
+
+  const agent = (Array.isArray(agents) ? agents : []).find((item) => item?.id === selection.agentId) ?? null;
+  if (!agent || normalizeAgentStatus(agent.status) !== 'active' || !asNonEmptyString(agent.pane_id)) {
+    return null;
+  }
+
+  return {
+    agentId: agent.id,
+    agent,
+    selection
+  };
+}

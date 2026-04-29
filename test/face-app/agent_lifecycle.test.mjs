@@ -1803,6 +1803,15 @@ test('addAgent auto-injects helper face identity into the launch command', async
     (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('MH_FACE_AGENT_ID'))
   );
   assert.ok(launchCmd, 'expected helper launch command to include MH_FACE_AGENT_ID');
+  const exportCmdIndex = commands.findIndex(
+    (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.startsWith('export MH_FACE_AGENT_ID'))
+  );
+  const launchCmdIndex = commands.findIndex(
+    (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('codex --profile helper'))
+  );
+  assert.notEqual(exportCmdIndex, -1, 'expected helper pane shell to export MH_FACE_AGENT_ID');
+  assert.notEqual(launchCmdIndex, -1, 'expected helper launch command to be sent');
+  assert.ok(exportCmdIndex < launchCmdIndex, 'expected helper identity export before launch command');
 
   cleanup(repoRoot);
 });

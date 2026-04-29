@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.13.14';
+const SERVER_VERSION = '1.14.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_HTTP_BASE_URL = (() => {
@@ -38,6 +38,10 @@ const DEFAULT_FACE_AGENT_ID = (() => {
 const DEFAULT_FACE_AGENT_LABEL = (() => {
   const raw = process.env.MH_FACE_AGENT_LABEL;
   return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null;
+})();
+const FACE_AGENT_ID_REQUIRED = (() => {
+  const raw = process.env.MH_FACE_AGENT_ID_REQUIRED ?? process.env.MH_FACE_IDENTITY_STRICT;
+  return typeof raw === 'string' && ['1', 'true', 'yes'].includes(raw.trim().toLowerCase());
 })();
 
 const EVENT_NAMES = new Set([
@@ -412,6 +416,100 @@ function toolTextResult(text, extra = {}) {
   };
 }
 
+function createFaceIdentityError(message, identity) {
+  const error = new Error(message);
+  error.faceIdentity = identity;
+  return error;
+}
+
+function faceIdentityReason(code) {
+  switch (code) {
+    case 'agent_id_mismatch':
+      return 'request agent_id does not match the agent identity bound to this MCP server process';
+    case 'missing_agent_id':
+      return 'no agent_id was provided and this MCP server process has no MH_FACE_AGENT_ID binding';
+    default:
+      return null;
+  }
+}
+
+function faceIdentityRemediation(identity, code) {
+  const boundAgentId = identity?.bound_agent_id ?? null;
+  const requestedAgentId = identity?.requested_agent_id ?? null;
+  switch (code) {
+    case 'agent_id_mismatch':
+      return boundAgentId
+        ? `Retry without agent_id or set agent_id to "${boundAgentId}". Do not use "${requestedAgentId}" from this pane.`
+        : 'Retry without a conflicting agent_id or restart the MCP server with the correct MH_FACE_AGENT_ID.';
+    case 'missing_agent_id':
+      return 'Pass the correct agent_id explicitly, or restart the MCP server from a pane that exports MH_FACE_AGENT_ID.';
+    default:
+      return null;
+  }
+}
+
+function resolveFaceIdentity(args) {
+  const requestedAgentId = optionalString(args, 'agent_id', null);
+  const requestedAgentLabel = optionalString(args, 'agent_label', null);
+  const boundAgentId = DEFAULT_FACE_AGENT_ID;
+  const boundAgentLabel = DEFAULT_FACE_AGENT_LABEL;
+  const identity = {
+    effective_agent_id: boundAgentId ?? requestedAgentId ?? null,
+    effective_agent_label: boundAgentLabel ?? requestedAgentLabel ?? null,
+    agent_id_source: boundAgentId ? 'env' : requestedAgentId ? 'arguments' : null,
+    requested_agent_id: requestedAgentId,
+    bound_agent_id: boundAgentId,
+    identity_warning: null,
+    identity_reason: null,
+    identity_remediation: null
+  };
+
+  if (boundAgentId && requestedAgentId && requestedAgentId !== boundAgentId) {
+    const warning = 'agent_id_mismatch';
+    throw createFaceIdentityError(
+      `agent_id mismatch: bound ${boundAgentId} but request specified ${requestedAgentId}`,
+      {
+        ...identity,
+        identity_warning: warning,
+        identity_reason: faceIdentityReason(warning),
+        identity_remediation: faceIdentityRemediation(identity, warning)
+      }
+    );
+  }
+
+  if (!identity.effective_agent_id) {
+    identity.identity_warning = 'missing_agent_id';
+    identity.identity_reason = faceIdentityReason(identity.identity_warning);
+    identity.identity_remediation = faceIdentityRemediation(identity, identity.identity_warning);
+    if (FACE_AGENT_ID_REQUIRED) {
+      throw createFaceIdentityError(
+        'agent_id is required because MH_FACE_AGENT_ID_REQUIRED is enabled and MH_FACE_AGENT_ID is unavailable',
+        identity
+      );
+    }
+  }
+
+  return identity;
+}
+
+function faceIdentityStructured(identity) {
+  return {
+    effective_agent_id: identity?.effective_agent_id ?? null,
+    effective_agent_label: identity?.effective_agent_label ?? null,
+    agent_id_source: identity?.agent_id_source ?? null,
+    requested_agent_id: identity?.requested_agent_id ?? null,
+    bound_agent_id: identity?.bound_agent_id ?? null,
+    identity_warning: identity?.identity_warning ?? null,
+    identity_reason: identity?.identity_reason ?? null,
+    identity_remediation: identity?.identity_remediation ?? null
+  };
+}
+
+function faceToolFailureText(toolName, error) {
+  const remediation = error?.faceIdentity?.identity_remediation;
+  return `${toolName} failed: ${error.message}${remediation ? ` Remediation: ${remediation}` : ''}`;
+}
+
 async function callFaceHttp(pathname, options = {}) {
   const url = new URL(pathname, `${FACE_HTTP_BASE_URL}/`);
   const method = options.method ?? 'GET';
@@ -544,8 +642,7 @@ async function forwardToFace(payload, options = {}) {
 function normalizeEventPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const sessionId = requireString(args, 'session_id');
-  const agentId = optionalString(args, 'agent_id', DEFAULT_FACE_AGENT_ID);
-  const agentLabel = optionalString(args, 'agent_label', DEFAULT_FACE_AGENT_LABEL);
+  const identity = resolveFaceIdentity(args);
   const name = requireString(args, 'name');
   if (!EVENT_NAMES.has(name)) {
     throw new Error(`name must be one of: ${[...EVENT_NAMES].join(', ')}`);
@@ -561,25 +658,25 @@ function normalizeEventPayload(rawArguments) {
     throw new Error('ttl_ms must be greater than zero');
   }
 
-  return {
+  const payload = {
     v: 1,
     type: 'event',
     session_id: sessionId,
-    ...(agentId ? { agent_id: agentId } : {}),
-    ...(agentLabel ? { agent_label: agentLabel } : {}),
+    ...(identity.effective_agent_id ? { agent_id: identity.effective_agent_id } : {}),
+    ...(identity.effective_agent_label ? { agent_label: identity.effective_agent_label } : {}),
     ts: Date.now(),
     name,
     severity,
     meta,
     ttl_ms: ttlMs
   };
+  return { payload, identity };
 }
 
 function normalizeSayPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const sessionId = requireString(args, 'session_id');
-  const agentId = optionalString(args, 'agent_id', DEFAULT_FACE_AGENT_ID);
-  const agentLabel = optionalString(args, 'agent_label', DEFAULT_FACE_AGENT_LABEL);
+  const identity = resolveFaceIdentity(args);
   const text = requireString(args, 'text');
   const priority = clamp(optionalInteger(args, 'priority', 0), 0, 3);
   const ttlMs = optionalInteger(args, 'ttl_ms', DEFAULT_SAY_TTL_MS);
@@ -609,12 +706,12 @@ function normalizeSayPayload(rawArguments) {
 
   const revision = optionalInteger(args, 'revision', Date.now());
 
-  return {
+  const payload = {
     v: 1,
     type: 'say',
     session_id: sessionId,
-    ...(agentId ? { agent_id: agentId } : {}),
-    ...(agentLabel ? { agent_label: agentLabel } : {}),
+    ...(identity.effective_agent_id ? { agent_id: identity.effective_agent_id } : {}),
+    ...(identity.effective_agent_label ? { agent_label: identity.effective_agent_label } : {}),
     ts: Date.now(),
     utterance_id: utteranceId,
     text,
@@ -625,22 +722,23 @@ function normalizeSayPayload(rawArguments) {
     message_id: messageId,
     revision
   };
+  return { payload, identity };
 }
 
 function normalizePingPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const sessionId = requireString(args, 'session_id');
-  const agentId = optionalString(args, 'agent_id', DEFAULT_FACE_AGENT_ID);
-  const agentLabel = optionalString(args, 'agent_label', DEFAULT_FACE_AGENT_LABEL);
+  const identity = resolveFaceIdentity(args);
 
-  return {
+  const payload = {
     v: 1,
     type: 'ping',
     session_id: sessionId,
-    ...(agentId ? { agent_id: agentId } : {}),
-    ...(agentLabel ? { agent_label: agentLabel } : {}),
+    ...(identity.effective_agent_id ? { agent_id: identity.effective_agent_id } : {}),
+    ...(identity.effective_agent_label ? { agent_label: identity.effective_agent_label } : {}),
     ts: Date.now()
   };
+  return { payload, identity };
 }
 
 function normalizeAgentReportPayload(rawArguments) {
@@ -935,48 +1033,48 @@ async function handleToolCall(params) {
 
   if (toolName === 'face.event') {
     try {
-      const payload = normalizeEventPayload(rawArguments);
+      const { payload, identity } = normalizeEventPayload(rawArguments);
       await forwardToFace(payload);
       return toolTextResult('forwarded face.event', {
-        structuredContent: { ok: true, ws: FACE_WS_URL, payload }
+        structuredContent: { ok: true, ws: FACE_WS_URL, payload, ...faceIdentityStructured(identity) }
       });
     } catch (error) {
-      return toolTextResult(`face.event failed: ${error.message}`, {
+      return toolTextResult(faceToolFailureText('face.event', error), {
         isError: true,
-        structuredContent: { ok: false, ws: FACE_WS_URL }
+        structuredContent: { ok: false, ws: FACE_WS_URL, ...faceIdentityStructured(error.faceIdentity) }
       });
     }
   }
 
   if (toolName === 'face.say') {
     try {
-      const payload = normalizeSayPayload(rawArguments);
+      const { payload, identity } = normalizeSayPayload(rawArguments);
       const sayResult = await forwardToFace(payload, { awaitSayResult: true });
       const spoken = typeof sayResult?.spoken === 'boolean' ? sayResult.spoken : null;
       const reason = typeof sayResult?.reason === 'string' ? sayResult.reason : null;
 
       return toolTextResult(`forwarded face.say spoken=${spoken ?? 'unknown'} reason=${reason ?? '-'}`, {
-        structuredContent: { ok: true, ws: FACE_WS_URL, payload, say_result: sayResult ?? null, spoken, reason }
+        structuredContent: { ok: true, ws: FACE_WS_URL, payload, say_result: sayResult ?? null, spoken, reason, ...faceIdentityStructured(identity) }
       });
     } catch (error) {
-      return toolTextResult(`face.say failed: ${error.message}`, {
+      return toolTextResult(faceToolFailureText('face.say', error), {
         isError: true,
-        structuredContent: { ok: false, ws: FACE_WS_URL }
+        structuredContent: { ok: false, ws: FACE_WS_URL, ...faceIdentityStructured(error.faceIdentity) }
       });
     }
   }
 
   if (toolName === 'face.ping') {
     try {
-      const payload = normalizePingPayload(rawArguments);
+      const { payload, identity } = normalizePingPayload(rawArguments);
       await forwardToFace(payload);
       return toolTextResult('forwarded face.ping', {
-        structuredContent: { ok: true, ws: FACE_WS_URL, payload }
+        structuredContent: { ok: true, ws: FACE_WS_URL, payload, ...faceIdentityStructured(identity) }
       });
     } catch (error) {
-      return toolTextResult(`face.ping failed: ${error.message}`, {
+      return toolTextResult(faceToolFailureText('face.ping', error), {
         isError: true,
-        structuredContent: { ok: false, ws: FACE_WS_URL }
+        structuredContent: { ok: false, ws: FACE_WS_URL, ...faceIdentityStructured(error.faceIdentity) }
       });
     }
   }
