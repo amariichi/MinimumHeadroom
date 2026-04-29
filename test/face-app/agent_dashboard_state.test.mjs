@@ -5,8 +5,10 @@ import {
   deriveAssignmentToneOptions,
   deriveAgentTileTone,
   deriveDashboardMode,
+  normalizePersistedDashboardSelection,
   normalizeAgentStatus,
   normalizeDashboardAgent,
+  resolveRestoredDashboardSelection,
   resolveAgentQuietActivityAt,
   shouldRefreshAgentActivityFromState,
   shouldUseAgentQuietPromptIdle,
@@ -52,6 +54,88 @@ test('sortDashboardAgents respects slot ordering', () => {
   assert.deepEqual(
     sorted.map((item) => item.id),
     ['a', 'b', 'c']
+  );
+});
+
+test('normalizePersistedDashboardSelection accepts current and legacy shapes', () => {
+  assert.deepEqual(
+    normalizePersistedDashboardSelection({
+      agent_id: 'helper-a',
+      stream_id: 'repo:/tmp/project',
+      target_repo_root: '/tmp/project',
+      pane_id: '%12',
+      updated_at: 123
+    }),
+    {
+      agentId: 'helper-a',
+      streamId: 'repo:/tmp/project',
+      targetRepoRoot: '/tmp/project',
+      paneId: '%12',
+      updatedAt: 123
+    }
+  );
+  assert.deepEqual(
+    normalizePersistedDashboardSelection('helper-b'),
+    {
+      agentId: 'helper-b',
+      streamId: null,
+      targetRepoRoot: null,
+      paneId: null,
+      updatedAt: 0
+    }
+  );
+  assert.equal(normalizePersistedDashboardSelection({ agent_id: '   ' }), null);
+});
+
+test('resolveRestoredDashboardSelection restores only live agents in the active stream', () => {
+  const agents = [
+    normalizeDashboardAgent({ id: 'helper-a', status: 'active', pane_id: '%10' }),
+    normalizeDashboardAgent({ id: 'helper-missing', status: 'missing', pane_id: '%11' }),
+    normalizeDashboardAgent({ id: 'helper-unregistered', status: 'active' })
+  ];
+
+  assert.equal(
+    resolveRestoredDashboardSelection(
+      {
+        agentId: 'helper-a',
+        streamId: 'repo:/tmp/project',
+        targetRepoRoot: '/tmp/project'
+      },
+      agents,
+      {
+        activeStreamId: 'repo:/tmp/project',
+        activeTargetRepoRoot: '/tmp/project'
+      }
+    )?.agentId,
+    'helper-a'
+  );
+  assert.equal(
+    resolveRestoredDashboardSelection({ agentId: 'helper-a', streamId: 'repo:/other' }, agents, {
+      activeStreamId: 'repo:/tmp/project'
+    }),
+    null
+  );
+  assert.equal(resolveRestoredDashboardSelection({ agentId: 'helper-missing' }, agents), null);
+  assert.equal(resolveRestoredDashboardSelection({ agentId: 'helper-unregistered' }, agents), null);
+  assert.equal(resolveRestoredDashboardSelection({ agentId: 'deleted-helper' }, agents), null);
+});
+
+test('resolveRestoredDashboardSelection allows the operator fallback explicitly', () => {
+  assert.deepEqual(
+    resolveRestoredDashboardSelection({ agentId: '__operator__' }, [], {
+      operatorAgentId: '__operator__'
+    }),
+    {
+      agentId: '__operator__',
+      agent: null,
+      selection: {
+        agentId: '__operator__',
+        streamId: null,
+        targetRepoRoot: null,
+        paneId: null,
+        updatedAt: 0
+      }
+    }
   );
 });
 

@@ -10,10 +10,8 @@ Template (update the absolute path):
 {
   "mcpServers": {
     "minimum-headroom": {
-      "command": "node",
-      "args": [
-        "/ABS/PATH/minimum-headroom/mcp-server/dist/index.js"
-      ],
+      "command": "/ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh",
+      "args": [],
       "env": {
         "FACE_WS_URL": "ws://127.0.0.1:8765/ws",
         "MCP_TOOL_NAME_STYLE": "underscore"
@@ -23,7 +21,7 @@ Template (update the absolute path):
 }
 ```
 
-Gemini CLI requires `MCP_TOOL_NAME_STYLE=underscore` because it does not accept dotted tool names.
+Gemini CLI requires `MCP_TOOL_NAME_STYLE=underscore` because it does not accept dotted tool names. `run-bound-mcp-server.sh` starts the MCP server and preserves `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` from the current agent process or its parent process when available.
 
 ## Permission presets for helpers
 

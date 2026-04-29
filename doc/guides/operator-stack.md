@@ -61,7 +61,7 @@ All launchers also accept `--ui-mode <auto|pc|mobile>` (the CLI form of `FACE_UI
 
 `run-operator-once.sh` creates or reuses a tmux session, splits a window into two panes, launches your coding agent in pane 0, launches the integrated stack in pane 1, and wires the bridge target to pane 0 by default.
 
-It also exports `MH_FACE_AGENT_ID=__operator__` and `MH_FACE_AGENT_LABEL=Operator` into the operator pane. Helper panes receive their assigned helper id at spawn time, and Docker-based helper commands receive that identity through `docker exec -e`. Some clients inherit this automatically, but clients that do not auto-fill tool arguments must pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call.
+It also exports `MH_FACE_AGENT_ID=__operator__` and `MH_FACE_AGENT_LABEL=Operator` into the operator pane. When `run-operator-stack.sh` starts the optional MCP server, it binds that MCP server to the same operator identity so face tools can auto-fill `agent_id=__operator__` and reject conflicting explicit ids. Helper panes receive their assigned helper id at spawn time, and Docker-based helper commands receive that identity through `docker exec -e`. Clients that run a separate unbound MCP server must pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call.
 
 ### Docker and helper agent commands
 
@@ -96,7 +96,7 @@ When the helper template is not a `docker exec` command, `face-app` prefixes it 
 env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 ```
 
-This only makes the identity available to the agent process. Some MCP clients still do not copy environment defaults into tool-call arguments, so agents that need reliable mouth animation should pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call. If the agent process runs in a separate Docker network namespace, also see the `FACE_WS_HOST=0.0.0.0` guidance in the README.
+This makes the identity available to the agent process and to MCP servers started from that process environment. The MCP face tools auto-fill `agent_id` from `MH_FACE_AGENT_ID` when available and reject conflicting explicit ids with remediation guidance. Clients that run a separate unbound MCP server should pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call. If the agent process runs in a separate Docker network namespace, also see the `FACE_WS_HOST=0.0.0.0` guidance in the README.
 
 `run-operator-stack.sh` starts:
 
@@ -362,7 +362,7 @@ Wrong pane is mirrored on mobile:
 
 `run-operator-once.sh` は tmux セッションを作成または再利用し、ウィンドウを 2 ペインに分け、0 番にエージェント、1 番に統合スタックを起動し、bridge の接続先を既定で 0 番へ向けます。
 
-また、operator pane には `MH_FACE_AGENT_ID=__operator__` と `MH_FACE_AGENT_LABEL=Operator` を export します。helper pane は spawn 時に割り当てられた helper id を受け取り、Docker 経由の helper command には `docker exec -e` でその identity が渡されます。client によってはこれを自動継承しますが、tool 引数を自動補完しない client では `face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。
+また、operator pane には `MH_FACE_AGENT_ID=__operator__` と `MH_FACE_AGENT_LABEL=Operator` を export します。`run-operator-stack.sh` が任意起動 MCP server を起動する場合、その MCP server も同じ operator identity に束縛され、face tools は `agent_id=__operator__` を自動補完し、矛盾する明示 id を拒否します。helper pane は spawn 時に割り当てられた helper id を受け取り、Docker 経由の helper command には `docker exec -e` でその identity が渡されます。別の未束縛 MCP server を使う client では `face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。
 
 <a id="ja-docker-and-helper-agent-commands"></a>
 ### Docker と helper agent の command
@@ -398,7 +398,7 @@ helper テンプレートが `docker exec` でない場合は、通常の proces
 env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 ```
 
-これは agent process に identity を渡すだけです。MCP client によっては環境変数の既定値を tool call 引数へコピーしないため、口パクを確実に動かしたい agent は `face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。agent process が Docker の別 network namespace で動く場合は、README の `FACE_WS_HOST=0.0.0.0` の説明も参照してください。
+これは agent process と、その process environment から起動された MCP server に identity を渡します。MCP face tools は `MH_FACE_AGENT_ID` があれば `agent_id` を自動補完し、矛盾する明示 id を対応方法つきで拒否します。別の未束縛 MCP server を使う client では、`face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。agent process が Docker の別 network namespace で動く場合は、README の `FACE_WS_HOST=0.0.0.0` の説明も参照してください。
 
 `run-operator-stack.sh` が起動するもの:
 

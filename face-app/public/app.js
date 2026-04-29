@@ -28,7 +28,9 @@ import {
   deriveAgentTileTone,
   deriveDashboardMode,
   deriveOwnerInboxToneOptions,
+  normalizePersistedDashboardSelection,
   normalizeDashboardAgent,
+  resolveRestoredDashboardSelection,
   resolveAgentQuietActivityAt,
   shouldRefreshAgentActivityFromState,
   shouldUseAgentQuietPromptIdle,
@@ -208,6 +210,7 @@ const DESKTOP_DASHBOARD_WIDTH_RESERVE_PX = 430;
 const OPERATOR_DASHBOARD_AGENT_ID = '__operator__';
 const OPERATOR_DASHBOARD_AGENT_LABEL = 'operator';
 const OPERATOR_BRIDGE_SESSION_ID_DEFAULT = 'default';
+const MOBILE_LAST_OPENED_AGENT_LS_KEY = 'mh.mobile.lastOpenedAgent';
 const MIC_AUDIO_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -721,6 +724,7 @@ function armPendingOperatorFocus(agentId, options = {}) {
 
 function applyCompletedOperatorFocus(agentId, closePicker = true) {
   agentDashboardState.selectedAgentId = agentId;
+  persistMobileDashboardSelection(agentId);
   if (closePicker) {
     closeDesktopAgentDashboardSurface();
     operatorAgentPickerOpen = false;
@@ -754,6 +758,7 @@ function handleCompletedOperatorFocusResult(options = {}) {
     clearPendingOperatorFocus();
   } else if (focusedAgentId) {
     agentDashboardState.selectedAgentId = focusedAgentId;
+    persistMobileDashboardSelection(focusedAgentId);
   }
   if (focusedAgentId) {
     setAgentTransientMessage(focusedAgentId, 'focused in operator');
@@ -851,6 +856,7 @@ function forgetDashboardAgent(agentId) {
     operatorMirrorPaneId = null;
     agentDashboardState.selectedAgentId = operatorPanelEnabled ? OPERATOR_DASHBOARD_AGENT_ID : null;
   }
+  clearPersistedMobileDashboardSelection(normalizedAgentId);
 }
 
 function upsertObservedDashboardAgentFromPayload(payload, nowMs = Date.now()) {
@@ -907,6 +913,69 @@ function getDashboardVisibleCount() {
 
 function isOperatorDashboardAgentId(agentId) {
   return agentId === OPERATOR_DASHBOARD_AGENT_ID;
+}
+
+function shouldPersistMobileDashboardSelection() {
+  return operatorPanelEnabled && operatorEffectiveUiMode === OPERATOR_UI_MODE_MOBILE;
+}
+
+function readPersistedMobileDashboardSelection() {
+  try {
+    const raw = window.localStorage?.getItem(MOBILE_LAST_OPENED_AGENT_LS_KEY);
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      return null;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedMobileDashboardSelection(agentId = null) {
+  try {
+    if (agentId) {
+      const selection = normalizePersistedDashboardSelection(readPersistedMobileDashboardSelection());
+      if (selection?.agentId !== agentId) {
+        return;
+      }
+    }
+    window.localStorage?.removeItem(MOBILE_LAST_OPENED_AGENT_LS_KEY);
+  } catch {
+    // Ignore storage failures; selection persistence is opportunistic.
+  }
+}
+
+function persistMobileDashboardSelection(agentId) {
+  if (!shouldPersistMobileDashboardSelection() || !agentId) {
+    return;
+  }
+  const selectedAgent = isOperatorDashboardAgentId(agentId)
+    ? null
+    : getTrackedDashboardAgents().find((agent) => agent.id === agentId) ?? null;
+  try {
+    window.localStorage?.setItem(
+      MOBILE_LAST_OPENED_AGENT_LS_KEY,
+      JSON.stringify({
+        agentId,
+        streamId: agentDashboardState.activeStreamId,
+        targetRepoRoot: agentDashboardState.activeTargetRepoRoot,
+        paneId: selectedAgent?.pane_id ?? (isOperatorDashboardAgentId(agentId) ? operatorMirrorPaneId : null),
+        updatedAt: Date.now()
+      })
+    );
+  } catch {
+    // Ignore storage failures; the UI can still use the live selected agent.
+  }
+}
+
+function persistCurrentMobileDashboardSelection() {
+  if (agentDashboardState.selectedAgentId) {
+    persistMobileDashboardSelection(agentDashboardState.selectedAgentId);
+  }
 }
 
 function getCurrentDashboardAgent() {
@@ -1088,7 +1157,11 @@ function syncSelectedDashboardAgentToMirrorPane() {
     return;
   }
   const focusedAgent = getTrackedDashboardAgents().find((agent) => agent.pane_id === operatorMirrorPaneId) ?? null;
-  agentDashboardState.selectedAgentId = focusedAgent ? focusedAgent.id : OPERATOR_DASHBOARD_AGENT_ID;
+  const nextAgentId = focusedAgent ? focusedAgent.id : OPERATOR_DASHBOARD_AGENT_ID;
+  if (agentDashboardState.selectedAgentId !== nextAgentId) {
+    agentDashboardState.selectedAgentId = nextAgentId;
+    persistCurrentMobileDashboardSelection();
+  }
 }
 
 function formatDashboardVisibleCount() {
@@ -1737,6 +1810,7 @@ async function focusDashboardAgent(agentId, options = {}) {
       if (!ok) {
         throw new Error('focus failed (recover request failed)');
       }
+      persistMobileDashboardSelection(OPERATOR_DASHBOARD_AGENT_ID);
       return true;
     } catch (error) {
       if (operatorFocusPending?.agentId === OPERATOR_DASHBOARD_AGENT_ID) {
@@ -1758,6 +1832,7 @@ async function focusDashboardAgent(agentId, options = {}) {
     const payload = await runAgentDashboardAction(agent, 'focus');
     const nextAgents = resolveAgentsFromActionResult(agentDashboardState.agents, payload?.result);
     agentDashboardState.agents = nextAgents;
+    persistMobileDashboardSelection(agent.id);
     renderAgentDashboard();
     updateOperatorUi();
     await refreshAgentDashboardState({ silentStatus: true });
@@ -5414,6 +5489,55 @@ function resetStartupOperatorFocus() {
   }
 }
 
+async function restoreStartupOperatorFocus() {
+  resetStartupOperatorFocus();
+  if (!operatorPanelEnabled) {
+    return;
+  }
+  if (operatorEffectiveUiMode !== OPERATOR_UI_MODE_MOBILE) {
+    renderAgentDashboard();
+    updateOperatorUi();
+    await requestOperatorRecoverDefault();
+    return;
+  }
+
+  const rawSelection = readPersistedMobileDashboardSelection();
+  const restored = resolveRestoredDashboardSelection(rawSelection, agentDashboardState.agents, {
+    operatorAgentId: OPERATOR_DASHBOARD_AGENT_ID,
+    activeStreamId: agentDashboardState.activeStreamId,
+    activeTargetRepoRoot: agentDashboardState.activeTargetRepoRoot
+  });
+
+  if (rawSelection && !restored) {
+    clearPersistedMobileDashboardSelection();
+  }
+
+  if (restored && !isOperatorDashboardAgentId(restored.agentId)) {
+    agentDashboardState.selectedAgentId = restored.agentId;
+    operatorMirrorPaneId = restored.agent?.pane_id ?? null;
+    renderAgentDashboard();
+    updateOperatorUi();
+    try {
+      await focusDashboardAgent(restored.agentId, { closePicker: true });
+      agentDashboardState.selectedAgentId = restored.agentId;
+      operatorMirrorPaneId = restored.agent?.pane_id ?? operatorMirrorPaneId;
+      persistMobileDashboardSelection(restored.agentId);
+      renderAgentDashboard();
+      updateOperatorUi();
+      setAgentDashboardStatus(`${restored.agentId}: restored`, 'ok');
+      return;
+    } catch (error) {
+      clearPersistedMobileDashboardSelection(restored.agentId);
+      setAgentDashboardStatus(`restore failed: ${error.message}`, 'warn');
+    }
+  }
+
+  agentDashboardState.selectedAgentId = OPERATOR_DASHBOARD_AGENT_ID;
+  renderAgentDashboard();
+  updateOperatorUi();
+  await requestOperatorRecoverDefault();
+}
+
 async function bootstrap() {
   await loadOperatorUiConfig();
   setMetricValue(renderModeEl, 'monitor', 'default');
@@ -5434,10 +5558,7 @@ async function bootstrap() {
   installOperatorStateRefreshHooks();
   await refreshAgentDashboardState({ silentStatus: false });
   if (operatorPanelEnabled) {
-    resetStartupOperatorFocus();
-    renderAgentDashboard();
-    updateOperatorUi();
-    await requestOperatorRecoverDefault();
+    await restoreStartupOperatorFocus();
   }
   scheduleAgentDashboardPoll(AGENT_DASHBOARD_POLL_INTERVAL_MS);
   markOperatorUiBootReady();

@@ -12,6 +12,8 @@ STACK_CMD_SET=0
 FACE_UI_MODE=""
 FACE_AUDIO_TARGET=""
 ASR_BASE_URL=""
+OPERATOR_FACE_AGENT_ID="${MH_OPERATOR_FACE_AGENT_ID:-__operator__}"
+OPERATOR_FACE_AGENT_LABEL="${MH_OPERATOR_FACE_AGENT_LABEL:-Operator}"
 
 list_profiles() {
   cat <<'EOF'
@@ -199,6 +201,8 @@ append_env "MH_BRIDGE_RECOVERY_TMUX_PANE" "$agent_pane"
 append_env "MH_AGENT_SOURCE_REPO_DEFAULT" "$agent_repo_root"
 append_env "MH_AGENT_STREAM_ID" "repo:${agent_repo_root}"
 append_env "MH_AGENT_WORKTREES_ROOT" "${agent_repo_root}/.agent/worktrees"
+append_env "MH_OPERATOR_FACE_AGENT_ID" "$OPERATOR_FACE_AGENT_ID"
+append_env "MH_OPERATOR_FACE_AGENT_LABEL" "$OPERATOR_FACE_AGENT_LABEL"
 if [[ -n "$FACE_UI_MODE" ]]; then
   append_env "FACE_UI_MODE" "$FACE_UI_MODE"
 fi
@@ -219,6 +223,7 @@ echo "[restart-operator-stack] agent pane=${agent_pane}"
 echo "[restart-operator-stack] stack pane=${stack_pane}"
 echo "[restart-operator-stack] repo root=${agent_repo_root}"
 echo "[restart-operator-stack] MH_BRIDGE_TMUX_PANE=${agent_pane}"
+echo "[restart-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${OPERATOR_FACE_AGENT_ID}"
 
 if [[ -n "${TMUX:-}" ]]; then
   tmux select-window -t "${SESSION_NAME}:${WINDOW_NAME}"

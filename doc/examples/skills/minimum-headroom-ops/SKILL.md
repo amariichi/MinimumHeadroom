@@ -58,7 +58,8 @@ In another terminal:
 
 - `MCP startup failed` or timeout:
   - Use absolute Node path in client config if PATH differs from interactive shell.
-  - Confirm `command` and `args` point to an existing `mcp-server/dist/index.js`.
+  - Prefer `scripts/run-bound-mcp-server.sh` as the MCP command when agent identity should be inherited.
+  - If using the raw entrypoint, confirm `command` and `args` point to an existing `mcp-server/dist/index.js`.
   - Increase `startup_timeout_sec` only after fixing path and handshake issues.
 
 - TTS is silent:
