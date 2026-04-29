@@ -125,17 +125,26 @@
 
         <p id="operator-status" class="operator-status">idle</p>
 
-        <button
-          id="operator-agent-current"
-          class="operator-agent-current"
-          type="button"
-          aria-haspopup="dialog"
-          aria-expanded="false"
-          aria-controls="operator-agent-list"
-        >
-          <span id="operator-agent-current-label" class="operator-agent-current-label">operator</span>
-          <span id="operator-agent-current-meta" class="operator-agent-current-meta">active</span>
-        </button>
+        <div class="operator-agent-row">
+          <button
+            id="operator-agent-current"
+            class="operator-agent-current"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-controls="operator-agent-list"
+          >
+            <span id="operator-agent-current-label" class="operator-agent-current-label">operator</span>
+            <span id="operator-agent-current-meta" class="operator-agent-current-meta">active</span>
+          </button>
+          <button
+            id="face-mode-toggle"
+            class="operator-btn face-mode-toggle"
+            type="button"
+            aria-label="Toggle face display"
+            title="Toggle face display"
+          >👤</button>
+        </div>
 
         <section id="operator-agent-list" class="operator-agent-list hidden" aria-label="Mobile agent monitor">
           <div class="operator-agent-list-header">

@@ -175,6 +175,21 @@ const OPERATOR_UI_MODE_AUTO = 'auto';
 const OPERATOR_UI_MODE_PC = 'pc';
 const OPERATOR_UI_MODE_MOBILE = 'mobile';
 const OPERATOR_UI_MODES = new Set([OPERATOR_UI_MODE_AUTO, OPERATOR_UI_MODE_PC, OPERATOR_UI_MODE_MOBILE]);
+const FACE_DISPLAY_FULL = 'full';
+const FACE_DISPLAY_MINI = 'mini';
+const FACE_DISPLAY_HIDDEN = 'hidden';
+const FACE_DISPLAY_MODES = [FACE_DISPLAY_FULL, FACE_DISPLAY_MINI, FACE_DISPLAY_HIDDEN];
+const FACE_DISPLAY_LS_KEY = 'mh.faceDisplay';
+const FACE_DISPLAY_ICONS = {
+  [FACE_DISPLAY_FULL]: '👤',
+  [FACE_DISPLAY_MINI]: '🙂',
+  [FACE_DISPLAY_HIDDEN]: '🫥'
+};
+const FACE_DISPLAY_LABELS = {
+  [FACE_DISPLAY_FULL]: 'Full face',
+  [FACE_DISPLAY_MINI]: 'Mini face',
+  [FACE_DISPLAY_HIDDEN]: 'Hidden face'
+};
 const OPERATOR_MIRROR_DEFAULT_FG_CSS_VAR = 'var(--operator-mirror-fg)';
 const OPERATOR_MIRROR_DEFAULT_BG_CSS_VAR = 'var(--operator-mirror-bg-solid)';
 const OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX = 24;
@@ -2250,6 +2265,7 @@ function installAgentDashboardControls() {
       toggleOperatorAgentPicker();
     });
   }
+  installFaceDisplayToggle();
   if (operatorAgentListAddButtonEl) {
     operatorAgentListAddButtonEl.addEventListener('click', async (event) => {
       event.preventDefault();
@@ -2285,6 +2301,62 @@ function installOperatorStateRefreshHooks() {
   });
 }
 
+function normalizeFaceDisplayMode(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return FACE_DISPLAY_MODES.includes(normalized) ? normalized : null;
+}
+
+let currentFaceDisplay = FACE_DISPLAY_FULL;
+
+function applyFaceDisplay(mode) {
+  const next = normalizeFaceDisplayMode(mode) ?? FACE_DISPLAY_FULL;
+  currentFaceDisplay = next;
+  document.body.classList.remove('face-display-full', 'face-display-mini', 'face-display-hidden');
+  document.body.classList.add(`face-display-${next}`);
+  const btn = document.getElementById('face-mode-toggle');
+  if (btn) {
+    btn.textContent = FACE_DISPLAY_ICONS[next];
+    btn.setAttribute('aria-label', FACE_DISPLAY_LABELS[next]);
+    btn.title = `${FACE_DISPLAY_LABELS[next]} (tap to cycle)`;
+  }
+  if (typeof resizeRenderer === 'function') {
+    requestAnimationFrame(() => {
+      try { resizeRenderer(); } catch {}
+    });
+  }
+}
+
+function loadStoredFaceDisplay() {
+  try {
+    return normalizeFaceDisplayMode(window.localStorage?.getItem(FACE_DISPLAY_LS_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function persistFaceDisplay(mode) {
+  try { window.localStorage?.setItem(FACE_DISPLAY_LS_KEY, mode); } catch {}
+}
+
+function cycleFaceDisplay() {
+  const idx = FACE_DISPLAY_MODES.indexOf(currentFaceDisplay);
+  const next = FACE_DISPLAY_MODES[(idx + 1) % FACE_DISPLAY_MODES.length];
+  applyFaceDisplay(next);
+  persistFaceDisplay(next);
+}
+
+function installFaceDisplayToggle() {
+  const btn = document.getElementById('face-mode-toggle');
+  if (!btn || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    cycleFaceDisplay();
+  });
+}
+
 function applyOperatorUiMode(mode) {
   const configured = normalizeOperatorUiMode(mode) ?? OPERATOR_UI_MODE_AUTO;
   operatorConfiguredUiMode = configured;
@@ -2310,6 +2382,9 @@ async function loadOperatorUiConfig() {
     if (response.ok) {
       const payload = await response.json();
       configMode = normalizeOperatorUiMode(payload?.uiMode);
+      const stored = loadStoredFaceDisplay();
+      const serverFaceDisplay = normalizeFaceDisplayMode(payload?.faceDisplay);
+      applyFaceDisplay(stored ?? serverFaceDisplay ?? FACE_DISPLAY_FULL);
       operatorPanelEnabled = payload?.operatorPanelEnabled !== false;
       operatorBatchAsrConfig.enabled = payload?.batchAsr?.enabled === true;
       operatorRealtimeAsrConfig.enabled = payload?.realtimeAsr?.enabled === true;
@@ -2322,6 +2397,11 @@ async function loadOperatorUiConfig() {
     }
   } catch {
     // Keep defaults on fetch failures.
+  }
+  if (!document.body.classList.contains('face-display-full')
+      && !document.body.classList.contains('face-display-mini')
+      && !document.body.classList.contains('face-display-hidden')) {
+    applyFaceDisplay(loadStoredFaceDisplay() ?? FACE_DISPLAY_FULL);
   }
   applyOperatorUiMode(queryMode ?? configMode ?? OPERATOR_UI_MODE_AUTO);
 }
