@@ -355,6 +355,18 @@ let operatorActivePrompt = null;
 let operatorTerminalSnapshotLines = [];
 let operatorMirrorAutoFollow = true;
 let operatorMirrorInitialScrollDone = false;
+let operatorMirrorFontScale = 1;
+let operatorMirrorBaseFontSizePx = 0;
+let operatorMirrorPinchState = null;
+let operatorMirrorPinchPendingFrame = null;
+let operatorMirrorPinchPendingTouches = null;
+let operatorMirrorLastTapAt = 0;
+let operatorMirrorTapStart = null;
+const OPERATOR_MIRROR_FONT_SCALE_MIN = 0.6;
+const OPERATOR_MIRROR_FONT_SCALE_MAX = 2.4;
+const OPERATOR_MIRROR_TAP_MOVE_TOLERANCE_PX = 10;
+const OPERATOR_MIRROR_TAP_MAX_DURATION_MS = 260;
+const OPERATOR_MIRROR_DOUBLE_TAP_INTERVAL_MS = 320;
 let operatorKeyboardHelpOpen = false;
 let operatorCtrlChordArmed = false;
 const operatorBatchAsrConfig = {
@@ -3232,6 +3244,186 @@ function handleOperatorMirrorScroll() {
   operatorMirrorAutoFollow = isOperatorMirrorNearBottom();
 }
 
+function ensureOperatorMirrorBaseFontSize() {
+  if (!operatorMirrorEl || operatorMirrorBaseFontSizePx > 0) {
+    return;
+  }
+  const computed = window.getComputedStyle(operatorMirrorEl).fontSize;
+  const px = Number.parseFloat(computed);
+  if (Number.isFinite(px) && px > 0) {
+    operatorMirrorBaseFontSizePx = px;
+  }
+}
+
+function applyOperatorMirrorFontScale() {
+  if (!operatorMirrorEl) {
+    return;
+  }
+  ensureOperatorMirrorBaseFontSize();
+  if (!operatorMirrorBaseFontSizePx) {
+    return;
+  }
+  if (operatorMirrorFontScale === 1) {
+    operatorMirrorEl.style.fontSize = '';
+  } else {
+    operatorMirrorEl.style.fontSize = `${operatorMirrorBaseFontSizePx * operatorMirrorFontScale}px`;
+  }
+}
+
+function pinchDistanceFromTouches(touches) {
+  if (!touches || touches.length < 2) {
+    return 0;
+  }
+  const a = touches[0];
+  const b = touches[1];
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+function pinchMidpointInMirror(touches) {
+  if (!operatorMirrorEl || !touches || touches.length < 2) {
+    return null;
+  }
+  const a = touches[0];
+  const b = touches[1];
+  const rect = operatorMirrorEl.getBoundingClientRect();
+  return {
+    x: ((a.clientX + b.clientX) / 2) - rect.left,
+    y: ((a.clientY + b.clientY) / 2) - rect.top
+  };
+}
+
+function handleOperatorMirrorTouchStart(event) {
+  if (!operatorMirrorEl) {
+    return;
+  }
+  if (event.touches.length >= 2) {
+    const distance = pinchDistanceFromTouches(event.touches);
+    const midpoint = pinchMidpointInMirror(event.touches);
+    if (distance > 0 && midpoint) {
+      ensureOperatorMirrorBaseFontSize();
+      operatorMirrorPinchState = {
+        lastDistance: distance,
+        lastMidpoint: midpoint
+      };
+      operatorMirrorTapStart = null;
+      event.preventDefault();
+    }
+    return;
+  }
+  if (event.touches.length === 1) {
+    const touch = event.touches[0];
+    operatorMirrorTapStart = {
+      x: touch.clientX,
+      y: touch.clientY,
+      t: performance.now()
+    };
+  }
+}
+
+function processOperatorMirrorPinchFrame() {
+  operatorMirrorPinchPendingFrame = null;
+  const touches = operatorMirrorPinchPendingTouches;
+  operatorMirrorPinchPendingTouches = null;
+  if (!operatorMirrorEl || !operatorMirrorPinchState || !touches) {
+    return;
+  }
+  const distance = pinchDistanceFromTouches(touches);
+  const midpoint = pinchMidpointInMirror(touches);
+  if (distance <= 0 || !midpoint) {
+    return;
+  }
+  const previousScale = operatorMirrorFontScale;
+  const proposedScale = clamp(
+    previousScale * (distance / operatorMirrorPinchState.lastDistance),
+    OPERATOR_MIRROR_FONT_SCALE_MIN,
+    OPERATOR_MIRROR_FONT_SCALE_MAX
+  );
+  const effectiveRatio = previousScale > 0 ? proposedScale / previousScale : 1;
+  const oldScrollLeft = operatorMirrorEl.scrollLeft;
+  const oldScrollTop = operatorMirrorEl.scrollTop;
+  const oldMidpoint = operatorMirrorPinchState.lastMidpoint;
+  if (proposedScale !== previousScale) {
+    operatorMirrorFontScale = proposedScale;
+    applyOperatorMirrorFontScale();
+  }
+  operatorMirrorEl.scrollLeft = (oldScrollLeft + oldMidpoint.x) * effectiveRatio - midpoint.x;
+  operatorMirrorEl.scrollTop = (oldScrollTop + oldMidpoint.y) * effectiveRatio - midpoint.y;
+  operatorMirrorPinchState.lastDistance = distance;
+  operatorMirrorPinchState.lastMidpoint = midpoint;
+}
+
+function cancelOperatorMirrorPinchFrame() {
+  if (operatorMirrorPinchPendingFrame !== null) {
+    cancelAnimationFrame(operatorMirrorPinchPendingFrame);
+    operatorMirrorPinchPendingFrame = null;
+  }
+  operatorMirrorPinchPendingTouches = null;
+}
+
+function handleOperatorMirrorTouchMove(event) {
+  if (operatorMirrorPinchState && event.touches.length >= 2) {
+    operatorMirrorPinchPendingTouches = [
+      { clientX: event.touches[0].clientX, clientY: event.touches[0].clientY },
+      { clientX: event.touches[1].clientX, clientY: event.touches[1].clientY }
+    ];
+    if (operatorMirrorPinchPendingFrame === null) {
+      operatorMirrorPinchPendingFrame = requestAnimationFrame(processOperatorMirrorPinchFrame);
+    }
+    event.preventDefault();
+    return;
+  }
+  if (operatorMirrorTapStart && event.touches.length === 1) {
+    const touch = event.touches[0];
+    const dx = touch.clientX - operatorMirrorTapStart.x;
+    const dy = touch.clientY - operatorMirrorTapStart.y;
+    if (Math.hypot(dx, dy) > OPERATOR_MIRROR_TAP_MOVE_TOLERANCE_PX) {
+      operatorMirrorTapStart = null;
+    }
+  }
+}
+
+function handleOperatorMirrorTouchEnd(event) {
+  if (operatorMirrorPinchState && event.touches.length < 2) {
+    operatorMirrorPinchState = null;
+    cancelOperatorMirrorPinchFrame();
+  }
+  if (operatorMirrorTapStart && event.touches.length === 0) {
+    const tapStart = operatorMirrorTapStart;
+    operatorMirrorTapStart = null;
+    const elapsed = performance.now() - tapStart.t;
+    if (elapsed > OPERATOR_MIRROR_TAP_MAX_DURATION_MS) {
+      operatorMirrorLastTapAt = 0;
+      return;
+    }
+    const now = performance.now();
+    if (now - operatorMirrorLastTapAt <= OPERATOR_MIRROR_DOUBLE_TAP_INTERVAL_MS) {
+      operatorMirrorLastTapAt = 0;
+      if (operatorMirrorFontScale !== 1) {
+        const previousScale = operatorMirrorFontScale;
+        const rect = operatorMirrorEl.getBoundingClientRect();
+        const localX = tapStart.x - rect.left;
+        const localY = tapStart.y - rect.top;
+        const oldScrollLeft = operatorMirrorEl.scrollLeft;
+        const oldScrollTop = operatorMirrorEl.scrollTop;
+        const effectiveRatio = previousScale > 0 ? 1 / previousScale : 1;
+        operatorMirrorFontScale = 1;
+        applyOperatorMirrorFontScale();
+        operatorMirrorEl.scrollLeft = (oldScrollLeft + localX) * effectiveRatio - localX;
+        operatorMirrorEl.scrollTop = (oldScrollTop + localY) * effectiveRatio - localY;
+        event.preventDefault();
+      }
+      return;
+    }
+    operatorMirrorLastTapAt = now;
+  }
+}
+
+function handleOperatorMirrorTouchCancel() {
+  operatorMirrorPinchState = null;
+  operatorMirrorTapStart = null;
+  cancelOperatorMirrorPinchFrame();
+}
+
 function renderOperatorTerminalSnapshot() {
   if (!operatorMirrorEl) {
     return;
@@ -3612,6 +3804,7 @@ function createBrowserAudioChannel() {
     player,
     token: 0,
     active: false,
+    primed: false,
     sessionId: null,
     generation: null,
     startedAt: 0,
@@ -3758,7 +3951,7 @@ function ensureBrowserAudioMixerFilled() {
 }
 
 function primeBrowserAudioChannelInGesture(channel) {
-  if (!channel || channel.active || !channel.player) {
+  if (!channel || channel.active || channel.primed || !channel.player) {
     return;
   }
   const player = channel.player;
@@ -3772,6 +3965,7 @@ function primeBrowserAudioChannelInGesture(channel) {
     player.src = createSilentAudioDataUrl();
     player.currentTime = 0;
     playPromise = Promise.resolve(player.play());
+    channel.primed = true;
   } catch {
     playPromise = Promise.reject(new Error('channel prime sync error'));
   }
@@ -4945,6 +5139,13 @@ function installAudioUnlockHooks() {
   window.addEventListener('click', triggerUnlock, { passive: true });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      if (browserAudioMixer) {
+        for (const channel of browserAudioMixer.channels) {
+          if (!channel.active) {
+            channel.primed = false;
+          }
+        }
+      }
       void unlockPlaybackAudio();
     }
   });
@@ -5242,6 +5443,10 @@ function installOperatorControls() {
   }
   if (operatorMirrorEl) {
     operatorMirrorEl.addEventListener('scroll', handleOperatorMirrorScroll, { passive: true });
+    operatorMirrorEl.addEventListener('touchstart', handleOperatorMirrorTouchStart, { passive: false });
+    operatorMirrorEl.addEventListener('touchmove', handleOperatorMirrorTouchMove, { passive: false });
+    operatorMirrorEl.addEventListener('touchend', handleOperatorMirrorTouchEnd, { passive: false });
+    operatorMirrorEl.addEventListener('touchcancel', handleOperatorMirrorTouchCancel, { passive: true });
   }
 
   if (operatorTextSendButtonEl) {
