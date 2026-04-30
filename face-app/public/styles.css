@@ -1093,12 +1093,14 @@ body.ui-mode-pc .operator-btn.face-mode-toggle {
   border: 1px solid rgba(118, 226, 255, 0.22);
   border-radius: 10px;
   background: rgba(2, 8, 14, 0.7);
-  padding: 8px;
+  padding: 8px 16px 8px 8px;
   font-family: 'JetBrains Mono', 'Consolas', 'Roboto Mono', monospace;
   font-size: 0.78rem;
   line-height: 1.42;
   color: var(--operator-mirror-fg);
-  white-space: pre-wrap;
+  white-space: pre;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
 }
 
 .operator-esc,
