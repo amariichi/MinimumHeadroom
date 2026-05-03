@@ -192,6 +192,7 @@ const FACE_DISPLAY_LABELS = {
   [FACE_DISPLAY_MINI]: 'Mini face',
   [FACE_DISPLAY_HIDDEN]: 'Hidden face'
 };
+const FACE_AUTH_SESSION_KEY = 'mh.faceAuthToken';
 const OPERATOR_MIRROR_DEFAULT_FG_CSS_VAR = 'var(--operator-mirror-fg)';
 const OPERATOR_MIRROR_DEFAULT_BG_CSS_VAR = 'var(--operator-mirror-bg-solid)';
 const OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX = 24;
@@ -225,6 +226,63 @@ function toneColor(tone) {
     return 'var(--accent-hot)';
   }
   return 'var(--accent-cold)';
+}
+
+function readInitialFaceAuthToken() {
+  let token = null;
+  try {
+    const url = new URL(window.location.href);
+    token = url.searchParams.get('auth_token') || url.searchParams.get('token');
+    if (typeof token === 'string' && token.trim() !== '') {
+      window.sessionStorage?.setItem(FACE_AUTH_SESSION_KEY, token.trim());
+      url.searchParams.delete('auth_token');
+      url.searchParams.delete('token');
+      window.history?.replaceState(window.history.state, document.title, url.toString());
+      return token.trim();
+    }
+  } catch {}
+
+  try {
+    const stored = window.sessionStorage?.getItem(FACE_AUTH_SESSION_KEY);
+    return typeof stored === 'string' && stored.trim() !== '' ? stored.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+let faceAuthToken = readInitialFaceAuthToken();
+
+function resolveFaceAuthToken() {
+  return typeof faceAuthToken === 'string' && faceAuthToken.trim() !== '' ? faceAuthToken.trim() : null;
+}
+
+function authFetch(input, init = {}) {
+  const token = resolveFaceAuthToken();
+  if (!token) {
+    return fetch(input, init);
+  }
+  const headers = new Headers(init.headers || {});
+  headers.set('authorization', `Bearer ${token}`);
+  return fetch(input, {
+    ...init,
+    headers
+  });
+}
+
+function withAuthWsUrl(wsUrl) {
+  const token = resolveFaceAuthToken();
+  if (!token) {
+    return wsUrl;
+  }
+  try {
+    const url = new URL(wsUrl);
+    if (!url.searchParams.has('auth_token') && !url.searchParams.has('token')) {
+      url.searchParams.set('auth_token', token);
+    }
+    return url.toString();
+  } catch {
+    return wsUrl;
+  }
 }
 
 function formatValue(value) {
@@ -1677,7 +1735,7 @@ function trackAgentTileFromPayload(payload) {
 }
 
 async function readAgentDashboardState() {
-  const response = await fetch('/api/agents/state', {
+  const response = await authFetch('/api/agents/state', {
     method: 'GET',
     cache: 'no-store'
   });
@@ -1698,7 +1756,7 @@ async function readOwnerInboxState(streamId = null) {
   if (typeof streamId === 'string' && streamId.trim() !== '') {
     query.set('stream_id', streamId.trim());
   }
-  const response = await fetch(`/api/owner-inbox/list?${query.toString()}`, {
+  const response = await authFetch(`/api/owner-inbox/list?${query.toString()}`, {
     method: 'GET',
     cache: 'no-store'
   });
@@ -1717,7 +1775,7 @@ async function readAgentAssignmentState(streamId = null) {
   if (typeof streamId === 'string' && streamId.trim() !== '') {
     query.set('stream_id', streamId.trim());
   }
-  const response = await fetch(`/api/agent-assignments/list?${query.toString()}`, {
+  const response = await authFetch(`/api/agent-assignments/list?${query.toString()}`, {
     method: 'GET',
     cache: 'no-store'
   });
@@ -1765,7 +1823,7 @@ function createDashboardActionButton(agent, label, action, onClick) {
 async function runAgentDashboardAction(agent, action) {
   const path = action === 'add' ? '/api/agents/add' : `/api/agents/${encodeURIComponent(agent.id)}/${action}`;
   const body = action === 'focus' ? { session_id: resolveOperatorSessionId() } : {};
-  const response = await fetch(path, {
+  const response = await authFetch(path, {
     method: 'POST',
     cache: 'no-store',
     headers: {
@@ -1792,7 +1850,7 @@ async function createManagedAgent(options = {}) {
     create_tmux: true,
     ...options
   };
-  const response = await fetch('/api/agents/add', {
+  const response = await authFetch('/api/agents/add', {
     method: 'POST',
     cache: 'no-store',
     headers: {
@@ -2462,7 +2520,7 @@ async function loadOperatorUiConfig() {
   const queryMode = normalizeOperatorUiMode(new URL(window.location.href).searchParams.get('ui'));
   let configMode = null;
   try {
-    const response = await fetch('/api/operator/ui-config', {
+    const response = await authFetch('/api/operator/ui-config', {
       method: 'GET',
       cache: 'no-store'
     });
@@ -2508,7 +2566,7 @@ async function requestOperatorRecoverDefault() {
   });
 
   try {
-    const response = await fetch(`/api/operator/recover-default?${query.toString()}`, {
+    const response = await authFetch(`/api/operator/recover-default?${query.toString()}`, {
       method: 'POST',
       cache: 'no-store'
     });
@@ -4469,7 +4527,7 @@ async function startOperatorRecording(language) {
 async function requestOperatorAsrTranscript(blob, mimeType, language) {
   const query = new URLSearchParams();
   query.set('lang', language === 'ja' ? 'ja' : 'en');
-  const response = await fetch(`/api/operator/asr?${query.toString()}`, {
+  const response = await authFetch(`/api/operator/asr?${query.toString()}`, {
     method: 'POST',
     headers: {
       'content-type': mimeType || 'audio/webm'
@@ -4778,7 +4836,7 @@ function connectWebSocket() {
 
   setWsStatus('connecting', 'default');
 
-  socket = new WebSocket(wsUrl);
+  socket = new WebSocket(withAuthWsUrl(wsUrl));
 
   socket.addEventListener('open', () => {
     reconnectAttempts = 0;

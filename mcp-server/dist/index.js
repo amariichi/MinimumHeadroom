@@ -3,9 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.14.1';
+const SERVER_VERSION = '1.15.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
+const FACE_AUTH_TOKEN = (() => {
+  const raw = process.env.MH_FACE_AUTH_TOKEN;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null;
+})();
 const FACE_HTTP_BASE_URL = (() => {
   const explicit = process.env.FACE_HTTP_BASE_URL;
   if (typeof explicit === 'string' && explicit.trim() !== '') {
@@ -510,13 +514,49 @@ function faceToolFailureText(toolName, error) {
   return `${toolName} failed: ${error.message}${remediation ? ` Remediation: ${remediation}` : ''}`;
 }
 
+function withAuthTokenUrl(rawUrl) {
+  if (!FACE_AUTH_TOKEN) {
+    return rawUrl;
+  }
+  try {
+    const url = new URL(rawUrl);
+    if (!url.searchParams.has('auth_token') && !url.searchParams.has('token')) {
+      url.searchParams.set('auth_token', FACE_AUTH_TOKEN);
+    }
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+function redactedUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.searchParams.has('auth_token')) {
+      url.searchParams.set('auth_token', '[redacted]');
+    }
+    if (url.searchParams.has('token')) {
+      url.searchParams.set('token', '[redacted]');
+    }
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+const FACE_WS_DISPLAY_URL = redactedUrl(FACE_WS_URL);
+
 async function callFaceHttp(pathname, options = {}) {
   const url = new URL(pathname, `${FACE_HTTP_BASE_URL}/`);
   const method = options.method ?? 'GET';
   const body = options.body ?? null;
+  const headers = body ? { 'content-type': 'application/json; charset=utf-8' } : {};
+  if (FACE_AUTH_TOKEN) {
+    headers.authorization = `Bearer ${FACE_AUTH_TOKEN}`;
+  }
   const response = await fetch(url, {
     method,
-    headers: body ? { 'content-type': 'application/json; charset=utf-8' } : undefined,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
     body: body ? JSON.stringify(body) : undefined
   });
   const payload = await response.json().catch(() => null);
@@ -535,7 +575,9 @@ async function forwardToFace(payload, options = {}) {
     payload.message_id.trim() !== '';
 
   return await new Promise((resolve, reject) => {
-    const socket = new WebSocket(FACE_WS_URL);
+    const faceWsUrl = withAuthTokenUrl(FACE_WS_URL);
+    const displayFaceWsUrl = redactedUrl(faceWsUrl);
+    const socket = new WebSocket(faceWsUrl);
     let settled = false;
 
     const settle = (error, response = null) => {
@@ -566,7 +608,7 @@ async function forwardToFace(payload, options = {}) {
         settle(null, null);
         return;
       }
-      settle(new Error(`WebSocket timeout for ${FACE_WS_URL}`));
+      settle(new Error(`WebSocket timeout for ${displayFaceWsUrl}`));
     }, awaitSayResult ? 500 : 1_500);
 
     const onOpen = () => {
@@ -592,7 +634,7 @@ async function forwardToFace(payload, options = {}) {
     };
 
     const onError = () => {
-      settle(new Error(`WebSocket connection failed for ${FACE_WS_URL}`));
+      settle(new Error(`WebSocket connection failed for ${displayFaceWsUrl}`));
     };
 
     const onClose = () => {
@@ -1036,12 +1078,12 @@ async function handleToolCall(params) {
       const { payload, identity } = normalizeEventPayload(rawArguments);
       await forwardToFace(payload);
       return toolTextResult('forwarded face.event', {
-        structuredContent: { ok: true, ws: FACE_WS_URL, payload, ...faceIdentityStructured(identity) }
+        structuredContent: { ok: true, ws: FACE_WS_DISPLAY_URL, payload, ...faceIdentityStructured(identity) }
       });
     } catch (error) {
       return toolTextResult(faceToolFailureText('face.event', error), {
         isError: true,
-        structuredContent: { ok: false, ws: FACE_WS_URL, ...faceIdentityStructured(error.faceIdentity) }
+        structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, ...faceIdentityStructured(error.faceIdentity) }
       });
     }
   }
@@ -1054,12 +1096,12 @@ async function handleToolCall(params) {
       const reason = typeof sayResult?.reason === 'string' ? sayResult.reason : null;
 
       return toolTextResult(`forwarded face.say spoken=${spoken ?? 'unknown'} reason=${reason ?? '-'}`, {
-        structuredContent: { ok: true, ws: FACE_WS_URL, payload, say_result: sayResult ?? null, spoken, reason, ...faceIdentityStructured(identity) }
+        structuredContent: { ok: true, ws: FACE_WS_DISPLAY_URL, payload, say_result: sayResult ?? null, spoken, reason, ...faceIdentityStructured(identity) }
       });
     } catch (error) {
       return toolTextResult(faceToolFailureText('face.say', error), {
         isError: true,
-        structuredContent: { ok: false, ws: FACE_WS_URL, ...faceIdentityStructured(error.faceIdentity) }
+        structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, ...faceIdentityStructured(error.faceIdentity) }
       });
     }
   }
@@ -1069,12 +1111,12 @@ async function handleToolCall(params) {
       const { payload, identity } = normalizePingPayload(rawArguments);
       await forwardToFace(payload);
       return toolTextResult('forwarded face.ping', {
-        structuredContent: { ok: true, ws: FACE_WS_URL, payload, ...faceIdentityStructured(identity) }
+        structuredContent: { ok: true, ws: FACE_WS_DISPLAY_URL, payload, ...faceIdentityStructured(identity) }
       });
     } catch (error) {
       return toolTextResult(faceToolFailureText('face.ping', error), {
         isError: true,
-        structuredContent: { ok: false, ws: FACE_WS_URL, ...faceIdentityStructured(error.faceIdentity) }
+        structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, ...faceIdentityStructured(error.faceIdentity) }
       });
     }
   }
@@ -1365,7 +1407,7 @@ async function handleToolCall(params) {
 
   return toolTextResult(`Unknown tool: ${toolName}`, {
     isError: true,
-    structuredContent: { ok: false, ws: FACE_WS_URL, http: FACE_HTTP_BASE_URL }
+    structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, http: FACE_HTTP_BASE_URL }
   });
 }
 
@@ -1469,4 +1511,4 @@ process.stdin.on('error', (error) => {
 });
 
 process.stdin.resume();
-console.error(`[mcp-server] ready; forwarding to ${FACE_WS_URL} and ${FACE_HTTP_BASE_URL}`);
+console.error(`[mcp-server] ready; forwarding to ${FACE_WS_DISPLAY_URL} and ${FACE_HTTP_BASE_URL}`);

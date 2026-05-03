@@ -96,7 +96,9 @@ When the helper template is not a `docker exec` command, `face-app` prefixes it 
 env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 ```
 
-This makes the identity available to the agent process and to MCP servers started from that process environment. The MCP face tools auto-fill `agent_id` from `MH_FACE_AGENT_ID` when available and reject conflicting explicit ids with remediation guidance. Clients that run a separate unbound MCP server should pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call. If the agent process runs in a separate Docker network namespace, also see the `FACE_WS_HOST=0.0.0.0` guidance in the README.
+This makes the identity available to the agent process and to MCP servers started from that process environment. The MCP face tools auto-fill `agent_id` from `MH_FACE_AGENT_ID` when available and reject conflicting explicit ids with remediation guidance. Clients that run a separate unbound MCP server should pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call.
+
+If the agent process runs in a separate Docker network namespace, also see the `FACE_WS_HOST=0.0.0.0` guidance in the README. Non-loopback face-app binds require `MH_FACE_AUTH_TOKEN`; export it in the shell before starting the stack so `face-app`, the operator bridge, and any stack-started MCP server inherit the same token.
 
 `run-operator-stack.sh` starts:
 
@@ -263,10 +265,17 @@ This is specifically meant to recover from the situation where the mobile UI is 
 
 The safest remote path is:
 
+    export MH_FACE_AUTH_TOKEN="$(openssl rand -base64 32)"
     ./scripts/run-operator-once.sh --profile qwen3-realtime --no-attach
     tailscale serve --bg 8765
 
-Then open the served URL from the phone or tablet.
+Then open the served URL from the phone or tablet with the token once:
+
+    https://<tailscale-host>:8443/?auth_token=<token>
+
+The browser stores the token in `sessionStorage`, and face-app also sets an `mh_face_auth` cookie for that origin. The visible URL is then cleaned, so mobile home-screen shortcuts can use the clean URL after the first token bootstrap. Keep firewall/Tailscale rules as the primary network boundary; the token is an application-layer backstop for accidental exposure or tailnet-internal misuse.
+
+Local browser access uses the same `?auth_token=<token>` bootstrap; bookmark `http://127.0.0.1:8765/?auth_token=<token>` once. If you also run UFW with default deny incoming, see the README's `Binding to 0.0.0.0` section for the Docker bridge allow rule and the shell-inheritance note for the token.
 
 ### Normal shutdown
 
@@ -398,7 +407,9 @@ helper テンプレートが `docker exec` でない場合は、通常の proces
 env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 ```
 
-これは agent process と、その process environment から起動された MCP server に identity を渡します。MCP face tools は `MH_FACE_AGENT_ID` があれば `agent_id` を自動補完し、矛盾する明示 id を対応方法つきで拒否します。別の未束縛 MCP server を使う client では、`face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。agent process が Docker の別 network namespace で動く場合は、README の `FACE_WS_HOST=0.0.0.0` の説明も参照してください。
+これは agent process と、その process environment から起動された MCP server に identity を渡します。MCP face tools は `MH_FACE_AGENT_ID` があれば `agent_id` を自動補完し、矛盾する明示 id を対応方法つきで拒否します。別の未束縛 MCP server を使う client では、`face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。
+
+agent process が Docker の別 network namespace で動く場合は、README の `FACE_WS_HOST=0.0.0.0` の説明も参照してください。ループバック外へ face-app をバインドする場合は `MH_FACE_AUTH_TOKEN` が必須です。stack 起動前の shell で export しておくと、`face-app`、operator bridge、stack が任意起動する MCP server が同じ token を継承します。
 
 `run-operator-stack.sh` が起動するもの:
 
@@ -570,10 +581,17 @@ operator panel は `FACE_OPERATOR_PANEL_ENABLED=1` のときだけ表示され�
 
 いちばん安全なのは:
 
+    export MH_FACE_AUTH_TOKEN="$(openssl rand -base64 32)"
     ./scripts/run-operator-once.sh --profile qwen3-realtime --no-attach
     tailscale serve --bg 8765
 
-その後、スマホやタブレットから Tailscale Serve の URL を開きます。
+その後、スマホやタブレットから初回だけ token 付きの Tailscale Serve URL を開きます。
+
+    https://<tailscale-host>:8443/?auth_token=<token>
+
+ブラウザは `sessionStorage` に token を保存し、face-app も同じ origin の `mh_face_auth` cookie を設定します。その後、表示 URL から token を取り除くため、初回 bootstrap 後はモバイルのホーム画面ショートカットも token なしのきれいな URL で使えます。firewall / Tailscale の境界を主な防御として維持し、この token は accidental exposure や tailnet 内部の誤用へのアプリ層の追加防御として扱ってください。
+
+PC ブラウザでのローカルアクセスも同じ `?auth_token=<token>` 手順です。`http://127.0.0.1:8765/?auth_token=<token>` を一度だけ開き、その状態をブックマーク。UFW を `default deny incoming` で運用している場合の Docker bridge 許可ルールと、token のシェル継承(`~/.profile` で source する話)は README の `### docker / リモートエージェント向けに 0.0.0.0 でバインドする場合` を参照してください。
 
 ### 通常の終了方法
 
