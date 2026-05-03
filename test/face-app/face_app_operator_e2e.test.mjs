@@ -73,6 +73,8 @@ async function startFaceAppE2e(options = {}) {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      MH_FACE_AUTH_TOKEN: '',
+      MH_FACE_ALLOWED_ORIGINS: '',
       FACE_WS_HOST: '127.0.0.1',
       FACE_WS_PORT: String(port),
       FACE_WS_PATH: '/ws',

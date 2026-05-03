@@ -47,6 +47,37 @@ function asNonEmptyString(value) {
   return trimmed === '' ? null : trimmed;
 }
 
+function withAuthTokenUrl(rawUrl, authToken) {
+  const token = asNonEmptyString(authToken);
+  if (!token) {
+    return rawUrl;
+  }
+  try {
+    const url = new URL(rawUrl);
+    if (!url.searchParams.has('auth_token') && !url.searchParams.has('token')) {
+      url.searchParams.set('auth_token', token);
+    }
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+function redactedUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.searchParams.has('auth_token')) {
+      url.searchParams.set('auth_token', '[redacted]');
+    }
+    if (url.searchParams.has('token')) {
+      url.searchParams.set('token', '[redacted]');
+    }
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 function asTimestamp(value, fallbackNow) {
   if (Number.isFinite(value)) {
     return Math.floor(value);
@@ -753,7 +784,9 @@ export function createOperatorBridgeRuntime(options = {}) {
 }
 
 export function startOperatorBridge(options = {}) {
-  const wsUrl = asNonEmptyString(options.wsUrl) ?? 'ws://127.0.0.1:8765/ws';
+  const baseWsUrl = asNonEmptyString(options.wsUrl) ?? 'ws://127.0.0.1:8765/ws';
+  const wsUrl = withAuthTokenUrl(baseWsUrl, options.authToken);
+  const displayWsUrl = redactedUrl(wsUrl);
   const sessionId = normalizeSessionId(options.sessionId, 'default');
   const mirrorIntervalMs = clampInteger(options.mirrorIntervalMs, 500, 200, 60_000);
   const reconnectMinMs = clampInteger(options.reconnectMinMs, 900, 200, 10_000);
@@ -858,7 +891,7 @@ export function startOperatorBridge(options = {}) {
     }
 
     socket.addEventListener('open', () => {
-      log.info(`[operator-bridge] connected: ${wsUrl}`);
+      log.info(`[operator-bridge] connected: ${displayWsUrl}`);
       onConnected();
     });
 
@@ -906,6 +939,7 @@ export function loadBridgeOptionsFromEnv(env = process.env) {
 
   return {
     wsUrl: asNonEmptyString(env.MH_BRIDGE_WS_URL) ?? 'ws://127.0.0.1:8765/ws',
+    authToken: asNonEmptyString(env.MH_FACE_AUTH_TOKEN),
     sessionId: normalizeSessionId(env.MH_BRIDGE_SESSION_ID, 'default'),
     tmuxPane,
     defaultRecoveryTmuxPane: asNonEmptyString(env.MH_BRIDGE_RECOVERY_TMUX_PANE) ?? tmuxPane,

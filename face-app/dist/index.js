@@ -18,6 +18,8 @@ import { createOwnerInboxApi } from './owner_inbox_api.js';
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
 const wsPath = process.env.FACE_WS_PATH ?? '/ws';
+const authToken = normalizeOptionalString(process.env.MH_FACE_AUTH_TOKEN);
+const allowedOrigins = parseAllowedOrigins(process.env.MH_FACE_ALLOWED_ORIGINS);
 const audioTargetInput = process.env.FACE_AUDIO_TARGET ?? 'local';
 const uiModeInput = process.env.FACE_UI_MODE ?? 'auto';
 const faceDisplayInput = process.env.FACE_FACE_DISPLAY ?? 'full';
@@ -63,6 +65,38 @@ function writeJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function normalizeOptionalString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function parseAllowedOrigins(value) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return [];
+  }
+  const origins = [];
+  for (const item of value.split(',')) {
+    const trimmed = item.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      origins.push(new URL(trimmed).origin);
+    } catch {
+      console.warn(`[face-app] ignoring invalid MH_FACE_ALLOWED_ORIGINS item: ${trimmed}`);
+    }
+  }
+  return [...new Set(origins)];
+}
+
+function isLoopbackBindHost(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '' || normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
+}
+
 const audioTarget = normalizeAudioTarget(audioTargetInput);
 if (!audioTarget) {
   console.error(`[face-app] invalid FACE_AUDIO_TARGET: ${audioTargetInput} (expected local|browser|both)`);
@@ -84,6 +118,17 @@ if (!faceDisplay) {
 console.info(`[face-app] face display=${faceDisplay}`);
 const operatorPanelEnabled = (process.env.FACE_OPERATOR_PANEL_ENABLED ?? '1') !== '0';
 console.info(`[face-app] operator panel=${operatorPanelEnabled ? 'enabled' : 'disabled'}`);
+if (!isLoopbackBindHost(host) && !authToken) {
+  console.error(
+    `[face-app] MH_FACE_AUTH_TOKEN is required when FACE_WS_HOST is ${host}. ` +
+      'Set a long random token or bind to 127.0.0.1.'
+  );
+  process.exit(2);
+}
+console.info(`[face-app] auth=${authToken ? 'enabled' : 'disabled'}`);
+if (allowedOrigins.length > 0) {
+  console.info(`[face-app] allowed origins=${allowedOrigins.join(',')}`);
+}
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -269,6 +314,9 @@ const server = await startFaceWebSocketServer({
   port: Number.isNaN(port) ? 8765 : port,
   path: wsPath,
   staticDir,
+  authToken,
+  allowedOrigins,
+  requireOriginCheck: true,
   relayPayloads: true,
   onPayload(payload) {
     const realtimeDirective = operatorRealtimeAsrProxy?.handlePayload(payload);
@@ -348,6 +396,10 @@ const server = await startFaceWebSocketServer({
         },
         browserAudio: {
           maxChannels: browserAudioMaxChannels
+        },
+        auth: {
+          required: Boolean(authToken),
+          tokenQueryParam: 'auth_token'
         }
       });
       return true;

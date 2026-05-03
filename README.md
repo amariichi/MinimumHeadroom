@@ -6,7 +6,7 @@
 </p>
 <p>
   <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/fa7f65d5-f314-4118-90c7-3853fddd6668" />
-  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/4692887d-56fd-4c3f-8a0d-3ed975f50f4b" />
+  <img width="49%" alt="Image" src="https://github.com/user-attachments/assets/404988d5-6a26-4bf5-a5a0-867ef4317305" />
 </p>
 
 [English](#english) | [日本語](#japanese)
@@ -189,13 +189,50 @@ tailscale serve --bg 8765
 
 If an MCP client runs in docker or another network namespace, face-app must bind to a non-loopback address. Set `FACE_WS_HOST=0.0.0.0` in your shell environment.
 
-Note: face-app has no built-in auth. When bound to `0.0.0.0`, port 8765 is reachable from the LAN as well. If you do not want LAN devices to reach it, deny the LAN interface explicitly at the OS firewall (leave `lo`, `tailscale0`, and `docker0` untouched so tailscale and containers still work):
+When binding outside loopback, `MH_FACE_AUTH_TOKEN` is required. Use a long random token and keep the OS firewall/Tailscale boundary in place:
+
+```bash
+export FACE_WS_HOST=0.0.0.0
+export MH_FACE_AUTH_TOKEN="$(openssl rand -base64 32)"
+```
+
+Without `MH_FACE_AUTH_TOKEN`, face-app refuses to start on `0.0.0.0`. The token protects the HTTP API and WebSocket endpoint; static UI files remain public so the browser can bootstrap and then attach the token to API/WS calls.
+
+When bound to `0.0.0.0`, port 8765 is reachable from the LAN unless blocked. If you do not want LAN devices to reach it, deny the LAN interface explicitly at the OS firewall (leave `lo`, `tailscale0`, and `docker0` untouched so tailscale and containers still work):
 
 ```bash
 sudo ufw deny in on <lan-interface> to any port 8765 proto tcp
 ```
 
 Replace `<lan-interface>` with your actual Ethernet/Wi-Fi name (for example `enp129s0`, `eth0`, `wlan0`; check with `ip -brief addr`).
+
+For Tailscale Serve, open the UI with the token once:
+
+```text
+https://<tailscale-host>:8443/?auth_token=<token>
+```
+
+The browser stores it in `sessionStorage`, and face-app also sets an `mh_face_auth` cookie for the same origin. The visible URL is then cleaned so mobile home-screen shortcuts do not need to keep the token in the URL.
+
+Local browser access works the same way: open `http://127.0.0.1:8765/?auth_token=<token>` once and bookmark the resulting page. Without `?auth_token=...`, the static UI loads but `/api/agents/state` returns 401 and the dashboard shows `agent state error`.
+
+If UFW (or another host firewall) is set to default deny incoming, Docker bridges from non-loopback containers to host ports `8765` / `8081` are also blocked. Allow the Docker default address pool explicitly. UFW is disabled on most distros until `sudo ufw enable`; check with `sudo ufw status`. If you are configuring UFW for the first time on a remote machine, run `sudo ufw allow OpenSSH` **before** `sudo ufw enable` to avoid locking yourself out.
+
+```bash
+sudo ufw allow from 172.16.0.0/12 to any port 8765 proto tcp comment 'docker → face-app'
+sudo ufw allow from 172.16.0.0/12 to any port 8081 proto tcp comment 'docker → llm backend'
+sudo ufw reload
+```
+
+`172.16.0.0/12` covers the stock Docker default address pool on Linux. Verify your actual bridges first:
+
+```bash
+docker network ls -q | xargs -I{} docker network inspect {} --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
+```
+
+If Docker has been reconfigured to a different pool (for example `10.200.0.0/16` via `daemon.json`), or if your LAN itself sits in `172.16/12` (some corporate networks do — check `ip -brief addr`), narrow the rule to the specific Docker network subnet (for example `172.20.0.0/16`) and pin that subnet in the compose / `docker network create` so it does not drift on recreation. With a typical home LAN (`192.168/16` or `10/8`) and stock Docker, the `172.16/12` rule keeps LAN and Tailnet (`100.64/10`) blocked.
+
+The token must be present in the shell that starts face-app, the operator bridge, and any agent CLI whose MCP server forwards to face-app. If you keep it in `~/.config/minimum-headroom.env` sourced from `.bashrc`, also source it from `~/.profile` (or a launcher wrapper) so non-interactive and GUI-launched agents inherit it. Recovery from a 401 MCP WebSocket: `set -a; . ~/.config/minimum-headroom.env; set +a` in the launching shell, then restart the agent.
 
 ### Path A: Face + MCP (minimal)
 
@@ -564,13 +601,50 @@ tailscale serve --bg 8765
 
 MCP クライアントが docker など別ネットワーク名前空間で動く構成では、face-app をループバック以外にバインドする必要があります。シェル環境で `FACE_WS_HOST=0.0.0.0` を設定してください。
 
-注意: face-app に組み込みの認証はありません。`0.0.0.0` にすると LAN からも 8765 に到達可能になります。LAN 端末から触らせたくない場合は、LAN インタフェースだけを OS ファイアウォールで明示的に拒否してください(`lo` / `tailscale0` / `docker0` には触らないので tailscale・コンテナはそのまま動きます):
+ループバック外へバインドする場合、`MH_FACE_AUTH_TOKEN` が必須です。長いランダム token を設定し、OS firewall / Tailscale の境界も維持してください。
+
+```bash
+export FACE_WS_HOST=0.0.0.0
+export MH_FACE_AUTH_TOKEN="$(openssl rand -base64 32)"
+```
+
+`MH_FACE_AUTH_TOKEN` がない状態で `0.0.0.0` にすると、face-app は起動を拒否します。この token は HTTP API と WebSocket を保護します。静的 UI ファイルは、ブラウザが先に起動してから API/WS に token を付けられるよう公開のままです。
+
+`0.0.0.0` にすると、ブロックしない限り LAN からも 8765 に到達可能になります。LAN 端末から触らせたくない場合は、LAN インタフェースだけを OS ファイアウォールで明示的に拒否してください(`lo` / `tailscale0` / `docker0` には触らないので tailscale・コンテナはそのまま動きます):
 
 ```bash
 sudo ufw deny in on <lan-interface> to any port 8765 proto tcp
 ```
 
 `<lan-interface>` は実際の有線/Wi-Fi 名(例: `enp129s0`, `eth0`, `wlan0`、`ip -brief addr` で確認)に置き換えてください。
+
+Tailscale Serve 経由では、初回だけ token 付き URL を開いてください。
+
+```text
+https://<tailscale-host>:8443/?auth_token=<token>
+```
+
+ブラウザは `sessionStorage` に token を保存し、face-app も同じ origin の `mh_face_auth` cookie を設定します。その後、表示 URL からは token を取り除くため、モバイルのホーム画面ショートカットに token 付き URL を残す必要はありません。
+
+PC ブラウザのローカルアクセスも同じ手順です。`http://127.0.0.1:8765/?auth_token=<token>` を初回だけ開き、その状態をブックマークしておけば次回からはワンクリック。`?auth_token=...` 無しで開くと、静的 UI は読み込まれても `/api/agents/state` が 401 になり、ダッシュボードに `agent state error` が出ます。
+
+UFW など host firewall を `default deny incoming` で運用している場合、Docker bridge から host:`8765` / `8081` への ingress も落ちるので、Docker デフォルト address pool を明示的に許可してください。多くのディストロでは UFW は `sudo ufw enable` を実行するまで無効です(`sudo ufw status` で確認)。リモートマシンで初めて UFW を設定するときは、ロックアウト防止のため `sudo ufw enable` の **前**に `sudo ufw allow OpenSSH` を入れてください。
+
+```bash
+sudo ufw allow from 172.16.0.0/12 to any port 8765 proto tcp comment 'docker → face-app'
+sudo ufw allow from 172.16.0.0/12 to any port 8081 proto tcp comment 'docker → llm backend'
+sudo ufw reload
+```
+
+`172.16.0.0/12` は Linux 上の標準 Docker のデフォルトアドレスプールをカバーする範囲です。まず実際の bridge を確認してください:
+
+```bash
+docker network ls -q | xargs -I{} docker network inspect {} --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
+```
+
+`daemon.json` の `default-address-pools` で別レンジ(例: `10.200.0.0/16`)に変更している場合や、LAN 自体が `172.16/12` を採番している場合(企業 LAN にときどきあります、`ip -brief addr` で確認)は、特定 Docker network の subnet(例: `172.20.0.0/16`)に置き換え、`docker network create` / compose 側で subnet を固定して再作成時のずれを防いでください。家庭 LAN(`192.168/16` か `10/8`)+ 標準 Docker という典型構成なら、`172.16/12` ルールで LAN と Tailnet (`100.64/10`) は引き続き拒否されます。
+
+token は、face-app・operator bridge・MCP forwarding を行う agent CLI を **起動するシェル**に存在している必要があります。`~/.config/minimum-headroom.env` を `.bashrc` から source している場合、非対話シェルや GUI 起動からは引き継がれません。`~/.profile` でも source するか、起動ラッパーで env を渡してください。MCP の WebSocket が 401 で落ちたときは、起動シェルで `set -a; . ~/.config/minimum-headroom.env; set +a` してから agent を立て直すと復旧します。
 
 ### Path A: Face + MCP（最小構成）
 

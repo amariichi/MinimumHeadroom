@@ -1,7 +1,7 @@
 import http from 'node:http';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
@@ -36,6 +36,192 @@ function toLogger(log) {
 
 function websocketAcceptValue(key) {
   return createHash('sha1').update(`${key}${WEBSOCKET_GUID}`).digest('base64');
+}
+
+function asNonEmptyString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function timingSafeStringEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left ?? ''), 'utf8');
+  const rightBuffer = Buffer.from(String(right ?? ''), 'utf8');
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function parseCookieHeader(header) {
+  const cookies = new Map();
+  if (typeof header !== 'string' || header.trim() === '') {
+    return cookies;
+  }
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index <= 0) {
+      continue;
+    }
+    const key = part.slice(0, index).trim();
+    const rawValue = part.slice(index + 1).trim();
+    let value = rawValue;
+    try {
+      value = decodeURIComponent(rawValue);
+    } catch {}
+    if (key) {
+      cookies.set(key, value);
+    }
+  }
+  return cookies;
+}
+
+function authCookieHeader(authToken) {
+  const token = asNonEmptyString(authToken);
+  if (!token) {
+    return null;
+  }
+  return [
+    `mh_face_auth=${encodeURIComponent(token)}`,
+    'Path=/',
+    'Max-Age=15552000',
+    'SameSite=Lax',
+    'HttpOnly'
+  ].join('; ');
+}
+
+function tokenFromAuthorizationHeader(header) {
+  const value = asNonEmptyString(header);
+  if (!value) {
+    return null;
+  }
+  const match = value.match(/^Bearer\s+(.+)$/i);
+  return match ? asNonEmptyString(match[1]) : null;
+}
+
+function tokenFromRequest(request, parsedUrl) {
+  const authHeader = Array.isArray(request.headers.authorization)
+    ? request.headers.authorization[0]
+    : request.headers.authorization;
+  const bearer = tokenFromAuthorizationHeader(authHeader);
+  if (bearer) {
+    return bearer;
+  }
+
+  const queryToken = asNonEmptyString(parsedUrl.searchParams.get('auth_token'))
+    ?? asNonEmptyString(parsedUrl.searchParams.get('token'));
+  if (queryToken) {
+    return queryToken;
+  }
+
+  const cookies = parseCookieHeader(request.headers.cookie);
+  return asNonEmptyString(cookies.get('mh_face_auth'));
+}
+
+function tokenFromWebSocketProtocol(header) {
+  if (typeof header !== 'string') {
+    return null;
+  }
+  for (const item of header.split(',')) {
+    const protocol = item.trim();
+    if (protocol.startsWith('mh-face-auth.')) {
+      return asNonEmptyString(protocol.slice('mh-face-auth.'.length));
+    }
+  }
+  return null;
+}
+
+function isAuthorizedRequest(request, parsedUrl, authToken) {
+  const expected = asNonEmptyString(authToken);
+  if (!expected) {
+    return true;
+  }
+  const supplied = tokenFromRequest(request, parsedUrl)
+    ?? tokenFromWebSocketProtocol(request.headers['sec-websocket-protocol']);
+  if (!supplied) {
+    return false;
+  }
+  return timingSafeStringEqual(supplied, expected);
+}
+
+function hasValidQueryToken(parsedUrl, authToken) {
+  const expected = asNonEmptyString(authToken);
+  if (!expected) {
+    return false;
+  }
+  const supplied = asNonEmptyString(parsedUrl.searchParams.get('auth_token'))
+    ?? asNonEmptyString(parsedUrl.searchParams.get('token'));
+  return Boolean(supplied) && timingSafeStringEqual(supplied, expected);
+}
+
+function normalizeOrigin(value) {
+  const origin = asNonEmptyString(value);
+  if (!origin) {
+    return null;
+  }
+  try {
+    const parsed = new URL(origin);
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = String(hostname ?? '').toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
+}
+
+function originMatchesHost(origin, hostHeader) {
+  const normalizedOrigin = normalizeOrigin(origin);
+  const host = asNonEmptyString(Array.isArray(hostHeader) ? hostHeader[0] : hostHeader);
+  if (!normalizedOrigin || !host) {
+    return false;
+  }
+  try {
+    const parsed = new URL(normalizedOrigin);
+    return parsed.host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedOrigin(request, allowedOrigins) {
+  const origin = normalizeOrigin(request.headers.origin);
+  if (!origin) {
+    return true;
+  }
+  if (originMatchesHost(origin, request.headers.host)) {
+    return true;
+  }
+  try {
+    const parsed = new URL(origin);
+    if (isLoopbackHostname(parsed.hostname)) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return allowedOrigins.has(origin);
+}
+
+function writeAuthError(response, statusCode, error, apiResponse) {
+  if (apiResponse) {
+    response.writeHead(statusCode, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store'
+    });
+    response.end(JSON.stringify({ ok: false, error }));
+    return;
+  }
+
+  response.writeHead(statusCode, {
+    'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'no-store'
+  });
+  response.end(`${error}\n`);
 }
 
 function encodeServerFrame(opcode, payload = Buffer.alloc(0)) {
@@ -200,6 +386,13 @@ export async function startFaceWebSocketServer(options = {}) {
   const onHttpRequest = typeof options.onHttpRequest === 'function' ? options.onHttpRequest : null;
   const relayPayloads = options.relayPayloads ?? true;
   const staticDir = options.staticDir ?? null;
+  const authToken = asNonEmptyString(options.authToken);
+  const requireOriginCheck = options.requireOriginCheck === true;
+  const allowedOrigins = new Set(
+    (Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [])
+      .map((origin) => normalizeOrigin(origin))
+      .filter(Boolean)
+  );
   const log = toLogger(options.log ?? console);
 
   const sockets = new Set();
@@ -272,6 +465,28 @@ export async function startFaceWebSocketServer(options = {}) {
   }
 
   const server = http.createServer(async (request, response) => {
+    let parsedUrl = null;
+    try {
+      parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    } catch {
+      parsedUrl = new URL('/', 'http://127.0.0.1');
+    }
+    const isApiRequest = parsedUrl.pathname.startsWith('/api/');
+    const cookieHeader = hasValidQueryToken(parsedUrl, authToken) ? authCookieHeader(authToken) : null;
+    if (cookieHeader) {
+      response.setHeader('set-cookie', cookieHeader);
+    }
+
+    if (isApiRequest && requireOriginCheck && !isAllowedOrigin(request, allowedOrigins)) {
+      writeAuthError(response, 403, 'origin_not_allowed', isApiRequest);
+      return;
+    }
+
+    if (isApiRequest && !isAuthorizedRequest(request, parsedUrl, authToken)) {
+      writeAuthError(response, 401, 'unauthorized', isApiRequest);
+      return;
+    }
+
     if (onHttpRequest) {
       try {
         const handled = await onHttpRequest(request, response);
@@ -290,13 +505,14 @@ export async function startFaceWebSocketServer(options = {}) {
 
   server.on('upgrade', (request, socket) => {
     const key = request.headers['sec-websocket-key'];
-    const incomingPath = (() => {
+    const parsedUrl = (() => {
       try {
-        return new URL(request.url ?? '/', 'http://localhost').pathname;
+        return new URL(request.url ?? '/', 'http://localhost');
       } catch {
-        return '/';
+        return new URL('/', 'http://localhost');
       }
     })();
+    const incomingPath = parsedUrl.pathname;
 
     if (incomingPath !== wsPath) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
@@ -306,6 +522,18 @@ export async function startFaceWebSocketServer(options = {}) {
 
     if (typeof key !== 'string') {
       socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (requireOriginCheck && !isAllowedOrigin(request, allowedOrigins)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (!isAuthorizedRequest(request, parsedUrl, authToken)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
