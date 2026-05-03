@@ -14,6 +14,7 @@ asr-worker/.venv/
 
 # Local tool configs and caches
 .codex_/
+.claude/
 .cache/huggingface/
 .cache/vllm/
 .env
