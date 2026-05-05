@@ -9,3 +9,9 @@ env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "MCP_TOOL_NAME_STYLE" = "under
 
 # The wrapper preserves MH_FACE_AGENT_ID / MH_FACE_AGENT_LABEL from the current
 # agent process or its parent when available, so face_* tools can omit agent_id.
+#
+# If face-app is bound outside loopback and requires MH_FACE_AUTH_TOKEN, the
+# wrapper also forwards MH_FACE_AUTH_TOKEN from the current environment, from a
+# parent process, or from MH_FACE_ENV_FILE. The default env file is:
+#   ~/.config/minimum-headroom.env
+# Keep the real token out of this checked-in config.

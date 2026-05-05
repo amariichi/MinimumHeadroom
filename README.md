@@ -333,6 +333,12 @@ env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "MCP_TOOL_NAME_STYLE" = "under
 
 `run-bound-mcp-server.sh` starts the MCP server and preserves `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` from the current agent process or its parent process when available. This lets `face_ping`, `face_event`, and `face_say` omit `agent_id` in operator/helper panes that were launched by Minimum Headroom.
 
+When face-app is bound outside loopback and requires `MH_FACE_AUTH_TOKEN`, the
+same wrapper forwards `MH_FACE_AUTH_TOKEN` from the current environment, from a
+parent process, or from `MH_FACE_ENV_FILE`. The default env file is
+`~/.config/minimum-headroom.env`. Keep real tokens out of checked-in Codex
+config files.
+
 ### Gemini CLI
 
 Use `doc/examples/antigravity/mcp_config.json` as a template. Place in `~/.gemini/` or a project-local `.gemini/` folder. Gemini requires `MCP_TOOL_NAME_STYLE=underscore`.
@@ -742,6 +748,12 @@ env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "MCP_TOOL_NAME_STYLE" = "under
 ```
 
 `run-bound-mcp-server.sh` は MCP server を起動し、可能な場合は現在の agent process または親 process から `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` を引き継ぎます。Minimum Headroom から起動された operator/helper pane では、これにより `face_ping` / `face_event` / `face_say` の `agent_id` 省略が可能になります。
+
+face-app をループバック外に bind して `MH_FACE_AUTH_TOKEN` が必要な場合、
+同じ wrapper は現在の環境・親 process・`MH_FACE_ENV_FILE` から
+`MH_FACE_AUTH_TOKEN` を転送します。既定の env file は
+`~/.config/minimum-headroom.env` です。実 token は Codex config に
+チェックインしないでください。
 
 ### Gemini CLI
 
