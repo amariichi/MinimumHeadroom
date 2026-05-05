@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 : "${FACE_WS_URL:=ws://127.0.0.1:8765/ws}"
 : "${MCP_TOOL_NAME_STYLE:=dot}"
+: "${MH_FACE_ENV_FILE:=$HOME/.config/minimum-headroom.env}"
 
 read_proc_env_var() {
   local pid="$1"
@@ -47,6 +48,53 @@ inherit_from_parent_chain() {
   return 1
 }
 
+read_env_file_var() {
+  local file="$1"
+  local key="$2"
+  if [[ -z "$file" || ! -r "$file" ]]; then
+    return 1
+  fi
+  awk -v key="$key" '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    function unquote(value) {
+      value = trim(value)
+      if (value ~ /^"([^"\\]|\\.)*"$/) {
+        value = substr(value, 2, length(value) - 2)
+        gsub(/\\"/, "\"", value)
+        gsub(/\\\\/, "\\", value)
+      } else if (value ~ /^'\''[^'\'']*'\''$/) {
+        value = substr(value, 2, length(value) - 2)
+      }
+      return value
+    }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      line = trim(line)
+      if (line == "" || line ~ /^#/) {
+        next
+      }
+      sub(/^export[[:space:]]+/, "", line)
+      equals = index(line, "=")
+      if (equals <= 1) {
+        next
+      }
+      name = trim(substr(line, 1, equals - 1))
+      if (name != key) {
+        next
+      }
+      print unquote(substr(line, equals + 1))
+      found = 1
+      exit
+    }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
 if [[ -z "${MH_FACE_AGENT_ID:-}" ]]; then
   if value="$(inherit_from_parent_chain MH_FACE_AGENT_ID 2>/dev/null)" && [[ -n "$value" ]]; then
     export MH_FACE_AGENT_ID="$value"
@@ -58,6 +106,14 @@ if [[ -z "${MH_FACE_AGENT_LABEL:-}" ]]; then
     export MH_FACE_AGENT_LABEL="$value"
   elif [[ -n "${MH_FACE_AGENT_ID:-}" ]]; then
     export MH_FACE_AGENT_LABEL="$MH_FACE_AGENT_ID"
+  fi
+fi
+
+if [[ -z "${MH_FACE_AUTH_TOKEN:-}" ]]; then
+  if value="$(inherit_from_parent_chain MH_FACE_AUTH_TOKEN 2>/dev/null)" && [[ -n "$value" ]]; then
+    export MH_FACE_AUTH_TOKEN="$value"
+  elif value="$(read_env_file_var "$MH_FACE_ENV_FILE" MH_FACE_AUTH_TOKEN 2>/dev/null)" && [[ -n "$value" ]]; then
+    export MH_FACE_AUTH_TOKEN="$value"
   fi
 fi
 
@@ -82,6 +138,9 @@ env_args=(
 )
 if [[ -n "${FACE_HTTP_BASE_URL:-}" ]]; then
   env_args+=("FACE_HTTP_BASE_URL=$FACE_HTTP_BASE_URL")
+fi
+if [[ -n "${MH_FACE_AUTH_TOKEN:-}" ]]; then
+  env_args+=("MH_FACE_AUTH_TOKEN=$MH_FACE_AUTH_TOKEN")
 fi
 if [[ -n "${MH_FACE_AGENT_ID:-}" ]]; then
   env_args+=("MH_FACE_AGENT_ID=$MH_FACE_AGENT_ID")
