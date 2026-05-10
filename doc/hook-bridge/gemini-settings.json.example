@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "mh-hook-permission",
+            "type": "command",
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime gemini --event permission_required",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "mh-hook-idle",
+            "type": "command",
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime gemini --event idle_after_response",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}

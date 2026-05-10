@@ -14,6 +14,7 @@ import { createAgentAssignmentStateStore } from './agent_assignment_state.js';
 import { createAgentAssignmentApi } from './agent_assignment_api.js';
 import { createOwnerInboxStateStore } from './owner_inbox_state.js';
 import { createOwnerInboxApi } from './owner_inbox_api.js';
+import { createHookBridge } from './hook_bridge.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -229,6 +230,7 @@ const ownerInboxApi = createOwnerInboxApi({
     agentAssignmentState.noteReport(result.report);
   }
 });
+const hookBridge = createHookBridge({ log: console });
 const operatorAsrProxy = createOperatorAsrProxy({
   baseUrl: operatorAsrBaseUrl,
   endpointUrl: operatorAsrEndpointUrl,
@@ -324,9 +326,20 @@ const server = await startFaceWebSocketServer({
       return realtimeDirective;
     }
 
+    if (payload && payload.type === 'hook') {
+      hookBridge
+        .handleHook({ payload, server, ttsController, ownerInboxStore: ownerInboxState, assignmentStore: agentAssignmentState })
+        .catch((error) => {
+          console.warn(`[face-app] hook bridge failed: ${error.message}`);
+        });
+      return;
+    }
+
     if (!payload || payload.type !== 'say') {
       return;
     }
+
+    hookBridge.observePayload(payload);
 
     const sayPayload = normalizeSayPayload(payload);
     payload.message_id = sayPayload.message_id;

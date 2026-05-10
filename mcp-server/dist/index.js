@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.15.1';
+const SERVER_VERSION = '1.16.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_AUTH_TOKEN = (() => {
@@ -56,8 +56,12 @@ const EVENT_NAMES = new Set([
   'tests_passed',
   'permission_required',
   'retrying',
-  'idle'
+  'idle',
+  'idle_after_response'
 ]);
+
+const HOOK_EVENT_NAMES = new Set(['permission_required', 'idle_after_response']);
+const HOOK_RUNTIMES = new Set(['claude', 'codex', 'gemini']);
 
 const BASE_TOOL_DEFINITIONS = [
   {
@@ -111,6 +115,22 @@ const BASE_TOOL_DEFINITIONS = [
         session_id: { type: 'string', minLength: 1 },
         agent_id: { type: ['string', 'null'] },
         agent_label: { type: ['string', 'null'] }
+      }
+    }
+  },
+  {
+    name: 'face.hook',
+    description: 'Hook-bridge entry point. Maps a canonical hook event to face_say + face_event + (when helper) owner inbox post via the face-app hook bridge.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      required: ['event'],
+      properties: {
+        event: { type: 'string', enum: ['permission_required', 'idle_after_response'] },
+        agent_id: { type: ['string', 'null'] },
+        session_id: { type: ['string', 'null'] },
+        runtime: { type: ['string', 'null'], enum: ['claude', 'codex', 'gemini', null] },
+        meta: { type: 'object' }
       }
     }
   },
@@ -317,6 +337,9 @@ function canonicalizeToolName(toolName) {
   }
   if (toolName === 'face_ping') {
     return 'face.ping';
+  }
+  if (toolName === 'face_hook') {
+    return 'face.hook';
   }
   if (toolName === 'agent_list') {
     return 'agent.list';
@@ -767,6 +790,37 @@ function normalizeSayPayload(rawArguments) {
   return { payload, identity };
 }
 
+function normalizeHookPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const identity = resolveFaceIdentity(args);
+  const event = requireString(args, 'event');
+  if (!HOOK_EVENT_NAMES.has(event)) {
+    throw new Error(`event must be one of: ${[...HOOK_EVENT_NAMES].join(', ')}`);
+  }
+  const sessionId = optionalString(args, 'session_id', null) ?? 'hook';
+  const runtime = optionalString(args, 'runtime', null);
+  if (runtime !== null && !HOOK_RUNTIMES.has(runtime)) {
+    throw new Error(`runtime must be one of: ${[...HOOK_RUNTIMES].join(', ')}`);
+  }
+  const meta = args.meta === undefined ? {} : args.meta;
+  if (!isObject(meta)) {
+    throw new Error('meta must be an object when provided');
+  }
+
+  const payload = {
+    v: 1,
+    type: 'hook',
+    session_id: sessionId,
+    ...(identity.effective_agent_id ? { agent_id: identity.effective_agent_id } : {}),
+    ...(identity.effective_agent_label ? { agent_label: identity.effective_agent_label } : {}),
+    ts: Date.now(),
+    event,
+    ...(runtime ? { runtime } : {}),
+    meta
+  };
+  return { payload, identity };
+}
+
 function normalizePingPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const sessionId = requireString(args, 'session_id');
@@ -1115,6 +1169,21 @@ async function handleToolCall(params) {
       });
     } catch (error) {
       return toolTextResult(faceToolFailureText('face.ping', error), {
+        isError: true,
+        structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, ...faceIdentityStructured(error.faceIdentity) }
+      });
+    }
+  }
+
+  if (toolName === 'face.hook') {
+    try {
+      const { payload, identity } = normalizeHookPayload(rawArguments);
+      await forwardToFace(payload);
+      return toolTextResult(`forwarded face.hook event=${payload.event}`, {
+        structuredContent: { ok: true, ws: FACE_WS_DISPLAY_URL, payload, ...faceIdentityStructured(identity) }
+      });
+    } catch (error) {
+      return toolTextResult(faceToolFailureText('face.hook', error), {
         isError: true,
         structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, ...faceIdentityStructured(error.faceIdentity) }
       });

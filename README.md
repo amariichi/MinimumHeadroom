@@ -377,6 +377,40 @@ If your MCP client rejects tool names with dots (for example `face.event`), set 
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization
 - [Multi-Agent Guide](doc/guides/multi-agent.md#english) — spawning helpers, permission presets, mission assignment, owner inbox, worktree isolation, security hardening
 
+## Hook Bridge (safety net for forgotten face_say)
+
+`scripts/mh-hook.mjs` is a small wrapper that maps each agent runtime's hook
+events to a `face_say` + `face_event` (and an owner-inbox entry for helpers),
+so the face speaks even when the agent forgets to call `face_say` voluntarily.
+Currently supports Claude Code, Codex (new `hooks` system + legacy `notify`
+fallback), and Gemini CLI.
+
+Configuration:
+
+- Per-runtime examples (drop-in JSON/TOML): `doc/hook-bridge/`
+- Embedded in the per-runtime setup READMEs: `doc/examples/claude-code/README.md`, `doc/examples/codex/config.toml`, `doc/examples/antigravity/README.md`
+
+The hook only fires when `MH_FACE_AGENT_ID` is set in the agent process
+environment, so unrelated Claude/Codex/Gemini sessions on the same machine are
+unaffected. Templates (the lines spoken on each event) live at
+`~/.minimum-headroom/face-templates.json`; if absent, the built-in
+Japanese + English defaults are used. Language is auto-detected from the
+agent's recent `face_say` history (CJK → `ja`, otherwise → `en`), with
+`MH_FACE_LANG` as fallback.
+
+Codex silently filters untrusted hooks at startup, so a one-time trust grant
+is required after editing `~/.codex/config.toml`. The trust is persisted in
+`[hooks.state.*]` at the user level — once granted, every subsequent Codex
+session for that user (including helpers spawned by `agent.spawn`) inherits
+it automatically. You do not need to enter individual helper panes. The
+easiest way is `./scripts/grant-codex-hook-trust.sh` (spawns a transient
+Codex inside a private tmux server, walks the trust UI, exits). Manually:
+run any Codex once, type `/hooks`, walk the browser, and quit. Re-grant only
+when you change a hook command or matcher. See `doc/hook-bridge/README.md`
+for the full procedure.
+
+Design notes: `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md`.
+
 ## Optional Agent Skills
 
 This repository includes reusable skill packages under `doc/examples/skills/`:
@@ -775,6 +809,20 @@ face-app をループバック外に bind して `MH_FACE_AUTH_TOKEN` が必要�
 ```
 
 権限プリセットと AGENTS.md の詳細は [Gemini setup](doc/examples/antigravity/README.md) を参照。
+
+### Hook ブリッジ（face_say の安全網）
+
+エージェントが `face_say` を呼び忘れて承認待ちで沈黙した場合や、最終 report なしで turn が終わった場合に、ランタイムの hook 機構から自動的に face を喋らせる仕組みです。Claude Code / Codex（新 `hooks` 系）/ Gemini CLI に対応。
+
+- ドロップインの設定例: `doc/hook-bridge/`
+- 各ランタイムの setup README（Claude / Codex / Gemini）にも同じスニペットを掲載
+- 設計詳細: `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md`
+
+`MH_FACE_AGENT_ID` が agent process に設定されていないとき hook は何もせず exit 0 で終了するため、関係ない別 session には影響しません。発話テンプレートは `~/.minimum-headroom/face-templates.json` で上書き可能（無い場合は日本語 + 英語の組込みデフォルト）。言語は直近の `face_say` 履歴から自動判定（CJK 文字 → `ja`、それ以外 → `en`）、`MH_FACE_LANG` がフォールバック。
+
+Codex は user-defined hook を起動時に untrusted として silent skip するため、`~/.codex/config.toml` に hook 設定を追加した後に **1 回だけ** trust 付与が必要です。trust は user-level の `[hooks.state.*]` に永続化されるので、同じユーザーで起動する以降の全 codex プロセス（operator が spawn する helper も含む）が自動的に trust 状態を引き継ぎます。helper pane に毎回入って trust 操作する必要はありません。
+
+最も簡単なのは同梱の `./scripts/grant-codex-hook-trust.sh` を実行する方法（裏側で短命 codex を 1 つ立てて自動的に trust → 終了）。手動でやる場合は普段使いの codex で 1 回 `/hooks` を開いて trust → 閉じる、で同じ効果。再 trust が必要になるのは hook の command/matcher を編集したときだけです。詳細は `doc/hook-bridge/README.md`。
 
 ### エージェント指示の設定
 
