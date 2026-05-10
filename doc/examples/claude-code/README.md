@@ -86,4 +86,4 @@ forgets to call `face_say` voluntarily. Merge the following into your
 }
 ```
 
-`mh-hook.mjs` is silent and exits 0 on every error path, so it never blocks Claude Code. It only fires when `MH_FACE_AGENT_ID` is set in the agent process environment (which `scripts/run-operator-once.sh` already does for the operator pane). See `doc/hook-bridge/` for cross-runtime details and `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md` for design notes.
+`mh-hook.mjs` is silent and exits 0 on every error path, so it never blocks Claude Code. It only fires when `MH_FACE_AGENT_ID` is set in the agent process environment (which `scripts/run-operator-once.sh` already does for the operator pane). See `doc/hook-bridge/` for cross-runtime details.

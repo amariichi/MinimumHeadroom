@@ -409,8 +409,6 @@ run any Codex once, type `/hooks`, walk the browser, and quit. Re-grant only
 when you change a hook command or matcher. See `doc/hook-bridge/README.md`
 for the full procedure.
 
-Design notes: `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md`.
-
 ## Optional Agent Skills
 
 This repository includes reusable skill packages under `doc/examples/skills/`:
@@ -816,7 +814,7 @@ face-app をループバック外に bind して `MH_FACE_AUTH_TOKEN` が必要�
 
 - ドロップインの設定例: `doc/hook-bridge/`
 - 各ランタイムの setup README（Claude / Codex / Gemini）にも同じスニペットを掲載
-- 設計詳細: `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md`
+- 詳細な設定手順: `doc/hook-bridge/README.md`
 
 `MH_FACE_AGENT_ID` が agent process に設定されていないとき hook は何もせず exit 0 で終了するため、関係ない別 session には影響しません。発話テンプレートは `~/.minimum-headroom/face-templates.json` で上書き可能（無い場合は日本語 + 英語の組込みデフォルト）。言語は直近の `face_say` 履歴から自動判定（CJK 文字 → `ja`、それ以外 → `en`）、`MH_FACE_LANG` がフォールバック。
 

@@ -101,4 +101,4 @@ Notes:
 
 - `mh-hook.mjs` is hard-wired to write nothing to stdout and exit `0` under all conditions. This is required because Gemini parses hook stdout as JSON and treats exit code `2` from `AfterAgent` as "retry this turn with stderr as the new prompt" — exiting non-zero from a safety-net hook would silently kick the agent into an unwanted retry loop.
 - The hook fires only when `MH_FACE_AGENT_ID` is set in the agent process environment. `scripts/run-operator-once.sh` sets this for the operator pane; helper panes inherit it from `agent.spawn`.
-- See `doc/hook-bridge/` for cross-runtime details and `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md` for design notes.
+- See `doc/hook-bridge/` for cross-runtime details.
