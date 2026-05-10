@@ -15,3 +15,49 @@ env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "MCP_TOOL_NAME_STYLE" = "under
 # parent process, or from MH_FACE_ENV_FILE. The default env file is:
 #   ~/.config/minimum-headroom.env
 # Keep the real token out of this checked-in config.
+
+# --- Hook bridge (face safety net) ----------------------------------------
+# Routes Codex hook events into the face_say + face_event + owner-inbox
+# safety net. Requires the new Codex `hooks` system; older Codex installs can
+# fall back to the legacy `notify` line at the bottom of this file instead.
+
+[features]
+hooks = true   # In Codex < 0.131 the legacy alias `codex_hooks = true` works
+               # too but emits a deprecation warning at startup.
+
+[[hooks.PermissionRequest]]
+matcher = ".*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event permission_required"
+timeout = 5
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event idle_after_response"
+timeout = 5
+
+# Legacy fallback (only useful when [features] codex_hooks is unavailable):
+# notify = ["/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs", "--runtime", "codex"]
+
+# IMPORTANT: Codex treats every user-defined hook as untrusted until you grant
+# trust per-event from inside the TUI. Untrusted hooks are silently skipped.
+# After editing the [[hooks.*]] blocks above, do one of:
+#
+#   (a) Run the bundled helper script once:
+#         scripts/grant-codex-hook-trust.sh
+#       It spawns codex inside a private tmux server, walks the /hooks browser,
+#       trusts each event, and exits. After it succeeds, every codex session
+#       (including helpers spawned via agent.spawn) executes these hooks.
+#
+#   (b) Or run `codex` interactively yourself, type `/hooks`, press Enter on
+#       each event row that shows "1 / 1" pending, then `t` to trust it,
+#       Esc to back out, and repeat for any other untrusted event.
+#
+# Either way, Codex writes a SHA-256 trusted_hash under [hooks.state.<key>] in
+# this file. Re-editing the hook command/matcher invalidates the hash and
+# requires re-granting trust. See doc/hook-bridge/README.md for the full
+# discovery rationale.

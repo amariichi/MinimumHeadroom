@@ -50,3 +50,40 @@ This prevents helper agents from pushing to remote repositories without operator
 ### Read-only protection
 
 After writing `settings.json`, the operator sets `chmod 444` on the file so that helper agents cannot modify their own permission configuration during a session.
+
+## Hook bridge (face safety net)
+
+Wire the minimum-headroom hook bridge so the face speaks even when the agent
+forgets to call `face_say` voluntarily. Merge the following into your
+`~/.claude/settings.json` (top-level `hooks` key):
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime claude --event permission_required"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime claude --event idle_after_response"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`mh-hook.mjs` is silent and exits 0 on every error path, so it never blocks Claude Code. It only fires when `MH_FACE_AGENT_ID` is set in the agent process environment (which `scripts/run-operator-once.sh` already does for the operator pane). See `doc/hook-bridge/` for cross-runtime details and `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md` for design notes.

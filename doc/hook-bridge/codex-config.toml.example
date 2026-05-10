@@ -1,0 +1,29 @@
+# Append these blocks to ~/.codex/config.toml.
+
+# Enable the new Codex hooks system. Required for [[hooks.*]] tables.
+# `hooks` is the current key; `codex_hooks` is a deprecated alias still
+# accepted in Codex < 0.131 with a warning at startup.
+[features]
+hooks = true
+
+# Primary path: PermissionRequest fires before approval prompts.
+[[hooks.PermissionRequest]]
+matcher = ".*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event permission_required"
+timeout = 5
+
+# Primary path: Stop fires when a turn ends.
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event idle_after_response"
+timeout = 5
+
+# Legacy fallback for Codex versions where [features] codex_hooks is unavailable.
+# When the new hooks system is active above, this still fires for
+# `agent-turn-complete` and is harmless duplication.
+notify = ["/abs/path/to/scripts/mh-hook.mjs", "--runtime", "codex"]
