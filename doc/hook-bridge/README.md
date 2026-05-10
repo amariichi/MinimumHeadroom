@@ -6,8 +6,6 @@ canonical hook event (`permission_required` or `idle_after_response`) into a
 `face_say` + `face_event` and, for helper agents, an owner-inbox entry — even
 when the agent forgets to call `face_say` voluntarily.
 
-See `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md` for the design.
-
 ## Files
 
 - `claude-settings.json.example` — paste into `~/.claude/settings.json` (merge
@@ -99,8 +97,6 @@ falling back to `MH_FACE_LANG` when the agent has not spoken yet.
 ## 日本語
 
 このディレクトリには、各 agent runtime（Claude Code / Codex / Gemini CLI）の hook 機構を `scripts/mh-hook.mjs` に配線するための設定例が入っています。wrapper は canonical な hook event（`permission_required` または `idle_after_response`）を `face_say` + `face_event`、helper の場合はさらに owner inbox エントリに変換します。agent 自身が `face_say` を呼び忘れたときの安全網。
-
-設計詳細は `.agent/PLANS_47_HOOK_DRIVEN_FACE_SAY.md`。
 
 ### 同梱ファイル
 
