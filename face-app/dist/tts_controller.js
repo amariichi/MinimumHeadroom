@@ -248,6 +248,7 @@ export function createTtsController(options = {}) {
   const log = toLogger(options.log ?? console);
   const now = typeof options.now === 'function' ? options.now : () => Date.now();
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => false;
+  const audioStore = options.audioStore ?? null;
   const audioTarget = normalizeAudioTarget(options.audioTarget);
   const browserAudioEnabled = audioTarget === 'browser' || audioTarget === 'both';
   const defaultTtlMs = Number.isInteger(options.defaultTtlMs) ? Math.max(1, options.defaultTtlMs) : 60_000;
@@ -545,9 +546,6 @@ export function createTtsController(options = {}) {
     }
 
     if (message.type === 'audio') {
-      if (!browserAudioEnabled) {
-        return;
-      }
       if (!active || !Number.isInteger(message.generation) || message.generation !== active.generation) {
         return;
       }
@@ -555,21 +553,45 @@ export function createTtsController(options = {}) {
         return;
       }
 
-      broadcast({
-        v: 1,
-        type: 'tts_audio',
-        session_id: active.sessionId,
-        ...(active.agentId ? { agent_id: active.agentId } : {}),
-        ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
-        utterance_id: active.utteranceId,
-        generation: active.generation,
-        message_id: active.messageId,
-        revision: active.revision,
-        mime_type: typeof message.mime_type === 'string' ? message.mime_type : 'audio/wav',
-        audio_base64: message.audio_base64,
-        sample_rate: Number.isInteger(message.sample_rate) ? message.sample_rate : null,
-        ts: now()
-      });
+      const mimeType = typeof message.mime_type === 'string' ? message.mime_type : 'audio/wav';
+      const sampleRate = Number.isInteger(message.sample_rate) ? message.sample_rate : null;
+
+      if (audioStore && typeof audioStore.putAudio === 'function' && typeof audioStore.toReferencePayload === 'function') {
+        const entry = audioStore.putAudio({
+          audioBase64: message.audio_base64,
+          mimeType,
+          sampleRate,
+          sessionId: active.sessionId,
+          agentId: active.agentId,
+          agentLabel: active.agentLabel,
+          utteranceId: active.utteranceId,
+          generation: active.generation,
+          messageId: active.messageId,
+          revision: active.revision
+        });
+        const refPayload = audioStore.toReferencePayload(entry);
+        if (refPayload) {
+          broadcast(refPayload);
+        }
+      }
+
+      if (browserAudioEnabled) {
+        broadcast({
+          v: 1,
+          type: 'tts_audio',
+          session_id: active.sessionId,
+          ...(active.agentId ? { agent_id: active.agentId } : {}),
+          ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
+          utterance_id: active.utteranceId,
+          generation: active.generation,
+          message_id: active.messageId,
+          revision: active.revision,
+          mime_type: mimeType,
+          audio_base64: message.audio_base64,
+          sample_rate: sampleRate,
+          ts: now()
+        });
+      }
       return;
     }
 
@@ -774,6 +796,9 @@ export function createTtsController(options = {}) {
     }
 
     worker.stop();
+    if (audioStore && typeof audioStore.clear === 'function') {
+      audioStore.clear();
+    }
   }
 
   return {

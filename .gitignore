@@ -2,11 +2,13 @@
 node_modules/
 npm-debug.log*
 *.log
+esp-web-tools-logs.txt
 
 # Python caches / virtualenv
 __pycache__/
 .pytest_cache/
 .venv/
+.venv-platformio/
 .venv-vllm/
 .venv-qwen-tts/
 tts-worker/.venv/

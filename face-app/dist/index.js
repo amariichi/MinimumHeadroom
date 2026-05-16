@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFaceWebSocketServer } from './ws_server.js';
 import { createTtsController } from './tts_controller.js';
+import { createTtsAudioStore } from './tts_audio_store.js';
 import { loadFaceAppConfig } from './config_loader.js';
 import { resolveBrowserAudioMaxChannels } from './browser_audio_config.js';
 import { createOperatorAsrProxy } from './operator_asr_proxy.js';
@@ -242,6 +243,9 @@ const operatorAsrProxy = createOperatorAsrProxy({
 let operatorRealtimeAsrProxy = null;
 
 let ttsController = null;
+const ttsAudioStore = createTtsAudioStore({
+  ttlMs: Number.parseInt(process.env.MH_TTS_AUDIO_REF_TTL_MS ?? '60000', 10)
+});
 
 function normalizeSayPayload(payload) {
   const normalized = { ...payload };
@@ -417,6 +421,9 @@ const server = await startFaceWebSocketServer({
       });
       return true;
     }
+    if (ttsAudioStore.handleHttpRequest(request, response)) {
+      return true;
+    }
     return operatorAsrProxy.handleHttpRequest(request, response);
   },
   log: console
@@ -461,6 +468,7 @@ if (ttsEnabled) {
     broadcast(payload) {
       return server.broadcast(payload);
     },
+    audioStore: ttsAudioStore,
     defaultTtlMs: faceConfig.tts.defaultTtlMs,
     autoInterruptAfterMs: faceConfig.tts.autoInterruptAfterMs,
     qwenBoundarySpeaker: process.env.MH_QWEN_TTS_BOUNDARY_SPEAKER ?? 'Ono_Anna',

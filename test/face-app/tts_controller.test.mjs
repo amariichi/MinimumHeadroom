@@ -523,6 +523,98 @@ test('tts controller relays worker audio payload when browser audio is enabled',
   assert.equal(relayed.audio_base64, 'ZmFrZQ==');
 });
 
+test('tts controller broadcasts audio reference when audio store is configured', async () => {
+  const worker = new FakeWorker();
+  const broadcasts = [];
+  const stored = [];
+  const controller = createTtsController({
+    worker,
+    now: () => 32_000,
+    audioTarget: 'browser',
+    audioStore: {
+      putAudio(payload) {
+        stored.push(payload);
+        return {
+          id: 'audio-1',
+          sessionId: payload.sessionId,
+          agentId: payload.agentId,
+          agentLabel: payload.agentLabel,
+          utteranceId: payload.utteranceId,
+          generation: payload.generation,
+          messageId: payload.messageId,
+          revision: payload.revision,
+          mimeType: payload.mimeType,
+          sampleRate: payload.sampleRate,
+          byteLength: 4,
+          durationMs: null,
+          expiresAt: 92_000
+        };
+      },
+      toReferencePayload(entry) {
+        return {
+          v: 1,
+          type: 'tts_audio_ref',
+          session_id: entry.sessionId,
+          utterance_id: entry.utteranceId,
+          generation: entry.generation,
+          message_id: entry.messageId,
+          revision: entry.revision,
+          mime_type: entry.mimeType,
+          sample_rate: entry.sampleRate,
+          byte_length: entry.byteLength,
+          duration_ms: entry.durationMs,
+          expires_at: entry.expiresAt,
+          url: `/api/tts/audio/${entry.id}.wav`,
+          ts: 32_000
+        };
+      }
+    },
+    gate: { check: () => ({ allow: true }) },
+    broadcast(payload) {
+      broadcasts.push(payload);
+      return true;
+    },
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro', playback_backend: 'silent' });
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    message_id: 'm-1',
+    revision: 123,
+    agent_id: '__operator__',
+    text: 'browser audio',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 4_000,
+    ts: 32_000
+  });
+
+  worker.emit('message', {
+    type: 'audio',
+    generation: 1,
+    mime_type: 'audio/wav',
+    sample_rate: 24_000,
+    audio_base64: 'ZmFrZQ=='
+  });
+
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].audioBase64, 'ZmFrZQ==');
+  assert.equal(stored[0].agentId, '__operator__');
+
+  const ref = broadcasts.find((payload) => payload.type === 'tts_audio_ref');
+  assert.ok(ref);
+  assert.equal(ref.url, '/api/tts/audio/audio-1.wav');
+  assert.equal(ref.message_id, 'm-1');
+  assert.equal(ref.sample_rate, 24_000);
+
+  const base64 = broadcasts.find((payload) => payload.type === 'tts_audio');
+  assert.ok(base64);
+  assert.equal(base64.audio_base64, 'ZmFrZQ==');
+});
+
 test('tts controller does not relay worker audio payload in local-only mode', async () => {
   const worker = new FakeWorker();
   const broadcasts = [];
