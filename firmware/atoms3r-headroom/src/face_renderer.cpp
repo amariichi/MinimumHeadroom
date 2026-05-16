@@ -24,6 +24,12 @@ int displayRotationForDegrees(int degrees) {
   }
 }
 
+// Shift the whole composed face downward by this many pixels. The head art is
+// geometrically centered, but the hair adds visual weight up top, so nudging
+// everything down makes the head look centered. The bottom rows clipped by the
+// offset are background-only (head art ends well above the screen edge).
+constexpr int kFaceOffsetY = 4;
+
 void drawThickLine(M5Canvas& canvas, int x0, int y0, int x1, int y1, uint16_t color) {
   for (int offset = -2; offset <= 2; ++offset) {
     canvas.drawLine(x0, y0 + offset, x1, y1 + offset, color);
@@ -82,8 +88,9 @@ void HeadroomFaceRenderer::setRotationDegrees(int rotationDegrees) {
 }
 
 void HeadroomFaceRenderer::draw(const HeadroomFaceState& state) {
+  uint16_t background = backgroundFor(state);
   canvas_.startWrite();
-  canvas_.fillScreen(backgroundFor(state));
+  canvas_.fillScreen(background);
   drawHeadBase(state);
   drawBrows(state);
   drawEyes(state);
@@ -95,7 +102,11 @@ void HeadroomFaceRenderer::draw(const HeadroomFaceState& state) {
     canvas_.fillCircle(width_ - 10, 10, 3, TFT_GREEN);
   }
   canvas_.endWrite();
-  canvas_.pushSprite(0, 0);
+  // Clear the strip exposed above the shifted sprite, then push it down.
+  if (kFaceOffsetY > 0) {
+    M5.Display.fillRect(0, 0, width_, kFaceOffsetY, background);
+  }
+  canvas_.pushSprite(0, kFaceOffsetY);
 }
 
 void HeadroomFaceRenderer::drawHeadBase(const HeadroomFaceState& state) {
@@ -167,9 +178,11 @@ void HeadroomFaceRenderer::drawBrows(const HeadroomFaceState& state) {
 
 void HeadroomFaceRenderer::drawClosedEyeArc(int centerX, int eyeCenterY, uint16_t color) {
   // Downward-convex "∪" eyelid arc (a dark lash line), not a white sliver.
-  const int radius = 15;
-  const int arcCenterY = eyeCenterY - 13;  // bottom of the arc sits at the eye center
-  canvas_.fillArc(centerX, arcCenterY, radius, radius - 4, 25.0f, 155.0f, color);
+  // Larger radius + narrower sweep = a gentler, flatter curve; the slightly
+  // smaller upward offset drops the whole arc a touch lower on the face.
+  const int radius = 19;
+  const int arcCenterY = eyeCenterY - 16;  // a little lower than before
+  canvas_.fillArc(centerX, arcCenterY, radius, radius - 4, 45.0f, 135.0f, color);
 }
 
 void HeadroomFaceRenderer::drawEyes(const HeadroomFaceState& state) {
