@@ -1,0 +1,44 @@
+#pragma once
+
+#include <Arduino.h>
+#include <WebServer.h>
+
+#include "face_renderer.h"
+#include "headroom_audio.h"
+#include "headroom_settings.h"
+#include "headroom_transport.h"
+
+class HeadroomIngressServer {
+public:
+  void begin(const HeadroomSettingsData& settings, HeadroomTransport& transport, HeadroomAudio& audio, HeadroomFaceState& faceState);
+  void loop();
+  bool active() const;
+  bool recentlyActive(uint32_t windowMs) const;
+
+private:
+  WebServer server_{80};
+  HeadroomTransport* transport_ = nullptr;
+  HeadroomAudio* audio_ = nullptr;
+  HeadroomFaceState* faceState_ = nullptr;
+  String authToken_;
+  String deviceId_;
+  bool active_ = false;
+  size_t maxPayloadBytes_ = 720000;
+  uint32_t lastPayloadMs_ = 0;
+  uint8_t* audioRawBuffer_ = nullptr;
+  size_t audioRawLength_ = 0;
+  size_t audioRawCapacity_ = 0;
+  bool audioRawUnauthorized_ = false;
+  bool audioRawTooLarge_ = false;
+  bool audioRawFailed_ = false;
+
+  void handleHealth();
+  void handlePayload();
+  void handleAudioRaw();
+  void handleAudio();
+  void handleOptions();
+  void handleNotFound();
+  bool isAuthorized();
+  void releaseAudioRawBuffer();
+  void sendJson(int statusCode, const String& body);
+};

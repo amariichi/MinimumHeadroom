@@ -1,0 +1,35 @@
+#pragma once
+
+#include <ArduinoJson.h>
+#include <Arduino.h>
+#include <WebSocketsClient.h>
+
+#include "face_renderer.h"
+#include "headroom_audio.h"
+#include "headroom_settings.h"
+
+class HeadroomTransport {
+public:
+  void begin(const HeadroomSettingsData& settings, HeadroomFaceState& faceState, HeadroomAudio& audio);
+  void loop();
+  bool connected() const;
+  bool handleJsonPayload(const uint8_t* payload, size_t length);
+
+private:
+  WebSocketsClient ws_;
+  HeadroomFaceState* faceState_ = nullptr;
+  HeadroomAudio* audio_ = nullptr;
+  bool connected_ = false;
+  String deviceId_;
+  String displayAgentId_;
+  uint32_t priorityDisplayUntilMs_ = 0;
+  uint32_t lastExpressionMs_ = 0;
+
+  void onWsEvent(WStype_t type, uint8_t* payload, size_t length);
+  void handleAudioPayload(JsonDocument& doc, const String& type);
+  bool shouldApplyPayload(const String& agentId, const String& type, uint32_t nowMs);
+  void handleEventPayload(const String& name);
+  void handleTtsStatePayload(const String& phase);
+  void updateExpressionTimeout(uint32_t nowMs);
+  void setExpression(HeadroomExpression expression);
+};

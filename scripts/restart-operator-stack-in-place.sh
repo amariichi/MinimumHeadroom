@@ -10,7 +10,7 @@ STACK_CMD="./scripts/run-operator-stack.sh"
 PROFILE_NAME="default"
 STACK_CMD_SET=0
 FACE_UI_MODE=""
-FACE_AUDIO_TARGET=""
+FACE_AUDIO_TARGET="${MH_FACE_AUDIO_TARGET:-both}"
 ASR_BASE_URL=""
 OPERATOR_FACE_AGENT_ID="${MH_OPERATOR_FACE_AGENT_ID:-__operator__}"
 OPERATOR_FACE_AGENT_LABEL="${MH_OPERATOR_FACE_AGENT_LABEL:-Operator}"
@@ -182,9 +182,17 @@ stack_pane="$(tmux display-message -p -t "${SESSION_NAME}:${WINDOW_NAME}.1" '#{p
 agent_cwd="$(tmux display-message -p -t "${SESSION_NAME}:${WINDOW_NAME}.0" '#{pane_current_path}' 2>/dev/null || true)"
 agent_repo_root="$(derive_agent_repo_root "$agent_cwd")"
 
-if [[ -z "$agent_pane" || -z "$stack_pane" || -z "$agent_cwd" ]]; then
-  echo "[restart-operator-stack] expected panes .0 (agent) and .1 (stack) in ${SESSION_NAME}:${WINDOW_NAME}" >&2
+if [[ -z "$agent_pane" || -z "$agent_cwd" ]]; then
+  echo "[restart-operator-stack] expected pane .0 (agent) in ${SESSION_NAME}:${WINDOW_NAME}" >&2
   exit 2
+fi
+
+if [[ -z "$stack_pane" ]]; then
+  stack_pane="$(tmux split-window -h -t "$agent_pane" -c "$agent_cwd" -P -F '#{pane_id}' 2>/dev/null || true)"
+  if [[ -z "$stack_pane" ]]; then
+    echo "[restart-operator-stack] failed to create missing stack pane in ${SESSION_NAME}:${WINDOW_NAME}" >&2
+    exit 2
+  fi
 fi
 
 stack_launch="env"
