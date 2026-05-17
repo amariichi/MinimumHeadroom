@@ -20,8 +20,11 @@ private:
   HeadroomTransport* transport_ = nullptr;
   HeadroomAudio* audio_ = nullptr;
   HeadroomFaceState* faceState_ = nullptr;
+  String faceHttpBase_;
+  String faceWsUrl_;
   String authToken_;
   String deviceId_;
+  String asrLanguage_;
   bool active_ = false;
   size_t maxPayloadBytes_ = 720000;
   uint32_t lastPayloadMs_ = 0;

@@ -19,6 +19,8 @@ public:
   void begin(const HeadroomSettingsData& settings);
   void loop();
   void stop();
+  void stopForRecording();
+  void restoreAfterRecording();
   bool busy() const;
 
   HeadroomAudioResult playBase64Wav(const char* audioBase64, size_t base64Length, int sampleRateHint);

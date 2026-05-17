@@ -43,6 +43,16 @@ void HeadroomAudio::stop() {
   releaseActive();
 }
 
+void HeadroomAudio::stopForRecording() {
+  stop();
+  M5.Speaker.end();
+}
+
+void HeadroomAudio::restoreAfterRecording() {
+  M5.Speaker.setVolume(130);
+  M5.Speaker.begin();
+}
+
 bool HeadroomAudio::busy() const {
   return M5.Speaker.isPlaying();
 }

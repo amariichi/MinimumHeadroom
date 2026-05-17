@@ -73,8 +73,11 @@ void HeadroomIngressServer::begin(const HeadroomSettingsData& settings, Headroom
   transport_ = &transport;
   audio_ = &audio;
   faceState_ = &faceState;
+  faceHttpBase_ = settings.faceHttpBase;
+  faceWsUrl_ = settings.faceWsUrl;
   authToken_ = settings.authToken;
   deviceId_ = settings.deviceId;
+  asrLanguage_ = settings.asrLanguage;
   maxPayloadBytes_ = estimatePayloadLimit(settings);
 
   const char* headerKeys[] = {"Authorization", "X-Headroom-Auth"};
@@ -112,7 +115,17 @@ void HeadroomIngressServer::handleHealth() {
   body += jsonEscape(deviceId_);
   body += F("\",\"ip\":\"");
   body += WiFi.localIP().toString();
-  body += F("\",\"ingress\":true}");
+  body += F("\",\"ingress\":true,\"ws_connected\":");
+  body += transport_ && transport_->connected() ? F("true") : F("false");
+  body += F(",\"face_http_base\":\"");
+  body += jsonEscape(faceHttpBase_);
+  body += F("\",\"face_ws_url\":\"");
+  body += jsonEscape(faceWsUrl_);
+  body += F("\",\"auth_configured\":");
+  body += authToken_.length() > 0 ? F("true") : F("false");
+  body += F(",\"asr_language\":\"");
+  body += jsonEscape(asrLanguage_);
+  body += F("\"}");
   sendJson(200, body);
 }
 

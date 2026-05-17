@@ -14,6 +14,7 @@ public:
   void loop();
   bool connected() const;
   bool handleJsonPayload(const uint8_t* payload, size_t length);
+  bool sendOperatorText(const String& text);
 
 private:
   WebSocketsClient ws_;
@@ -22,6 +23,7 @@ private:
   bool connected_ = false;
   String deviceId_;
   String displayAgentId_;
+  String inputTargetAgentId_;
   uint32_t priorityDisplayUntilMs_ = 0;
   uint32_t lastExpressionMs_ = 0;
 

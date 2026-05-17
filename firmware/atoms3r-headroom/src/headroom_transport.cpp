@@ -82,6 +82,7 @@ void HeadroomTransport::begin(const HeadroomSettingsData& settings, HeadroomFace
   audio_ = &audio;
   deviceId_ = settings.deviceId;
   displayAgentId_ = settings.displayAgentId;
+  inputTargetAgentId_ = settings.inputTargetAgentId;
 
   ParsedWsUrl url = parseWsUrl(settings.faceWsUrl);
   String path = appendQueryToken(url.path, settings.authToken);
@@ -107,6 +108,33 @@ void HeadroomTransport::loop() {
 
 bool HeadroomTransport::connected() const {
   return connected_;
+}
+
+bool HeadroomTransport::sendOperatorText(const String& text) {
+  String trimmed = text;
+  trimmed.trim();
+  if (!connected_ || trimmed.length() == 0) {
+    return false;
+  }
+
+  JsonDocument doc;
+  doc["v"] = 1;
+  doc["type"] = "operator_response";
+  doc["session_id"] = deviceId_.length() > 0 ? deviceId_ : "atom-headroom";
+  doc["request_id"] = nullptr;
+  doc["response_kind"] = "text";
+  doc["value"] = trimmed;
+  doc["source"] = "atom";
+  if (inputTargetAgentId_.length() > 0) {
+    doc["target_agent_id"] = inputTargetAgentId_;
+  }
+  doc["ts"] = millis();
+
+  String payload;
+  serializeJson(doc, payload);
+  bool ok = ws_.sendTXT(payload);
+  Serial.printf("operator_response send %s bytes=%u\n", ok ? "ok" : "failed", static_cast<unsigned>(payload.length()));
+  return ok;
 }
 
 void HeadroomTransport::onWsEvent(WStype_t type, uint8_t* payload, size_t length) {

@@ -150,6 +150,14 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += F("<label>Input target agent ID</label><input name='input_id' value='");
   html += htmlEscape(data.inputTargetAgentId);
   html += F("'>");
+  html += F("<label>ASR language</label><select name='asr_lang'>");
+  html += F("<option value='ja'");
+  html += selectedIf(data.asrLanguage == "ja");
+  html += F(">Japanese</option>");
+  html += F("<option value='en'");
+  html += selectedIf(data.asrLanguage == "en");
+  html += F(">English</option>");
+  html += F("</select>");
   html += F("<div class='row'><div><label>Max base64 TTS seconds</label><input name='max_b64_sec' type='number' min='1' max='15' value='");
   html += String(data.maxBase64TtsSeconds);
   html += F("'></div><div><label>Max HTTP TTS bytes</label><input name='max_http_b' type='number' min='100000' max='3000000' value='");
@@ -200,6 +208,7 @@ HeadroomSettingsData HeadroomSetupPortal::settingsFromRequest() {
   next.deviceId = server_.arg("device_id");
   next.displayAgentId = server_.arg("display_id");
   next.inputTargetAgentId = server_.arg("input_id");
+  next.asrLanguage = HeadroomSettings::normalizeAsrLanguage(server_.arg("asr_lang"), next.asrLanguage);
   next.maxBase64TtsSeconds = requestInt(server_, "max_b64_sec", next.maxBase64TtsSeconds);
   next.maxHttpTtsBytes = requestInt(server_, "max_http_b", next.maxHttpTtsBytes);
   next.faceRotationDegrees = HeadroomSettings::normalizeRotation(requestInt(server_, "rotation", next.faceRotationDegrees));

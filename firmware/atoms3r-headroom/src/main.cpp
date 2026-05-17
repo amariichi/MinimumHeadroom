@@ -4,6 +4,7 @@
 #include "face_renderer.h"
 #include "headroom_audio.h"
 #include "headroom_ingress_server.h"
+#include "headroom_ptt.h"
 #include "headroom_settings.h"
 #include "headroom_setup_portal.h"
 #include "headroom_transport.h"
@@ -15,6 +16,7 @@ HeadroomSetupPortal setupPortal(settings);
 HeadroomAudio audio;
 HeadroomTransport transport;
 HeadroomIngressServer ingressServer;
+HeadroomPtt ptt;
 HeadroomFaceRenderer renderer;
 HeadroomFaceState faceState;
 
@@ -171,6 +173,7 @@ void setup() {
     faceState.connected = true;
     transport.begin(data, faceState, audio);
     ingressServer.begin(data, transport, audio, faceState);
+    ptt.begin(data, audio, transport, faceState);
   }
 
   if (!wifiConnected) {
@@ -185,8 +188,11 @@ void loop() {
   setupPortal.handleClient();
   audio.loop();
   if (!setupMode && wifiConnected) {
-    ingressServer.loop();
-    transport.loop();
+    ptt.update();
+    if (!ptt.recording()) {
+      ingressServer.loop();
+      transport.loop();
+    }
     faceState.connected = transport.connected() || ingressServer.recentlyActive(10000);
   }
   uint32_t nowMs = millis();

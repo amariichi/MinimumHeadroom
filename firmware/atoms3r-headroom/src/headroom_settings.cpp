@@ -45,6 +45,7 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   HeadroomSettingsData normalized = next;
   normalized.faceRotationDegrees = normalizeRotation(normalized.faceRotationDegrees);
   normalized.upSideDegrees = normalizeRotation(normalized.upSideDegrees);
+  normalized.asrLanguage = normalizeAsrLanguage(normalized.asrLanguage);
 
   Preferences prefs;
   if (!prefs.begin(kNamespace, false)) {
@@ -59,6 +60,7 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   prefs.putString("device_id", normalized.deviceId);
   prefs.putString("display_id", normalized.displayAgentId);
   prefs.putString("input_id", normalized.inputTargetAgentId);
+  prefs.putString("asr_lang", normalized.asrLanguage);
   prefs.putInt("max_b64_sec", normalized.maxBase64TtsSeconds);
   prefs.putInt("max_http_b", normalized.maxHttpTtsBytes);
   prefs.putInt("rotation", normalized.faceRotationDegrees);
@@ -104,6 +106,22 @@ HeadroomPlacementPose HeadroomSettings::parsePlacementPose(const String& value) 
   return HeadroomPlacementPose::ScreenUp;
 }
 
+String HeadroomSettings::normalizeAsrLanguage(const String& value, const String& fallback) {
+  String normalized = value;
+  normalized.trim();
+  normalized.toLowerCase();
+  if (normalized.startsWith("ja")) {
+    return "ja";
+  }
+  if (normalized.startsWith("en")) {
+    return "en";
+  }
+  String normalizedFallback = fallback;
+  normalizedFallback.trim();
+  normalizedFallback.toLowerCase();
+  return normalizedFallback.startsWith("en") ? "en" : "ja";
+}
+
 const char* HeadroomSettings::placementPoseName(HeadroomPlacementPose pose) {
   switch (pose) {
     case HeadroomPlacementPose::SideUp:
@@ -123,6 +141,7 @@ void HeadroomSettings::loadCompileDefaults() {
   data_.deviceId = HEADROOM_DEVICE_ID;
   data_.displayAgentId = HEADROOM_DISPLAY_AGENT_ID;
   data_.inputTargetAgentId = HEADROOM_INPUT_TARGET_AGENT_ID;
+  data_.asrLanguage = normalizeAsrLanguage(HEADROOM_ASR_LANGUAGE);
   data_.maxBase64TtsSeconds = HEADROOM_MAX_BASE64_TTS_SECONDS;
   data_.maxHttpTtsBytes = HEADROOM_MAX_HTTP_TTS_BYTES;
   data_.faceRotationDegrees = normalizeRotation(HEADROOM_FACE_ROTATION_DEGREES);
@@ -161,6 +180,7 @@ void HeadroomSettings::loadNvsOverrides() {
   data_.deviceId = readString(prefs, "device_id", data_.deviceId);
   data_.displayAgentId = readString(prefs, "display_id", data_.displayAgentId);
   data_.inputTargetAgentId = readString(prefs, "input_id", data_.inputTargetAgentId);
+  data_.asrLanguage = normalizeAsrLanguage(readString(prefs, "asr_lang", data_.asrLanguage));
   data_.maxBase64TtsSeconds = readInt(prefs, "max_b64_sec", data_.maxBase64TtsSeconds);
   data_.maxHttpTtsBytes = readInt(prefs, "max_http_b", data_.maxHttpTtsBytes);
   data_.faceRotationDegrees = normalizeRotation(readInt(prefs, "rotation", data_.faceRotationDegrees));

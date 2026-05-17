@@ -8,6 +8,7 @@
 #define HEADROOM_DEVICE_ID "atom-headroom-1"
 #define HEADROOM_DISPLAY_AGENT_ID "__operator__"
 #define HEADROOM_INPUT_TARGET_AGENT_ID "__operator__"
+#define HEADROOM_ASR_LANGUAGE "ja"
 #define HEADROOM_MAX_BASE64_TTS_SECONDS 10
 #define HEADROOM_MAX_HTTP_TTS_BYTES 1200000
 

@@ -16,6 +16,7 @@ struct HeadroomSettingsData {
   String deviceId;
   String displayAgentId;
   String inputTargetAgentId;
+  String asrLanguage;
   int maxBase64TtsSeconds = 10;
   int maxHttpTtsBytes = 1200000;
   int faceRotationDegrees = 0;
@@ -34,6 +35,7 @@ public:
 
   static bool isValidRotation(int degrees);
   static int normalizeRotation(int degrees);
+  static String normalizeAsrLanguage(const String& value, const String& fallback = "ja");
   static HeadroomPlacementPose parsePlacementPose(const String& value);
   static const char* placementPoseName(HeadroomPlacementPose pose);
 
