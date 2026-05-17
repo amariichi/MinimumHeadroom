@@ -247,6 +247,12 @@ void HeadroomIngressServer::handleAudio() {
   HeadroomAudioResult result = audio_->playWavBytes(audioRawBuffer_, audioRawLength_);
   size_t audioBytes = audioRawLength_;
   releaseAudioRawBuffer();
+  if (result == HeadroomAudioResult::Ignored) {
+    // Benign skip (e.g. PTT mic window): ack without flashing the Failed
+    // face. The dropped chunk's mouth still rides the tts_mouth stream.
+    sendJson(202, F("{\"ok\":true,\"skipped\":true}"));
+    return;
+  }
   if (result != HeadroomAudioResult::Ok) {
     Serial.printf("ingress audio failed result=%d bytes=%u\n", static_cast<int>(result), static_cast<unsigned>(audioBytes));
     faceState_->expression = HeadroomExpression::Failed;

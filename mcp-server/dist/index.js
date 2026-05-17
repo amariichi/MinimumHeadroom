@@ -47,6 +47,20 @@ const FACE_AGENT_ID_REQUIRED = (() => {
   const raw = process.env.MH_FACE_AGENT_ID_REQUIRED ?? process.env.MH_FACE_IDENTITY_STRICT;
   return typeof raw === 'string' && ['1', 'true', 'yes'].includes(raw.trim().toLowerCase());
 })();
+// session_id is an identifier, not the routing key (agent_id routes). Weak
+// local models often fail to supply it, so auto-fill from MH_FACE_SESSION_ID
+// with a stable fallback, mirroring the MH_FACE_AGENT_ID auto-fill.
+const DEFAULT_FACE_SESSION_ID = (() => {
+  const raw = process.env.MH_FACE_SESSION_ID;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : 'operator';
+})();
+function resolveSessionId(args) {
+  const raw = args?.session_id;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    return raw.trim();
+  }
+  return DEFAULT_FACE_SESSION_ID;
+}
 
 const EVENT_NAMES = new Set([
   'cmd_started',
@@ -70,7 +84,7 @@ const BASE_TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       additionalProperties: true,
-      required: ['session_id', 'name'],
+      required: ['name'],
       properties: {
         session_id: { type: 'string', minLength: 1 },
         agent_id: { type: ['string', 'null'] },
@@ -88,7 +102,7 @@ const BASE_TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       additionalProperties: true,
-      required: ['session_id', 'text'],
+      required: ['text'],
       properties: {
         session_id: { type: 'string', minLength: 1 },
         agent_id: { type: ['string', 'null'] },
@@ -110,7 +124,7 @@ const BASE_TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       additionalProperties: true,
-      required: ['session_id'],
+      required: [],
       properties: {
         session_id: { type: 'string', minLength: 1 },
         agent_id: { type: ['string', 'null'] },
@@ -706,7 +720,7 @@ async function forwardToFace(payload, options = {}) {
 
 function normalizeEventPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
-  const sessionId = requireString(args, 'session_id');
+  const sessionId = resolveSessionId(args);
   const identity = resolveFaceIdentity(args);
   const name = requireString(args, 'name');
   if (!EVENT_NAMES.has(name)) {
@@ -740,7 +754,7 @@ function normalizeEventPayload(rawArguments) {
 
 function normalizeSayPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
-  const sessionId = requireString(args, 'session_id');
+  const sessionId = resolveSessionId(args);
   const identity = resolveFaceIdentity(args);
   const text = requireString(args, 'text');
   const priority = clamp(optionalInteger(args, 'priority', 0), 0, 3);
@@ -823,7 +837,7 @@ function normalizeHookPayload(rawArguments) {
 
 function normalizePingPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
-  const sessionId = requireString(args, 'session_id');
+  const sessionId = resolveSessionId(args);
   const identity = resolveFaceIdentity(args);
 
   const payload = {

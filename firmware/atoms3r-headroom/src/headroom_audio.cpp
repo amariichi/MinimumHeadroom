@@ -44,20 +44,35 @@ void HeadroomAudio::stop() {
 }
 
 void HeadroomAudio::stopForRecording() {
+  // Inhibit all DAC playback first: the ES8311 is about to be reconfigured
+  // to ADC/mic mode and any playWav during that window latches it.
+  recording_ = true;
   stop();
   M5.Speaker.end();
 }
 
 void HeadroomAudio::restoreAfterRecording() {
+  // Force a full speaker re-init: M5.Speaker.begin() alone is a no-op if it
+  // thinks it is already started, so the ES8311 can stay stuck in the
+  // mic/ADC configuration. end() -> begin() reconfigures it back to DAC.
+  M5.Speaker.end();
   M5.Speaker.setVolume(130);
   M5.Speaker.begin();
+  recording_ = false;
 }
 
 bool HeadroomAudio::busy() const {
   return M5.Speaker.isPlaying();
 }
 
+bool HeadroomAudio::recording() const {
+  return recording_;
+}
+
 HeadroomAudioResult HeadroomAudio::playBase64Wav(const char* audioBase64, size_t base64Length, int sampleRateHint) {
+  if (recording_) {
+    return HeadroomAudioResult::Ignored;  // codec is in mic mode; never play
+  }
   if (!audioBase64 || base64Length == 0) {
     return HeadroomAudioResult::Ignored;
   }
@@ -109,6 +124,9 @@ HeadroomAudioResult HeadroomAudio::playBase64Wav(const char* audioBase64, size_t
 }
 
 HeadroomAudioResult HeadroomAudio::playHttpWavRef(const String& url) {
+  if (recording_) {
+    return HeadroomAudioResult::Ignored;  // codec is in mic mode; never play
+  }
   String fullUrl = absoluteUrl(url);
   if (!startsWithHttp(fullUrl)) {
     return HeadroomAudioResult::Unsupported;
@@ -182,6 +200,9 @@ HeadroomAudioResult HeadroomAudio::playHttpWavRef(const String& url) {
 }
 
 HeadroomAudioResult HeadroomAudio::playWavBytes(const uint8_t* wav, size_t length) {
+  if (recording_) {
+    return HeadroomAudioResult::Ignored;  // codec is in mic mode; never play
+  }
   if (!wav || length == 0) {
     return HeadroomAudioResult::Ignored;
   }

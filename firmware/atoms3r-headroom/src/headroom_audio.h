@@ -22,6 +22,10 @@ public:
   void stopForRecording();
   void restoreAfterRecording();
   bool busy() const;
+  // True while the shared ES8311 codec is switched to mic/ADC for PTT.
+  // No DAC playback may happen in this window or the codec latches into a
+  // corrupted state that only a hardware power cycle clears.
+  bool recording() const;
 
   HeadroomAudioResult playBase64Wav(const char* audioBase64, size_t base64Length, int sampleRateHint);
   HeadroomAudioResult playHttpWavRef(const String& url);
@@ -34,6 +38,7 @@ private:
   int maxHttpBytes_ = 1200000;
   uint8_t* activeWav_ = nullptr;
   size_t activeWavLength_ = 0;
+  bool recording_ = false;
 
   void releaseActive();
   HeadroomAudioResult playOwnedWav(uint8_t* wav, size_t length, bool takeOwnership);

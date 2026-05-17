@@ -81,11 +81,9 @@ bool HeadroomPtt::startRecording() {
   if (!audio_ || !transport_ || !faceState_) {
     return false;
   }
-  if (audio_->busy()) {
-    audio_->stopForRecording();
-  } else {
-    audio_->stopForRecording();
-  }
+  // Always stop+inhibit playback and switch the shared codec off DAC before
+  // touching the mic, regardless of whether a chunk is currently playing.
+  audio_->stopForRecording();
 
   resetRecording();
   pcm_ = static_cast<int16_t*>(ps_malloc(kMaxSamples * sizeof(int16_t)));

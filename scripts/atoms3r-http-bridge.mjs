@@ -28,6 +28,18 @@ const relayTypes = new Set(['event', 'tts_state', 'tts_mouth', 'tts_audio']);
 let ws = null;
 let reconnectTimer = null;
 let postChain = Promise.resolve();
+// Highest tts generation seen. On a barge-in/interrupt the server bumps the
+// generation; queued audio for an older generation must be dropped at send
+// time instead of being flushed to the Atom in a burst (the burst makes the
+// firmware stop/replay rapidly and the async I2S playback corrupts = static).
+let latestGeneration = 0;
+
+function observeGeneration(payload) {
+  const g = payload?.generation;
+  if (Number.isInteger(g) && g > latestGeneration) {
+    latestGeneration = g;
+  }
+}
 let lastMouthForwardedAt = 0;
 let lastMouthOpen = null;
 
@@ -88,6 +100,8 @@ async function handleWsMessage(data) {
   if (!payload || typeof payload.type !== 'string') {
     return;
   }
+
+  observeGeneration(payload);
 
   if (payload.type === 'tts_audio_ref') {
     console.log(
@@ -235,9 +249,17 @@ function enqueuePost(payload, sourceType) {
 }
 
 function enqueueAudioPost(audio, payload) {
+  const gen = Number.isInteger(payload?.generation) ? payload.generation : null;
   postChain = postChain
     .catch(() => {})
     .then(async () => {
+      // Drop audio superseded by an interrupt: only the current generation's
+      // chunks reach the Atom, arriving at their normal play_stop spacing, so
+      // the firmware never gets a rapid stop/replay burst.
+      if (gen !== null && gen < latestGeneration) {
+        console.log(`[atoms3r-bridge] dropping stale tts_audio gen=${gen} < ${latestGeneration} (interrupt)`);
+        return;
+      }
       try {
         await postAudio(audio, payload);
       } catch (error) {

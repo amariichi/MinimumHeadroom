@@ -59,6 +59,11 @@ while (($# > 0)); do
   esac
 done
 
+# Opt-in override that survives ~/.bashrc's `export ASR_DEVICE=cpu`
+# (.bashrc never touches MH_ASR_DEVICE). Unset -> keep the inherited
+# ASR_DEVICE, so the default-detection below stays unchanged.
+ASR_DEVICE="${MH_ASR_DEVICE:-${ASR_DEVICE:-}}"
+
 if [[ -z "${ASR_DEVICE:-}" ]]; then
   if [[ "$(uname -s)" == "Darwin" ]]; then
     ASR_DEVICE="cpu"
