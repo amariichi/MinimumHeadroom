@@ -840,3 +840,63 @@ test('tts controller flushes queued chunks when an interrupt utterance arrives',
   finishActive(worker, 2);
   assert.equal(speaks(worker).length, 2);
 });
+
+// --- Step 2: operator PTT barge-in flushes the queue ---
+
+test('tts controller flushForBargeIn drops active and queued chunks', async () => {
+  const { worker, controller } = makeController({ maxChunkChars: 8 });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '一つ目の文です。二つ目の文です。三つ目の文です。'
+  });
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(controller.snapshot().queuedChunks, 2);
+
+  await controller.flushForBargeIn('operator_ptt');
+
+  assert.equal(interrupts(worker).length, 1);
+  assert.equal(controller.snapshot().activeGeneration, null);
+  assert.equal(controller.snapshot().queuedChunks, 0);
+
+  // Stale worker completion must not resurrect queued chunks.
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 1);
+
+  // A new utterance after barge-in uses a fresh, higher generation.
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u2',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '再開します。'
+  });
+  assert.equal(speaks(worker).length, 2);
+  assert.ok(speaks(worker)[1].generation > speaks(worker)[0].generation);
+});
+
+test('tts controller flushForBargeIn clears the audio store', async () => {
+  const worker = new FakeWorker();
+  let cleared = 0;
+  const controller = createTtsController({
+    worker,
+    now: () => 42_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    audioStore: { clear: () => { cleared += 1; } }
+  });
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+
+  await controller.flushForBargeIn('operator_ptt');
+  assert.equal(cleared, 1);
+});

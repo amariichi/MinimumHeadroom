@@ -108,3 +108,72 @@ test('operator ASR proxy returns 503 when upstream is not configured', async () 
   const body = JSON.parse(result.body);
   assert.equal(body.error, 'asr_upstream_not_configured');
 });
+
+test('operator ASR proxy invokes onBargeIn for a POST audio upload', async () => {
+  const bargeIns = [];
+  const proxy = createOperatorAsrProxy({
+    baseUrl: 'http://127.0.0.1:8091',
+    onBargeIn: (reason) => bargeIns.push(reason),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({ text: 'hi', language: 'ja', confidence: 0.9 });
+      }
+    })
+  });
+
+  const request = createMockRequest({
+    method: 'POST',
+    url: '/api/operator/asr?lang=ja',
+    headers: { 'content-type': 'audio/webm' },
+    body: Buffer.from('sample-audio')
+  });
+  const response = createMockResponse();
+
+  await proxy.handleHttpRequest(request, response);
+  assert.deepEqual(bargeIns, ['operator_ptt']);
+});
+
+test('operator ASR proxy does not invoke onBargeIn for non-ASR paths', async () => {
+  const bargeIns = [];
+  const proxy = createOperatorAsrProxy({
+    baseUrl: 'http://127.0.0.1:8091',
+    onBargeIn: (reason) => bargeIns.push(reason),
+    fetchImpl: async () => ({ ok: true, status: 200, async text() { return '{}'; } })
+  });
+
+  const request = createMockRequest({ method: 'POST', url: '/api/other', headers: {}, body: '' });
+  const response = createMockResponse();
+
+  const handled = await proxy.handleHttpRequest(request, response);
+  assert.equal(handled, false);
+  assert.deepEqual(bargeIns, []);
+});
+
+test('operator ASR proxy still responds if onBargeIn throws', async () => {
+  const proxy = createOperatorAsrProxy({
+    baseUrl: 'http://127.0.0.1:8091',
+    onBargeIn: () => { throw new Error('boom'); },
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({ text: 'ok', language: 'ja', confidence: 0.8 });
+      }
+    })
+  });
+
+  const request = createMockRequest({
+    method: 'POST',
+    url: '/api/operator/asr?lang=ja',
+    headers: { 'content-type': 'audio/webm' },
+    body: Buffer.from('audio')
+  });
+  const response = createMockResponse();
+
+  const handled = await proxy.handleHttpRequest(request, response);
+  assert.equal(handled, true);
+  assert.equal(response.result().statusCode, 200);
+});

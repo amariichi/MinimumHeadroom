@@ -264,6 +264,14 @@ const operatorAsrProxy = createOperatorAsrProxy({
   modelJa: process.env.MH_OPERATOR_ASR_MODEL_JA ?? '',
   modelEn: process.env.MH_OPERATOR_ASR_MODEL_EN ?? '',
   requestTimeoutMs: Number.isNaN(operatorAsrTimeoutMs) ? 20_000 : operatorAsrTimeoutMs,
+  onBargeIn: (reason) => {
+    // Lazily resolved: ttsController is created after this proxy.
+    if (ttsController && typeof ttsController.flushForBargeIn === 'function') {
+      Promise.resolve(ttsController.flushForBargeIn(reason)).catch((error) => {
+        console.error(`[face-app] tts barge-in flush failed: ${error.message}`);
+      });
+    }
+  },
   log: console
 });
 let operatorRealtimeAsrProxy = null;

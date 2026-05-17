@@ -897,6 +897,36 @@ export function createTtsController(options = {}) {
     interruptActive(reason, generation);
   }
 
+  // Barge-in: the operator took the turn (PTT). Drop every queued chunk,
+  // stop the active chunk, advance the generation so any late worker
+  // audio/mouth for the old utterance is ignored, and clear stored audio
+  // refs so a memory-constrained sink cannot pull a stale chunk.
+  async function flushForBargeIn(reason = 'operator_ptt') {
+    clearQueue();
+    if (active) {
+      interruptActive(reason, generation);
+      emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision, {
+        agent_id: active.agentId,
+        agent_label: active.agentLabel
+      });
+      emitState(active.sessionId, active.utteranceId, 'play_stop', {
+        ...(active.agentId ? { agent_id: active.agentId } : {}),
+        ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
+        reason,
+        generation: active.generation,
+        message_id: active.messageId,
+        revision: active.revision
+      });
+      active = null;
+      activeQueuedAt = null;
+      activePlayStartedAt = null;
+    }
+    generation += 1;
+    if (audioStore && typeof audioStore.clear === 'function') {
+      audioStore.clear();
+    }
+  }
+
   async function stop() {
     if (stopped) {
       return;
@@ -924,6 +954,7 @@ export function createTtsController(options = {}) {
   return {
     handleSayPayload,
     interruptCurrent,
+    flushForBargeIn,
     stop,
     snapshot() {
       return {
