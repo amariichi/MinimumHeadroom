@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTtsController } from '../../face-app/dist/tts_controller.js';
+import { createTtsController, segmentTtsText } from '../../face-app/dist/tts_controller.js';
 
 class FakeWorker {
   constructor() {
@@ -728,4 +728,115 @@ test('tts controller drops punctuation-only utterance after normalization', asyn
   assert.equal(result.accepted, false);
   assert.equal(result.reason, 'invalid_payload');
   assert.equal(speaks(worker).length, 0);
+});
+
+// --- Step 1: long-utterance sentence chunking + sequential FIFO ---
+
+test('segmentTtsText returns short text verbatim as a single chunk', () => {
+  assert.deepEqual(segmentTtsText('こんにちは。ありがとう。', 120), ['こんにちは。ありがとう。']);
+  assert.deepEqual(segmentTtsText('', 120), []);
+});
+
+test('segmentTtsText splits long text on sentence boundaries within the limit', () => {
+  const text = '一つ目の文です。二つ目の文です。三つ目の文です。';
+  const chunks = segmentTtsText(text, 8);
+  assert.deepEqual(chunks, ['一つ目の文です。', '二つ目の文です。', '三つ目の文です。']);
+  for (const chunk of chunks) {
+    assert.ok(chunk.length <= 8, `chunk too long: ${chunk}`);
+  }
+  assert.equal(chunks.join(''), text);
+});
+
+test('segmentTtsText soft-splits an oversized single sentence on commas', () => {
+  const text = 'あ、'.repeat(40); // 80 chars, no hard boundary
+  const chunks = segmentTtsText(text, 20);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) {
+    assert.ok(chunk.length <= 20, `chunk too long: ${chunk}`);
+  }
+});
+
+function makeController(options = {}) {
+  const worker = new FakeWorker();
+  const controller = createTtsController({
+    worker,
+    now: () => 42_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    ...options
+  });
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+  return { worker, controller };
+}
+
+function finishActive(worker, generation) {
+  worker.emit('message', { type: 'event', phase: 'play_stop', generation });
+}
+
+test('tts controller dispatches long-utterance chunks sequentially in order', async () => {
+  const { worker, controller } = makeController({ maxChunkChars: 8 });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '一つ目の文です。二つ目の文です。三つ目の文です。'
+  });
+
+  // Only the first chunk is sent to the worker until it finishes.
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, '一つ目の文です。');
+
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 2);
+  assert.equal(speaks(worker)[1].text, '二つ目の文です。');
+
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 3);
+  assert.equal(speaks(worker)[2].text, '三つ目の文です。');
+
+  // Draining the queue does not resend anything.
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 3);
+});
+
+test('tts controller flushes queued chunks when an interrupt utterance arrives', async () => {
+  const { worker, controller } = makeController({ maxChunkChars: 8 });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '一つ目の文です。二つ目の文です。三つ目の文です。'
+  });
+  assert.equal(speaks(worker).length, 1);
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u2',
+    priority: 3,
+    policy: 'interrupt',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '緊急。'
+  });
+
+  assert.equal(interrupts(worker).length, 1);
+  assert.equal(speaks(worker).length, 2);
+  assert.equal(speaks(worker)[1].text, '緊急。');
+
+  // The superseded utterance's queued chunks must not replay.
+  finishActive(worker, 2);
+  finishActive(worker, 2);
+  assert.equal(speaks(worker).length, 2);
 });

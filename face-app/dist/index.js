@@ -67,6 +67,32 @@ function writeJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+async function readJsonRequestBody(request, { maxBytes = 32_768 } = {}) {
+  const chunks = [];
+  let byteLength = 0;
+  for await (const chunk of request) {
+    byteLength += chunk.length;
+    if (byteLength > maxBytes) {
+      const error = new Error('request_body_too_large');
+      error.code = 'request_body_too_large';
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  if (byteLength === 0) {
+    const error = new Error('empty_body');
+    error.code = 'empty_body';
+    throw error;
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks, byteLength).toString('utf8'));
+  } catch {
+    const error = new Error('invalid_json');
+    error.code = 'invalid_json';
+    throw error;
+  }
+}
+
 function normalizeOptionalString(value) {
   if (typeof value !== 'string') {
     return null;
@@ -398,6 +424,54 @@ const server = await startFaceWebSocketServer({
       });
       return true;
     }
+    if (parsedUrl.pathname === '/api/operator/response') {
+      if (request.method !== 'POST') {
+        writeJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed'
+        });
+        return true;
+      }
+      let payload = null;
+      try {
+        payload = await readJsonRequestBody(request);
+      } catch (error) {
+        writeJson(response, error.code === 'request_body_too_large' ? 413 : 400, {
+          ok: false,
+          error: error.code ?? 'invalid_request_body'
+        });
+        return true;
+      }
+      if (!payload || payload.type !== 'operator_response') {
+        writeJson(response, 400, {
+          ok: false,
+          error: 'invalid_operator_response'
+        });
+        return true;
+      }
+      if (typeof payload.value !== 'string' || payload.value.trim() === '') {
+        writeJson(response, 400, {
+          ok: false,
+          error: 'empty_value'
+        });
+        return true;
+      }
+      const normalized = {
+        ...payload,
+        v: payload.v ?? 1,
+        type: 'operator_response',
+        session_id: normalizeSessionId(payload),
+        response_kind: typeof payload.response_kind === 'string' ? payload.response_kind : 'text',
+        value: payload.value.trim(),
+        source: typeof payload.source === 'string' && payload.source.trim() !== '' ? payload.source.trim() : 'http',
+        ts: Date.now()
+      };
+      server.broadcast(normalized);
+      writeJson(response, 202, {
+        ok: true
+      });
+      return true;
+    }
     if (parsedUrl.pathname === '/api/operator/ui-config') {
       writeJson(response, 200, {
         ok: true,
@@ -472,6 +546,7 @@ if (ttsEnabled) {
     defaultTtlMs: faceConfig.tts.defaultTtlMs,
     autoInterruptAfterMs: faceConfig.tts.autoInterruptAfterMs,
     qwenBoundarySpeaker: process.env.MH_QWEN_TTS_BOUNDARY_SPEAKER ?? 'Ono_Anna',
+    maxChunkChars: Number.parseInt(process.env.MH_TTS_CHUNK_MAX_CHARS ?? '120', 10),
     gateConfig: faceConfig.speechGate,
     workerCwd: repoRoot,
     workerEnv: {
