@@ -221,11 +221,6 @@ void HeadroomTransport::handleAudioPayload(JsonDocument& doc, const String& type
   }
   if (result != HeadroomAudioResult::Ignored) {
     Serial.printf("audio playback failed result=%d type=%s\n", static_cast<int>(result), type.c_str());
-    // No audio for this chunk: stop the mouth so it does not keep
-    // flapping from the independent tts_mouth stream (phantom 口パク).
-    if (faceState_) {
-      faceState_->mouthOpen = 0.0f;
-    }
     setExpression(HeadroomExpression::Failed);
   }
 }

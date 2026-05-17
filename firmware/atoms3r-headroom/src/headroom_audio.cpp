@@ -36,12 +36,10 @@ void HeadroomAudio::begin(const HeadroomSettingsData& settings) {
 
 void HeadroomAudio::loop() {
   releaseActive();
-  startNextIfIdle();
 }
 
 void HeadroomAudio::stop() {
   M5.Speaker.stop();
-  clearQueue();
   releaseActive();
 }
 
@@ -56,9 +54,7 @@ void HeadroomAudio::restoreAfterRecording() {
 }
 
 bool HeadroomAudio::busy() const {
-  // Stay "busy" across the gap between queued chunks so the face holds
-  // the Speaking expression instead of flickering to Neutral mid-reply.
-  return M5.Speaker.isPlaying() || queueCount_ > 0;
+  return M5.Speaker.isPlaying();
 }
 
 HeadroomAudioResult HeadroomAudio::playBase64Wav(const char* audioBase64, size_t base64Length, int sampleRateHint) {
@@ -109,7 +105,7 @@ HeadroomAudioResult HeadroomAudio::playBase64Wav(const char* audioBase64, size_t
     return HeadroomAudioResult::TooLarge;
   }
 
-  return playOrEnqueue(wav, decodedLength);
+  return playOwnedWav(wav, decodedLength, true);
 }
 
 HeadroomAudioResult HeadroomAudio::playHttpWavRef(const String& url) {
@@ -182,7 +178,7 @@ HeadroomAudioResult HeadroomAudio::playHttpWavRef(const String& url) {
     return HeadroomAudioResult::Unsupported;
   }
 
-  return playOrEnqueue(wav, offset);
+  return playOwnedWav(wav, offset, true);
 }
 
 HeadroomAudioResult HeadroomAudio::playWavBytes(const uint8_t* wav, size_t length) {
@@ -209,7 +205,7 @@ HeadroomAudioResult HeadroomAudio::playWavBytes(const uint8_t* wav, size_t lengt
     return HeadroomAudioResult::DecodeFailed;
   }
   memcpy(owned, wav, length);
-  return playOrEnqueue(owned, length);
+  return playOwnedWav(owned, length, true);
 }
 
 void HeadroomAudio::releaseActive() {
@@ -220,54 +216,6 @@ void HeadroomAudio::releaseActive() {
     free(activeWav_);
     activeWav_ = nullptr;
     activeWavLength_ = 0;
-  }
-}
-
-void HeadroomAudio::clearQueue() {
-  for (size_t i = 0; i < queueCount_; ++i) {
-    size_t idx = (queueHead_ + i) % kMaxQueued;
-    if (queued_[idx]) {
-      free(queued_[idx]);
-      queued_[idx] = nullptr;
-      queuedLen_[idx] = 0;
-    }
-  }
-  queueHead_ = 0;
-  queueCount_ = 0;
-}
-
-bool HeadroomAudio::enqueueOwned(uint8_t* wav, size_t length) {
-  if (queueCount_ >= kMaxQueued) {
-    Serial.printf("audio queue full (%u), dropping chunk\n", static_cast<unsigned>(kMaxQueued));
-    free(wav);
-    return false;
-  }
-  size_t idx = (queueHead_ + queueCount_) % kMaxQueued;
-  queued_[idx] = wav;
-  queuedLen_[idx] = length;
-  queueCount_++;
-  return true;
-}
-
-HeadroomAudioResult HeadroomAudio::playOrEnqueue(uint8_t* wav, size_t length) {
-  if (!M5.Speaker.isPlaying() && queueCount_ == 0 && !activeWav_) {
-    return playOwnedWav(wav, length, true);
-  }
-  return enqueueOwned(wav, length) ? HeadroomAudioResult::Ok : HeadroomAudioResult::TooLarge;
-}
-
-void HeadroomAudio::startNextIfIdle() {
-  if (activeWav_ || M5.Speaker.isPlaying() || queueCount_ == 0) {
-    return;
-  }
-  uint8_t* wav = queued_[queueHead_];
-  size_t length = queuedLen_[queueHead_];
-  queued_[queueHead_] = nullptr;
-  queuedLen_[queueHead_] = 0;
-  queueHead_ = (queueHead_ + 1) % kMaxQueued;
-  queueCount_--;
-  if (wav) {
-    playOwnedWav(wav, length, true);
   }
 }
 
