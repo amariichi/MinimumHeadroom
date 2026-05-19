@@ -58,7 +58,8 @@ void HeadroomAudio::playCueTone(uint16_t freqHz, uint32_t ms) {
   M5.Speaker.stop();
   releaseActive();
   beginSpeaker();
-  M5.Speaker.setVolume(speakerVolume_);
+  const uint8_t cueVolume = speakerVolume_ > 1 ? speakerVolume_ / 2 : 1;
+  M5.Speaker.setVolume(cueVolume);
   M5.Speaker.tone(freqHz, ms);
 
   // Synchronously wait for the tone to finish AND drain before returning, so
