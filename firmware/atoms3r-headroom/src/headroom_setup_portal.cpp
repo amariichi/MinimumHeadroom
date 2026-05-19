@@ -48,6 +48,15 @@ HeadroomSetupPortal::HeadroomSetupPortal(HeadroomSettings& settings)
 
 bool HeadroomSetupPortal::begin() {
   uint64_t mac = ESP.getEfuseMac();
+  char macBuf[18];
+  snprintf(macBuf, sizeof(macBuf), "%02X:%02X:%02X:%02X:%02X:%02X",
+           static_cast<unsigned>((mac >> 40) & 0xFF),
+           static_cast<unsigned>((mac >> 32) & 0xFF),
+           static_cast<unsigned>((mac >> 24) & 0xFF),
+           static_cast<unsigned>((mac >> 16) & 0xFF),
+           static_cast<unsigned>((mac >> 8) & 0xFF),
+           static_cast<unsigned>(mac & 0xFF));
+  macAddress_ = macBuf;
   char suffix[5];
   snprintf(suffix, sizeof(suffix), "%04X", static_cast<unsigned>(mac & 0xFFFF));
   ssid_ = String("RMH-SETUP-") + suffix;
@@ -120,6 +129,13 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += F(".row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.msg{padding:10px;background:#26364a;border-left:4px solid #54b6ff}");
   html += F("@media(max-width:560px){.row{grid-template-columns:1fr}}</style></head><body><main>");
   html += F("<h1>RMH Atom Setup</h1>");
+  html += F("<p class='msg'>Atom MAC: ");
+  html += htmlEscape(macAddress_);
+  html += F("<br>Setup AP SSID: ");
+  html += htmlEscape(ssid_);
+  html += F("<br>Setup AP IP: ");
+  html += ip().toString();
+  html += F("</p>");
   if (message.length() > 0) {
     html += F("<p class='msg'>");
     html += htmlEscape(message);

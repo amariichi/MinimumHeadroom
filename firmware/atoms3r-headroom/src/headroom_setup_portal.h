@@ -21,6 +21,7 @@ private:
   WebServer server_;
   DNSServer dns_;
   String ssid_;
+  String macAddress_;
   bool active_ = false;
 
   void handleRoot();
