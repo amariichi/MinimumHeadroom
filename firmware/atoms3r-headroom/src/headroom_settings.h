@@ -10,6 +10,10 @@ enum class HeadroomPlacementPose {
 struct HeadroomSettingsData {
   String wifiSsid;
   String wifiPassword;
+  String wifiSsid2;
+  String wifiPassword2;
+  String wifiSsid3;
+  String wifiPassword3;
   String faceHttpBase;
   String faceWsUrl;
   String authToken;
@@ -32,6 +36,11 @@ public:
   bool save(const HeadroomSettingsData& next);
   bool hasUsableWifi() const;
   bool hasSavedSettings() const;
+
+  // Wi-Fi slot accessor. idx is 1..3; returns false for out-of-range or
+  // placeholder/empty slots. slot 1 maps to wifiSsid/wifiPassword.
+  bool wifiSlot(int idx, String& ssid, String& pw) const;
+  int usableWifiCount() const;
 
   static bool isValidRotation(int degrees);
   static int normalizeRotation(int degrees);

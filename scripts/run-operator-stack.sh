@@ -25,7 +25,8 @@ cd "$ROOT_DIR"
 : "${MH_OPERATOR_FACE_AGENT_LABEL:=Operator}"
 # Keep each synthesized TTS chunk under the AtomS3R HTTP ingress cap
 # (estimatePayloadLimit ~954 KB with HEADROOM_MAX_BASE64_TTS_SECONDS=15;
-# bigger -> HTTP 413 -> mouth-only). ~64 chars ≈ one sentence ≈ ~400 KB WAV:
+# bigger -> HTTP 413 -> mouth-only). ~64 chars is the current safe default
+# for Japanese TTS chunks on the Atom HTTP audio path:
 # the inter-chunk gap is the per-chunk synth-after-playback wait (no
 # server-side prefetch), so fewer/larger chunks = far fewer gaps. Set here,
 # the single chokepoint every operator bring-up path passes through, since

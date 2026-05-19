@@ -89,7 +89,7 @@ void HeadroomTransport::begin(const HeadroomSettingsData& settings, HeadroomFace
   Serial.printf("ws connecting host=%s port=%u path=%s\n", url.host.c_str(), url.port, path.c_str());
 
   ws_.onEvent([this](WStype_t type, uint8_t* payload, size_t length) { onWsEvent(type, payload, length); });
-  ws_.setReconnectInterval(3000);
+  ws_.setReconnectInterval(15000);
   ws_.enableHeartbeat(15000, 3000, 2);
 
   if (url.scheme == "wss") {

@@ -27,6 +27,10 @@ private:
   static constexpr size_t kMaxSamples = kSampleRate * kMaxSeconds;
   static constexpr size_t kChunkSamples = 1024;
   static constexpr size_t kWavHeaderBytes = 44;
+  // Hold this long before recording arms, so a short tap (or a triple-tap
+  // rotate gesture) never opens the mic. The arming "ピッ" cue plays right
+  // after this threshold; the user speaks after the beep.
+  static constexpr uint32_t kArmMs = 500;
 
   HeadroomAudio* audio_ = nullptr;
   HeadroomTransport* transport_ = nullptr;
@@ -41,6 +45,7 @@ private:
   HeadroomPttState state_ = HeadroomPttState::Idle;
   uint32_t stateSinceMs_ = 0;
   bool pressedLast_ = false;
+  uint32_t pressStartMs_ = 0;
 
   bool startRecording();
   void captureChunk();

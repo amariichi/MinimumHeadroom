@@ -48,8 +48,15 @@ void HeadroomPtt::begin(
 void HeadroomPtt::update() {
   bool pressed = M5.BtnA.isPressed();
 
-  if (state_ == HeadroomPttState::Idle && pressed && !pressedLast_) {
-    startRecording();
+  if (state_ == HeadroomPttState::Idle) {
+    if (pressed && !pressedLast_) {
+      // Rising edge: start timing the hold. A release before kArmMs is a tap
+      // (handled in main.cpp as expression-cycle / triple-tap rotate); the
+      // mic is never touched for taps.
+      pressStartMs_ = millis();
+    } else if (pressed && millis() - pressStartMs_ >= kArmMs) {
+      startRecording();
+    }
   }
 
   if (state_ == HeadroomPttState::Recording) {
@@ -81,6 +88,11 @@ bool HeadroomPtt::startRecording() {
   if (!audio_ || !transport_ || !faceState_) {
     return false;
   }
+  // Audible arming cue ("ピッ"). Played and fully drained while the codec is
+  // still in DAC mode; doubles as the "speak now" signal so the kArmMs hold
+  // delay does not clip the user's speech. Hardware-verified to sound correct.
+  audio_->playCueTone();
+
   // Always stop+inhibit playback and switch the shared codec off DAC before
   // touching the mic, regardless of whether a chunk is currently playing.
   audio_->stopForRecording();

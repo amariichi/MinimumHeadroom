@@ -217,20 +217,33 @@ void HeadroomFaceRenderer::drawEyes(const HeadroomFaceState& state) {
   }
 
   eyeHeight = std::max(6, static_cast<int>(roundf(static_cast<float>(eyeHeight) * blink)));
-  canvas_.fillRoundRect(25, eyeY, 35, eyeHeight, 8, TFT_WHITE);
-  canvas_.fillRoundRect(68, eyeY, 35, eyeHeight, 8, TFT_WHITE);
 
-  // Mid-blink: whites only, no pupils until the eye is open enough.
-  if (eyeHeight < 12) {
+  // Mid-blink: avoid the sclera-only frame by showing a closed eyelid until
+  // there is enough height to include a pupil.
+  if (eyeHeight < 10) {
+    drawClosedEyeArc(leftCenterX, pupilY, lidColor);
+    drawClosedEyeArc(rightCenterX, pupilY, lidColor);
     return;
   }
 
+  uint16_t eyeOutline = canvas_.color565(120, 76, 45);
+  canvas_.fillRoundRect(25, eyeY, 35, eyeHeight, 8, TFT_WHITE);
+  canvas_.fillRoundRect(68, eyeY, 35, eyeHeight, 8, TFT_WHITE);
+  canvas_.drawRoundRect(25, eyeY, 35, eyeHeight, 8, eyeOutline);
+  canvas_.drawRoundRect(68, eyeY, 35, eyeHeight, 8, eyeOutline);
+
+  const int currentPupilY = eyeY + (eyeHeight / 2);
+  const int pupilRadius = std::max(3, std::min(5, eyeHeight / 3));
   uint16_t pupilColor = TFT_BLACK;
   if (state.expression == HeadroomExpression::Permission) {
-    pupilColor = TFT_NAVY;
+    pupilColor = canvas_.color565(5, 17, 54);
   }
-  canvas_.fillCircle(leftCenterX + pupilOffsetX, pupilY + pupilOffsetY, 6, pupilColor);
-  canvas_.fillCircle(rightCenterX + pupilOffsetX, pupilY + pupilOffsetY, 6, pupilColor);
+  canvas_.fillCircle(leftCenterX + pupilOffsetX, currentPupilY + pupilOffsetY, pupilRadius, pupilColor);
+  canvas_.fillCircle(rightCenterX + pupilOffsetX, currentPupilY + pupilOffsetY, pupilRadius, pupilColor);
+
+  uint16_t catchlight = TFT_WHITE;
+  canvas_.fillCircle(leftCenterX + pupilOffsetX - 2, currentPupilY + pupilOffsetY - 2, 1, catchlight);
+  canvas_.fillCircle(rightCenterX + pupilOffsetX - 2, currentPupilY + pupilOffsetY - 2, 1, catchlight);
 }
 
 void HeadroomFaceRenderer::drawMouth(const HeadroomFaceState& state) {

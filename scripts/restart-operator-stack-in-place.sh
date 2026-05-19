@@ -220,10 +220,8 @@ fi
 if [[ -n "$ASR_BASE_URL" ]]; then
   append_env "MH_OPERATOR_ASR_BASE_URL" "$ASR_BASE_URL"
 fi
-# Keep each synthesized TTS chunk small enough that its WAV stays under
-# the AtomS3R HTTP ingress payload cap (~250 KB accepted in practice).
-# ~24 JA chars ≈ ~3 s ≈ ~150 KB WAV. Override by exporting the var.
-append_env "MH_TTS_CHUNK_MAX_CHARS" "${MH_TTS_CHUNK_MAX_CHARS:-24}"
+# Keep restarts aligned with run-operator-stack.sh. Override by exporting the var.
+append_env "MH_TTS_CHUNK_MAX_CHARS" "${MH_TTS_CHUNK_MAX_CHARS:-64}"
 stack_launch+=" bash -lc "
 printf -v quoted_stack_cmd '%q' "$STACK_CMD"
 stack_launch+="$quoted_stack_cmd"

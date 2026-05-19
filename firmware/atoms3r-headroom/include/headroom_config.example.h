@@ -2,6 +2,13 @@
 
 #define HEADROOM_WIFI_SSID "your-wifi"
 #define HEADROOM_WIFI_PASSWORD "your-password"
+
+// Optional secondary/tertiary Wi-Fi networks. Empty means "slot unused".
+// At boot the firmware tries slot 1, then 2, then 3, in that order.
+#define HEADROOM_WIFI_SSID2 ""
+#define HEADROOM_WIFI_PASSWORD2 ""
+#define HEADROOM_WIFI_SSID3 ""
+#define HEADROOM_WIFI_PASSWORD3 ""
 #define HEADROOM_FACE_HTTP_BASE "http://192.168.1.10:8765"
 #define HEADROOM_FACE_WS_URL "ws://192.168.1.10:8765/ws"
 #define HEADROOM_FACE_AUTH_TOKEN ""

@@ -54,6 +54,10 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
 
   prefs.putString("ssid", normalized.wifiSsid);
   prefs.putString("wifi_pw", normalized.wifiPassword);
+  prefs.putString("ssid2", normalized.wifiSsid2);
+  prefs.putString("wifi_pw2", normalized.wifiPassword2);
+  prefs.putString("ssid3", normalized.wifiSsid3);
+  prefs.putString("wifi_pw3", normalized.wifiPassword3);
   prefs.putString("http_base", normalized.faceHttpBase);
   prefs.putString("ws_url", normalized.faceWsUrl);
   prefs.putString("auth", normalized.authToken);
@@ -74,7 +78,42 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
 }
 
 bool HeadroomSettings::hasUsableWifi() const {
-  return !isPlaceholderWifi(data_.wifiSsid);
+  return usableWifiCount() > 0;
+}
+
+bool HeadroomSettings::wifiSlot(int idx, String& ssid, String& pw) const {
+  String s;
+  String p;
+  if (idx == 1) {
+    s = data_.wifiSsid;
+    p = data_.wifiPassword;
+  } else if (idx == 2) {
+    s = data_.wifiSsid2;
+    p = data_.wifiPassword2;
+  } else if (idx == 3) {
+    s = data_.wifiSsid3;
+    p = data_.wifiPassword3;
+  } else {
+    return false;
+  }
+  if (isPlaceholderWifi(s)) {
+    return false;
+  }
+  ssid = s;
+  pw = p;
+  return true;
+}
+
+int HeadroomSettings::usableWifiCount() const {
+  int count = 0;
+  String s;
+  String p;
+  for (int idx = 1; idx <= 3; ++idx) {
+    if (wifiSlot(idx, s, p)) {
+      ++count;
+    }
+  }
+  return count;
 }
 
 bool HeadroomSettings::hasSavedSettings() const {
@@ -135,6 +174,10 @@ const char* HeadroomSettings::placementPoseName(HeadroomPlacementPose pose) {
 void HeadroomSettings::loadCompileDefaults() {
   data_.wifiSsid = HEADROOM_WIFI_SSID;
   data_.wifiPassword = HEADROOM_WIFI_PASSWORD;
+  data_.wifiSsid2 = HEADROOM_WIFI_SSID2;
+  data_.wifiPassword2 = HEADROOM_WIFI_PASSWORD2;
+  data_.wifiSsid3 = HEADROOM_WIFI_SSID3;
+  data_.wifiPassword3 = HEADROOM_WIFI_PASSWORD3;
   data_.faceHttpBase = HEADROOM_FACE_HTTP_BASE;
   data_.faceWsUrl = HEADROOM_FACE_WS_URL;
   data_.authToken = HEADROOM_FACE_AUTH_TOKEN;
@@ -163,6 +206,10 @@ void HeadroomSettings::loadNvsOverrides() {
   loadedFromNvs_ = prefs.isKey("device_id") || prefs.isKey("ssid") || prefs.isKey("ws_url");
   data_.wifiSsid = readString(prefs, "ssid", data_.wifiSsid);
   data_.wifiPassword = readString(prefs, "wifi_pw", data_.wifiPassword);
+  data_.wifiSsid2 = readString(prefs, "ssid2", data_.wifiSsid2);
+  data_.wifiPassword2 = readString(prefs, "wifi_pw2", data_.wifiPassword2);
+  data_.wifiSsid3 = readString(prefs, "ssid3", data_.wifiSsid3);
+  data_.wifiPassword3 = readString(prefs, "wifi_pw3", data_.wifiPassword3);
   data_.faceHttpBase = readString(prefs, "http_base", data_.faceHttpBase);
   data_.faceWsUrl = readString(prefs, "ws_url", data_.faceWsUrl);
   if ((data_.faceHttpBase.indexOf("192.168.1.10") >= 0 || data_.faceHttpBase.indexOf("192.168.1.34") >= 0) &&
