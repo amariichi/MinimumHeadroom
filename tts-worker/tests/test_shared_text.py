@@ -18,29 +18,50 @@ class SharedTextPreparationTests(unittest.TestCase):
     rendered = normalize_shared_tts_text('外の温度計は一・八度です。')
     self.assertEqual(rendered, '外の温度計は一点八度です。')
 
-  def test_keeps_dotted_version_number_without_v_prefix_unchanged(self) -> None:
+  def test_converts_halfwidth_digits_to_fullwidth_in_dotted_version(self) -> None:
+    # JA-routed text steers Kokoro/misaki toward Japanese G2P by
+    # fullwidth-ifying halfwidth digits, even for dotted-version forms.
     rendered = normalize_shared_tts_text('現在のバージョンは1.2.3です。')
-    self.assertEqual(rendered, '現在のバージョンは1.2.3です。')
+    self.assertEqual(rendered, '現在のバージョンは１.２.３です。')
 
   def test_rewrites_v_prefixed_semver_into_spoken_japanese(self) -> None:
     rendered = normalize_shared_tts_text('v1.1 と v1.7.0 を公開しました。')
-    self.assertEqual(rendered, 'バージョン1点1 と バージョン1点7点0 を公開しました。')
+    self.assertEqual(rendered, 'バージョン１点１ と バージョン１点７点０ を公開しました。')
 
-  def test_prefixes_unknown_leading_ascii_token_with_hai(self) -> None:
+  def test_does_not_prefix_unknown_leading_ascii_token_with_hai(self) -> None:
+    # The leading "はい、" filler is a Qwen3-only countermeasure and no
+    # longer fires from the shared normalizer; Kokoro keeps the original.
     rendered = normalize_shared_tts_text('execplanを作成しました。')
-    self.assertEqual(rendered, 'はい、execplanを作成しました。')
+    self.assertEqual(rendered, 'execplanを作成しました。')
 
-  def test_keeps_known_leading_ascii_token_without_extra_hai(self) -> None:
+  def test_keeps_known_leading_ascii_token_unchanged(self) -> None:
     rendered = normalize_shared_tts_text('GitHub承認申請をお願いします。')
     self.assertEqual(rendered, 'GitHub承認申請をお願いします。')
 
-  def test_prefixes_leading_numeric_japanese_token_with_hai(self) -> None:
+  def test_does_not_prefix_leading_numeric_japanese_token_with_hai(self) -> None:
+    # Filler moved to Qwen3 path; shared normalizer only fullwidth-ifies
+    # the halfwidth digits so misaki reads them as Japanese.
     rendered = normalize_shared_tts_text('23日までに完了します。')
-    self.assertEqual(rendered, 'はい、23日までに完了します。')
+    self.assertEqual(rendered, '２３日までに完了します。')
 
-  def test_does_not_prefix_plain_semver_like_sentence_start(self) -> None:
-    rendered = normalize_shared_tts_text('1.2.3です。')
-    self.assertEqual(rendered, '1.2.3です。')
+  def test_converts_halfwidth_digits_in_japanese_date_phrase(self) -> None:
+    # Primary motivating case: "5月23日" used to read as
+    # "ファイブ月 トゥエンティ・スリー日" because misaki applied English
+    # G2P to halfwidth digits in Japanese text.
+    rendered = normalize_shared_tts_text('今日は5月23日です。')
+    self.assertEqual(rendered, '今日は５月２３日です。')
+
+  def test_leaves_digits_in_pure_english_sentence_alone(self) -> None:
+    # English-routed text must keep halfwidth digits intact so the
+    # English G2P still reads them as English numerals.
+    rendered = normalize_shared_tts_text('The build runs at 5:30 on port 8080.')
+    self.assertEqual(rendered, 'The build runs at 5:30 on port 8080.')
+
+  def test_keeps_plain_dotted_form_unchanged_without_japanese(self) -> None:
+    # No Japanese script in the input ⇒ English normalizer path ⇒ digits
+    # untouched (mirrors the behavior LLMs need when speaking English).
+    rendered = normalize_shared_tts_text('1.2.3.')
+    self.assertEqual(rendered, '1.2.3.')
 
   def test_normalizes_smart_apostrophe_and_hyphenated_ascii(self) -> None:
     rendered = normalize_shared_tts_text('That’s a 9-to-5 role.')
