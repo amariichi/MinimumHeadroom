@@ -3,6 +3,8 @@ sequenceDiagram
   participant U as User
   participant TS as Tailscale (optional)
   participant FE as Frontend UI
+  participant ATOM as AtomS3R Device
+  participant ATOMBR as atoms3r-http-bridge
   participant FA as face-app (:8765, /ws, /api/operator/asr)
   participant ASR as asr-worker (Parakeet)
   participant BR as operator-bridge
@@ -18,6 +20,7 @@ sequenceDiagram
 
   FE->>FA: Connect WebSocket /ws
   BR->>FA: Connect WebSocket /ws
+  ATOMBR->>FA: Connect WebSocket /ws
 
   alt Input path A: direct terminal prompt
     U->>TM: Type prompt
@@ -39,6 +42,16 @@ sequenceDiagram
     FA-->>BR: Relay payload
     BR->>TM: tmux send-keys(text + Enter)
     TM->>CX: Prompt arrives
+  else Input path D: AtomS3R PTT
+    U->>ATOM: Hold PTT button
+    ATOM->>FA: POST /api/operator/asr?lang=ja|en (WAV)
+    FA->>ASR: /v1/asr/ja|en (audioBase64,mimeType)
+    ASR-->>FA: Transcript JSON
+    FA-->>ATOM: Transcript response
+    ATOM->>FA: POST /api/operator/response (text)
+    FA-->>BR: Relay payload
+    BR->>TM: tmux send-keys(text + Enter)
+    TM->>CX: Prompt arrives
   end
 
   loop During work
@@ -51,8 +64,13 @@ sequenceDiagram
   CX->>MCP: face_event / face_say / face_ping
   MCP->>FA: Forward WebSocket JSON
   FA-->>FE: event/say/state payloads
+  FA-->>ATOMBR: event/say/state payloads (WS)
+  ATOMBR->>ATOM: POST /api/headroom/payload
 
   FA->>TTS: TTS request
   TTS-->>FA: tts_audio / tts_mouth / say_result
   FA-->>FE: Realtime status + audio
+  FA-->>ATOMBR: tts_audio / tts_mouth (WS)
+  ATOMBR->>ATOM: POST /api/headroom/audio + /payload
+  ATOM-->>U: 2D face on LCD + Echo speaker
   FE-->>U: Voice, facial state, and status updates

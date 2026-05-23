@@ -5,6 +5,8 @@ flowchart LR
   MCP["MCP Server\nface_event / face_say / face_ping"]
   WS["face-app\nWebSocket + HTTP :8765"]
   FE["Frontend UI\nBrowser"]
+  ATOM["AtomS3R Device\n2D face LCD + Echo speaker + PTT mic"]
+  ATOMBR[atoms3r-http-bridge]
   BR[operator-bridge]
   ASRP[/POST /api/operator/asr/]
   ASR["asr-worker\nParakeet ASR\nJA/EN"]
@@ -14,13 +16,18 @@ flowchart LR
   U -- Direct prompt --> TMUX
   U -- PTT recording --> FE
   U -- Text input --> FE
+  U -- PTT button + voice --> ATOM
+  ATOM -- 2D face + Echo audio --> U
 
   FE -- Audio binary --> ASRP
+  ATOM -- Mic WAV (POST /api/operator/asr) --> ASRP
   ASRP -- JSON (audioBase64,mimeType,lang) --> ASR
   ASR -- JSON transcript --> ASRP
   ASRP -- Transcript --> FE
+  ASRP -- Transcript --> ATOM
 
   FE -- operator_response JSON --> WS
+  ATOM -- operator_response (POST /api/operator/response) --> WS
   WS -- relay --> BR
   BR -- tmux send-keys --> TMUX
   TMUX --> C
@@ -36,6 +43,10 @@ flowchart LR
 
   WS -- say payload --> TTS
   TTS -- audio + tts state --> FE
+
+  WS -- face/tts payloads (WS) --> ATOMBR
+  ATOMBR -- POST /api/headroom/payload --> ATOM
+  ATOMBR -- POST /api/headroom/audio --> ATOM
 
   FE <-- HTTPS/WS --> TS
   TS <---> WS
