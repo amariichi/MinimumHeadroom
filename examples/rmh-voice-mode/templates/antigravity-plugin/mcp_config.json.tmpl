@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "minimum_headroom": {
-      "command": "/ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh",
+      "command": "__MH_REPO_ROOT__/scripts/run-bound-mcp-server.sh",
       "args": [],
       "env": {
-        "FACE_WS_URL": "ws://127.0.0.1:8765/ws",
+        "FACE_WS_URL": "__FACE_WS_URL__",
         "MCP_TOOL_NAME_STYLE": "underscore"
       }
     }

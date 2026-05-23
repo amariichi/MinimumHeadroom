@@ -1,0 +1,17 @@
+{
+  "name": "minimum-headroom",
+  "version": "1.16.0",
+  "description": "AtomS3R / face-app desk frontend signaling: face_event / face_say / face_ping plus multi-agent orchestration tools, with the minimum-headroom-ops skill for runtime diagnosis.",
+  "author": {
+    "name": "minimum-headroom contributors"
+  },
+  "repository": "https://github.com/amariichi/minimum-headroom",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "minimum-headroom",
+    "atom",
+    "voice",
+    "face_say"
+  ]
+}

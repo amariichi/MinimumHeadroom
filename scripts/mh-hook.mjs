@@ -3,7 +3,8 @@ import { pathToFileURL } from 'node:url';
 import { sendFaceEvent } from './codex-notify-to-face.mjs';
 
 const CANONICAL_EVENTS = new Set(['permission_required', 'idle_after_response']);
-const KNOWN_RUNTIMES = new Set(['claude', 'codex', 'gemini']);
+const KNOWN_RUNTIMES = new Set(['claude', 'codex', 'antigravity']);
+const STDOUT_MODES = new Set(['silent', 'antigravity-flow']);
 
 function asNonEmptyString(value) {
   if (typeof value !== 'string') {
@@ -14,17 +15,21 @@ function asNonEmptyString(value) {
 }
 
 export function parseArgs(argv = []) {
-  const out = { runtime: null, event: null };
+  const out = { runtime: null, event: null, stdoutMode: null };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i];
     if (tok === '--runtime' && i + 1 < argv.length) {
       out.runtime = argv[++i];
     } else if (tok === '--event' && i + 1 < argv.length) {
       out.event = argv[++i];
+    } else if (tok === '--stdout-mode' && i + 1 < argv.length) {
+      out.stdoutMode = argv[++i];
     } else if (tok.startsWith('--runtime=')) {
       out.runtime = tok.slice('--runtime='.length);
     } else if (tok.startsWith('--event=')) {
       out.event = tok.slice('--event='.length);
+    } else if (tok.startsWith('--stdout-mode=')) {
+      out.stdoutMode = tok.slice('--stdout-mode='.length);
     }
   }
   return out;
@@ -69,7 +74,7 @@ export function detectCanonicalEvent({ payload, explicitEvent }) {
     if (hookEventName === 'Notification' || hookEventName === 'PermissionRequest') {
       return { event: 'permission_required', source: 'hook_event_name' };
     }
-    if (hookEventName === 'Stop' || hookEventName === 'AfterAgent') {
+    if (hookEventName === 'Stop') {
       return { event: 'idle_after_response', source: 'hook_event_name' };
     }
     return { event: null, source: 'hook_event_name', reason: `unhandled_${hookEventName}` };
@@ -114,10 +119,24 @@ function buildHookFacePayload({ agentId, event, runtime, sessionId, now }) {
   };
 }
 
+function buildRuntimeStdoutPayload({ stdoutMode, event }) {
+  if (stdoutMode !== 'antigravity-flow') {
+    return null;
+  }
+  if (event === 'permission_required') {
+    return { decision: 'ask' };
+  }
+  if (event === 'idle_after_response') {
+    return { decision: '' };
+  }
+  return {};
+}
+
 export async function runHookCli(options = {}) {
   const argv = Array.isArray(options.argv) ? options.argv : process.argv.slice(2);
   const env = options.env ?? process.env;
   const stderr = options.stderr ?? process.stderr;
+  const stdout = options.stdout ?? process.stdout;
   const stdin = options.stdin ?? process.stdin;
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const baseFaceWsUrl = asNonEmptyString(options.faceWsUrl) ?? asNonEmptyString(env.FACE_WS_URL) ?? 'ws://127.0.0.1:8765/ws';
@@ -130,15 +149,46 @@ export async function runHookCli(options = {}) {
     stderr.write(`[mh-hook] unknown runtime ${explicitRuntime}; ignoring\n`);
   }
   const runtime = explicitRuntime && KNOWN_RUNTIMES.has(explicitRuntime) ? explicitRuntime : null;
+  const explicitStdoutMode = asNonEmptyString(args.stdoutMode);
+  if (explicitStdoutMode && !STDOUT_MODES.has(explicitStdoutMode)) {
+    stderr.write(`[mh-hook] unknown stdout mode ${explicitStdoutMode}; using runtime default\n`);
+  }
+  const stdoutMode =
+    explicitStdoutMode && STDOUT_MODES.has(explicitStdoutMode)
+      ? explicitStdoutMode
+      : runtime === 'antigravity'
+        ? 'antigravity-flow'
+        : 'silent';
 
   const inputText =
     asNonEmptyString(options.inputText) ?? (await readStdinText(stdin));
   const payload = parseStdinPayload(inputText);
 
   const detection = detectCanonicalEvent({ payload, explicitEvent: asNonEmptyString(args.event) });
+  const stdoutPayload = buildRuntimeStdoutPayload({ stdoutMode, event: detection.event });
+  if (stdoutPayload && stdout && typeof stdout.write === "function") {
+    stdout.write(`${JSON.stringify(stdoutPayload)}\n`);
+  }
   if (!detection.event) {
     stderr.write(`[mh-hook] no canonical event detected (${detection.reason ?? detection.source}); exiting cleanly\n`);
     return { delivered: false, reason: detection.reason ?? 'no_event' };
+  }
+
+  // Per-agent suppression: MH_HOOK_SUPPRESS_EVENTS is a comma-separated list of
+  // canonical events to drop without forwarding. The runtime stdout payload
+  // (e.g. antigravity's {decision: ""}) has already been emitted above, so the
+  // host runtime still sees a clean handoff. Used by RMH voice-first mode to
+  // silence the idle_after_response phrase when the agent itself speaks every
+  // turn end via face_say.
+  const suppressedEvents = new Set(
+    asNonEmptyString(env.MH_HOOK_SUPPRESS_EVENTS)
+      ?.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean) ?? []
+  );
+  if (suppressedEvents.has(detection.event)) {
+    stderr.write(`[mh-hook] event ${detection.event} suppressed by MH_HOOK_SUPPRESS_EVENTS\n`);
+    return { delivered: false, reason: 'suppressed_by_env', stdout_payload: stdoutPayload };
   }
 
   const agentId = asNonEmptyString(env.MH_FACE_AGENT_ID);
@@ -163,10 +213,10 @@ export async function runHookCli(options = {}) {
 
   try {
     await sender(faceWsUrl, facePayload, { stderr });
-    return { delivered: true, payload: facePayload };
+    return { delivered: true, payload: facePayload, stdout_payload: stdoutPayload };
   } catch (error) {
     stderr.write(`[mh-hook] send failed: ${error.message}\n`);
-    return { delivered: false, reason: 'send_failed', payload: facePayload };
+    return { delivered: false, reason: 'send_failed', payload: facePayload, stdout_payload: stdoutPayload };
   }
 }
 
@@ -176,7 +226,7 @@ async function main() {
   } catch (error) {
     process.stderr.write(`[mh-hook] unexpected error: ${error?.message ?? error}\n`);
   }
-  // Always exit 0 — hook runtimes (especially Gemini AfterAgent) treat exit 2
+  // Always exit 0 — hook runtimes (especially Antigravity Stop) treat exit 2
   // as "retry" and any non-zero as "warning/block".
   process.exit(0);
 }

@@ -22,6 +22,16 @@ ATTACH_AFTER_START=1
 STACK_CMD_SET=0
 ALLOW_NEW_WINDOW=0
 
+# ASR_GPU=1 (env) maps to MH_ASR_DEVICE=cuda so the asr-worker pane uses CUDA.
+# Inline ASR_DEVICE=cuda would otherwise be clobbered by ~/.bashrc's
+# `export ASR_DEVICE=cpu` when tmux opens a new shell; .bashrc never touches
+# MH_ASR_DEVICE, and run-asr-worker.sh prefers it over ASR_DEVICE.
+ASR_GPU="${ASR_GPU:-0}"
+MH_ASR_DEVICE_OVERRIDE="${MH_ASR_DEVICE:-}"
+if [[ -z "$MH_ASR_DEVICE_OVERRIDE" && "$ASR_GPU" == "1" ]]; then
+  MH_ASR_DEVICE_OVERRIDE="cuda"
+fi
+
 list_profiles() {
   cat <<'EOF'
 Available profiles:
@@ -118,6 +128,11 @@ Options:
   --allow-new-window        allow creating <window>-1, <window>-2, ... when the base window already exists
   -h, --help                show this help
 
+Environment:
+  ASR_GPU=1                 Run the Parakeet asr-worker on CUDA (sets MH_ASR_DEVICE=cuda
+                            in the stack pane so ~/.bashrc's ASR_DEVICE=cpu does not win).
+  MH_ASR_DEVICE=<cpu|cuda>  Explicit asr-worker device override; takes precedence over ASR_GPU.
+
 Examples:
   ./scripts/run-operator-once.sh
   ./scripts/run-operator-once.sh --profile qwen3-realtime
@@ -125,6 +140,7 @@ Examples:
   ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
   ./scripts/run-operator-once.sh --agent-cmd 'bash -l'
   ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
+  ASR_GPU=1 ./scripts/run-operator-once.sh --profile default --audio-target both
 EOF
 }
 
@@ -336,6 +352,9 @@ fi
 if [[ -n "$ASR_BASE_URL" ]]; then
   append_env "MH_OPERATOR_ASR_BASE_URL" "$ASR_BASE_URL"
 fi
+if [[ -n "$MH_ASR_DEVICE_OVERRIDE" ]]; then
+  append_env "MH_ASR_DEVICE" "$MH_ASR_DEVICE_OVERRIDE"
+fi
 stack_launch+=" bash -lc "
 printf -v quoted_stack_cmd '%q' "$STACK_CMD"
 stack_launch+="$quoted_stack_cmd"
@@ -349,6 +368,9 @@ echo "[run-operator-once] operator face agent=${OPERATOR_FACE_AGENT_ID} label=${
 echo "[run-operator-once] helper default command=${AGENT_DEFAULT_CMD}"
 echo "[run-operator-once] stack pane=${stack_pane} command=${STACK_CMD}"
 echo "[run-operator-once] MH_BRIDGE_TMUX_PANE=${bridge_pane} (${BRIDGE_TARGET})"
+if [[ -n "$MH_ASR_DEVICE_OVERRIDE" ]]; then
+  echo "[run-operator-once] MH_ASR_DEVICE=${MH_ASR_DEVICE_OVERRIDE} (asr-worker will use this device)"
+fi
 
 if [[ "$ATTACH_AFTER_START" -eq 0 ]]; then
   echo "[run-operator-once] attach skipped (--no-attach)."

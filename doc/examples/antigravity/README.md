@@ -1,15 +1,65 @@
-# Gemini CLI (Antigravity) MCP setup (example)
+# Antigravity setup (CLI and GUI)
 
-## MCP config
+Antigravity ships in two shapes — the `agy` terminal CLI and the Electron desktop app (Antigravity GUI). They share `~/.gemini/` but **read MCP servers and skills from different paths**. This directory contains files that work for both; the difference is where you put them.
 
-Place `mcp_config.json` in your Gemini config directory (typically `~/.gemini/`), or in a project-local `.gemini/` folder.
+| Layer        | Antigravity CLI (`agy`)                              | Antigravity GUI                                          |
+|--------------|------------------------------------------------------|----------------------------------------------------------|
+| MCP servers  | per-plugin `mcp_config.json` (installed via `agy plugin install`) | global `~/.gemini/config/mcp_config.json` |
+| Skills       | per-plugin `skills/<name>/SKILL.md` under `~/.gemini/antigravity-cli/plugins/<plugin>/` | per-plugin `skills/<name>/SKILL.md` under `~/.gemini/config/plugins/<plugin>/` |
+| Hooks        | plugin/workspace `hooks.json`; current builds can also use shared `~/.gemini/settings.json` snippets | same `hooks.json` / shared settings behavior |
+| Install path | `~/.gemini/antigravity-cli/plugins/<name>/`         | `~/.gemini/config/plugins/<name>/`                       |
 
-Template (update the absolute path):
+Files shipped here:
+
+| File                                | Purpose                                                       |
+|-------------------------------------|---------------------------------------------------------------|
+| `plugin.json`                       | plugin manifest (name, version, description, etc.)            |
+| `mcp_config.json`                   | MCP server registration for `minimum_headroom`                |
+| `hooks.json`                        | Antigravity JSON Hooks example for plugin/workspace installs  |
+| `settings-hooks.snippet.json`       | Compatibility hook entries to merge into `~/.gemini/settings.json` |
+| (skill source)                      | `doc/examples/skills/minimum-headroom-ops/SKILL.md`           |
+
+Before any of the steps below, **replace `/ABS/PATH/minimum-headroom`** in `mcp_config.json`, `hooks.json`, and `settings-hooks.snippet.json` with the absolute path of your checkout (e.g. `/home/you/github/minimum-headroom`).
+
+---
+
+## Antigravity CLI (`agy`)
+
+From the repository root:
+
+    agy plugin install doc/examples/antigravity
+
+`agy plugin install` is idempotent — re-running it overwrites the previous install. The plugin lands at `~/.gemini/antigravity-cli/plugins/minimum-headroom/`. Verify:
+
+    agy plugin list   # → minimum-headroom, source "local-install"
+
+Optional: install the skill alongside the MCP plugin so `/skills` lists it from agy:
+
+    mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
+    cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+       ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
+
+Restart `agy`, type `/mcp` inside the TUI to confirm `minimum_headroom` is loaded.
+
+> Note: if your `agy plugin validate` build reports `hooks: skipped (not found)`, keep using the shared `~/.gemini/settings.json` snippet below for hook delivery. MCP tools are still installed by the plugin either way.
+
+---
+
+## Antigravity GUI (desktop app)
+
+The GUI reads its MCP server list from `~/.gemini/config/mcp_config.json`. **A common failure mode is that this file exists but is 0 bytes**, which causes `unexpected end of JSON input` in `~/.config/Antigravity/logs/language_server.log` and silently disables every MCP server. Always check the file is valid JSON before debugging anything else:
+
+    cat ~/.gemini/config/mcp_config.json | head -c 100
+    node -e 'JSON.parse(require("fs").readFileSync("/home/'$USER'/.gemini/config/mcp_config.json","utf8"))'   # exits non-zero on parse error
+
+### Register the MCP server
+
+Edit `~/.gemini/config/mcp_config.json`. If you have other MCP servers there already, merge into the existing `mcpServers` object — don't overwrite. Minimal version:
 
 ```json
 {
   "mcpServers": {
-    "minimum-headroom": {
+    "minimum_headroom": {
       "command": "/ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh",
       "args": [],
       "env": {
@@ -21,84 +71,87 @@ Template (update the absolute path):
 }
 ```
 
-Gemini CLI requires `MCP_TOOL_NAME_STYLE=underscore` because it does not accept dotted tool names. `run-bound-mcp-server.sh` starts the MCP server and preserves `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` from the current agent process or its parent process when available.
+### Install the plugin (skill metadata)
+
+The MCP registration above already makes the tools callable from the GUI; the plugin directory below is what makes the **skill** (`minimum-headroom-ops`) visible to the GUI's skill listing.
+
+    mkdir -p ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops
+    cp doc/examples/antigravity/plugin.json \
+       ~/.gemini/config/plugins/minimum-headroom/plugin.json
+    cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+       ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
+
+### Restart the GUI
+
+**Fully quit** Antigravity — not just close the window. The Electron process keeps running on close-to-tray, and stale processes will not re-read configs.
+
+    pkill -f '/opt/antigravity-2/antigravity'
+    # then relaunch from the desktop launcher
+
+### Verify in the GUI
+
+In the chat, ask:
+
+    List every MCP tool you can call right now. Then call face_ping and report the result.
+    List every skill you have access to.
+
+A working setup shows `face_event`, `face_say`, `face_ping`, the `agent_*` lifecycle tools, and `minimum-headroom-ops` in the skill list, plus `face_ping` returning `forwarded face.ping`.
+
+---
+
+## Hooks
+<a id="hooks"></a>
+
+Antigravity's current public hook format is `hooks.json`. This directory ships `hooks.json` for plugin/workspace installs:
+
+- `Stop` → `mh-hook.mjs --runtime antigravity --event idle_after_response`
+- a disabled `PreToolUse` example for approval attention, because enabling it can ask before matching tools and should be an explicit local choice.
+
+During migration testing, current CLI/GUI builds also accepted a shared `~/.gemini/settings.json` hook block using `Notification` and `AfterAgent`. If your installed build does not load plugin `hooks.json`, merge `settings-hooks.snippet.json` into `~/.gemini/settings.json` instead. That snippet uses `--runtime antigravity --stdout-mode silent` so no deprecated Gemini runtime name remains and no stray stdout JSON is emitted for that settings-style hook path.
+
+Restart Antigravity (CLI or GUI) after changing either hook file.
+
+In RMH voice-first mode the agent itself speaks every turn-end, so the `AfterAgent → idle_after_response` line is suppressed at the hook script level via `MH_HOOK_SUPPRESS_EVENTS=idle_after_response` (set automatically by `examples/rmh-voice-mode/start-rmh.sh`). See `examples/rmh-voice-mode/README.md` for details.
+
+---
+
+## How the bound wrapper preserves identity
+
+`run-bound-mcp-server.sh` (the `command` in `mcp_config.json`) forwards `MH_FACE_AGENT_ID` and `MH_FACE_AGENT_LABEL` from the current agent process or its parent process. When agy / Antigravity is launched by minimum-headroom (operator or helper pane), those env vars are already set, so `face_event` / `face_say` / `face_ping` can omit `agent_id`.
+
+If face-app is bound outside loopback and requires `MH_FACE_AUTH_TOKEN`, the wrapper also forwards the token from the current environment, from a parent process, or from `MH_FACE_ENV_FILE` (default `~/.config/minimum-headroom.env`). Keep real tokens out of `mcp_config.json` and `settings.json`.
+
+## Tool name style
+
+`MCP_TOOL_NAME_STYLE=underscore` publishes tools as `face_event`, `face_say`, `face_ping`, etc. — the conservative choice across MCP clients. Remove that env entry if you specifically want dotted names.
+
+## Hook stdout mode
+
+All Antigravity examples use `--runtime antigravity`. The optional `--stdout-mode` flag selects the host hook contract:
+
+- omit `--stdout-mode` for Antigravity JSON Hooks (`hooks.json`); `mh-hook.mjs` writes the small stdout JSON object Antigravity expects.
+- use `--stdout-mode silent` for the shared `settings-hooks.snippet.json` compatibility path; `mh-hook.mjs` forwards to the face app but emits no stdout.
+
+Do not use the retired `gemini` runtime name in new configs.
 
 ## Permission presets for helpers
 
-When spawning Gemini helper agents with `agent.spawn(permission_preset=...)`, the operator writes a `.gemini/settings.json` in the helper worktree with the appropriate `tools.core` allow-list.
+When spawning agy helpers with `agent.spawn(permission_preset=...)`, pass `agent_cmd: "agy"`. The operator writes `.gemini/antigravity-cli/settings.json` in the helper worktree and marks it read-only.
 
-### Reviewer preset
+- `reviewer`: a small allow-list of read-oriented commands, no auto-approval flags.
+- `implementer` and `full`: deny `git push`, launch `agy --dangerously-skip-permissions` to reduce approval stalls.
 
-```json
-{
-  "tools": {
-    "core": ["read_file", "list_directory", "search_files", "run_shell_command"]
-  }
-}
-```
+First-run behavior is still interactive. A fresh helper worktree can stop at Antigravity's workspace trust prompt before `agent.inject` can probe input. Confirm `Yes, I trust this folder` for that generated worktree, then retry injection. The first MCP calls can also prompt for approval (`minimum_headroom/agent_report`, then often `face_ping`, `face_event`, and `face_say`). Choose the conversation-scoped allow option for smoke tests, or persist only after you have reviewed the installed plugin path and permissions. This is expected Antigravity CLI behavior, not a Minimum Headroom transport failure.
 
-### Implementer / Full preset
+The project `AGENTS.md` (or `GEMINI.md`) rules remain part of the security model. Keep the minimum-headroom signaling rules and the helper rule that helpers must not run `git push`.
 
-```json
-{
-  "tools": {
-    "core": [
-      "read_file", "edit_file", "write_file",
-      "list_directory", "search_files", "run_shell_command"
-    ]
-  }
-}
-```
+## Validation summary
 
-For `--yolo` mode (auto-approve all tool calls), pass `--yolo` when launching the Gemini agent in the helper pane.
-
-### git push deny
-
-Gemini helpers use a shell wrapper or AGENTS.md instruction to deny `git push`. The `run_shell_command` tool is present in all presets but constrained by agent instructions.
-
-## AGENTS.md
-
-Place an `AGENTS.md` in the target repository root. Use `doc/examples/AGENTS.sample.md` as the starting template, and include the signaling rules from `doc/examples/AGENT_RULES.md`.
-
-## Hook bridge (face safety net)
-
-Wire the minimum-headroom hook bridge so the face speaks even when the agent forgets to call `face_say` voluntarily. Merge this top-level `hooks` block into `~/.gemini/settings.json`:
-
-```json
-{
-  "hooks": {
-    "Notification": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "name": "mh-hook-permission",
-            "type": "command",
-            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime gemini --event permission_required",
-            "timeout": 5000
-          }
-        ]
-      }
-    ],
-    "AfterAgent": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "name": "mh-hook-idle",
-            "type": "command",
-            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime gemini --event idle_after_response",
-            "timeout": 5000
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Notes:
-
-- `mh-hook.mjs` is hard-wired to write nothing to stdout and exit `0` under all conditions. This is required because Gemini parses hook stdout as JSON and treats exit code `2` from `AfterAgent` as "retry this turn with stderr as the new prompt" — exiting non-zero from a safety-net hook would silently kick the agent into an unwanted retry loop.
-- The hook fires only when `MH_FACE_AGENT_ID` is set in the agent process environment. `scripts/run-operator-once.sh` sets this for the operator pane; helper panes inherit it from `agent.spawn`.
-- See `doc/hook-bridge/` for cross-runtime details.
+| Step | Command | Expected |
+|------|---------|----------|
+| CLI plugin valid | `agy plugin validate doc/examples/antigravity` | `mcpServers: 1 processed`; hooks may be processed or skipped depending on agy build |
+| CLI plugin installed | `agy plugin list` | `minimum-headroom` listed as `local-install` |
+| GUI MCP file valid | `node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME+"/.gemini/config/mcp_config.json","utf8"))'` | exits 0 |
+| GUI sees server | chat prompt in GUI: `List every MCP tool you can call right now` | response includes `face_event`, `face_say`, `face_ping` |
+| GUI sees skill | chat prompt in GUI: `List every skill you have access to` | response includes `minimum-headroom-ops` |
+| End-to-end voice | chat prompt: `Call face_say with text="テストです" priority=2` | AtomS3R speaks |

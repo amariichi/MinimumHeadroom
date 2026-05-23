@@ -108,7 +108,7 @@ This preserves freshness even for similar text.
 - When acting as the user-facing owner/operator, prefer first-class MCP tools over raw localhost HTTP or manual `tmux send-keys`.
 - Standard lifecycle:
   - `agent.list(scope="stream")`
-  - `agent.spawn` — pass `agent_cmd` (`claude`, `gemini`, `codex`) and `permission_preset` (`reviewer`, `implementer`, `full`) to auto-configure helper tool permissions at spawn time
+  - `agent.spawn` — pass `agent_cmd` (`claude`, `agy`, `codex`) and `permission_preset` (`reviewer`, `implementer`, `full`) to auto-configure helper tool permissions at spawn time
   - `agent.assign`
   - `agent.inject`
   - `agent.assignment.list`
