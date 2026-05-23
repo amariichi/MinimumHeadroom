@@ -21,9 +21,29 @@ export const DEFAULT_STUCK_PATTERNS = [
     summary: () => 'helper paused on approval prompt'
   },
   {
+    id: 'codex_mcp_approval',
+    category: 'approval',
+    // Codex's MCP tool-call approval modal is a separate path from the
+    // shell-command modal and reaches the pane as
+    // 'Allow the <server> MCP server to run tool "<name>"?'.
+    regex: /Allow the .+ MCP server to run tool/,
+    summary: () => 'helper paused on MCP tool approval prompt'
+  },
+  {
+    id: 'agy_trust_folder',
+    category: 'approval',
+    // Antigravity's first-run trust prompt blocks before any mission is
+    // injected. It cannot be matched by the generic approval phrases.
+    regex: /Do you trust the contents of this project\?/,
+    summary: () => 'helper paused on workspace trust prompt'
+  },
+  {
     id: 'codex_picker',
     category: 'picker',
-    regex: /Switch to (gpt|claude|gemini)-/,
+    // The /model picker header line. The previous "Switch to <model>"
+    // wording only appeared on a transient confirm screen and missed the
+    // primary picker that operators actually see.
+    regex: /Select Model and Effort/,
     summary: () => 'helper paused on model picker'
   },
   {

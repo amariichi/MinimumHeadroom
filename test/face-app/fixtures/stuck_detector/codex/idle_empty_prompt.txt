@@ -1,0 +1,27 @@
+export MH_FACE_AGENT_ID='helper-1' MH_FACE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response'
+env MH_FACE_AGENT_ID='helper-1' MH_FACE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response' codex
+-a untrusted
+amari1@amari1-Z890i-Nova:~/github/minimum-headroom/.agent/worktrees/helper-1$ export MH_FACE_AGENT_ID='helper-1' MH
+_FACE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response'
+amari1@amari1-Z890i-Nova:~/github/minimum-headroom/.agent/worktrees/helper-1$ env MH_FACE_AGENT_ID='helper-1' MH_FA
+CE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response' codex -a untrusted
+⚠ Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.
+
+╭─────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.133.0)                      │
+│                                                 │
+│ model:     gpt-5.5 high   /model to change      │
+│ directory: ~/github/…/.agent/worktrees/helper-1 │
+╰─────────────────────────────────────────────────╯
+
+  Tip: Switch models or reasoning effort quickly with /model.
+
+
+› Explain this codebase
+
+  gpt-5.5 high · ~/github/minimum-headroom/.agent/worktrees/helper-1
+
+
+
+
+

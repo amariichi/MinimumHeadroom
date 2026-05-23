@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { createHelperStuckDetector, DEFAULT_STUCK_PATTERNS } from '../../face-app/dist/helper_stuck_detector.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const FIXTURE_ROOT = join(__dirname, 'fixtures', 'stuck_detector');
+
+function loadFixture(cli, name) {
+  const path = join(FIXTURE_ROOT, cli, `${name}.txt`);
+  return readFileSync(path, 'utf8').replace(/\n$/, '').split('\n');
+}
 
 const quietLog = {
   info() {},
@@ -197,8 +208,10 @@ test('DEFAULT_STUCK_PATTERNS exports the documented pattern ids', () => {
   const ids = DEFAULT_STUCK_PATTERNS.map((p) => p.id).sort();
   assert.deepEqual(ids, [
     'agy_survey',
+    'agy_trust_folder',
     'claude_approval',
     'codex_approval',
+    'codex_mcp_approval',
     'codex_picker',
     'codex_quota',
     'generic_press_enter'
@@ -235,6 +248,60 @@ test('codex_approval pattern matches the Codex shell-command approval modal', as
   assert.equal(report.summary, 'helper paused on approval prompt');
   assert.ok(report.detail.includes('Would you like to run the following command?'));
 });
+
+// Fixture-driven coverage. Each fixture under test/face-app/fixtures/stuck_detector/<cli>/
+// is a verbatim ANSI-stripped tmux pane snapshot collected from a real helper. Positive
+// fixtures must surface exactly one matching pattern; negative fixtures must surface none.
+
+const FIXTURE_CASES = [
+  // codex positives
+  { cli: 'codex', name: 'approval_shell_command', expectPatternId: 'codex_approval' },
+  { cli: 'codex', name: 'approval_mcp_tool', expectPatternId: 'codex_mcp_approval' },
+  { cli: 'codex', name: 'picker_model', expectPatternId: 'codex_picker' },
+  // codex negatives — these are real running / idle states that must not fire
+  { cli: 'codex', name: 'idle_empty_prompt', expectPatternId: null },
+  { cli: 'codex', name: 'idle_after_response', expectPatternId: null },
+  { cli: 'codex', name: 'idle_after_interrupted', expectPatternId: null },
+  { cli: 'codex', name: 'running_thinking', expectPatternId: null },
+  // agy positives
+  { cli: 'agy', name: 'trust_folder_prompt', expectPatternId: 'agy_trust_folder' },
+  { cli: 'agy', name: 'approval_mcp_tool', expectPatternId: 'claude_approval' },
+  // agy negatives
+  { cli: 'agy', name: 'idle_empty_prompt', expectPatternId: null },
+  { cli: 'agy', name: 'idle_after_response', expectPatternId: null },
+  { cli: 'agy', name: 'running_loading', expectPatternId: null },
+  { cli: 'agy', name: 'slash_command_picker', expectPatternId: null }
+];
+
+for (const { cli, name, expectPatternId } of FIXTURE_CASES) {
+  const label = expectPatternId
+    ? `fixture ${cli}/${name} triggers ${expectPatternId}`
+    : `fixture ${cli}/${name} does not trigger any pattern`;
+  test(label, async () => {
+    const agentId = `${cli}-fixture`;
+    const agents = [{ id: agentId, pane_id: '%99', stream_id: 'repo:/test', status: 'active' }];
+    const runtime = createFakeRuntime(agents, { [agentId]: loadFixture(cli, name) });
+    const inbox = createFakeInbox();
+    const detector = createHelperStuckDetector({ runtime, inboxStore: inbox, log: quietLog });
+
+    const result = await detector.tick();
+
+    if (expectPatternId === null) {
+      assert.equal(result.posted, 0, `expected no report, got ${inbox.reports.length}`);
+      assert.equal(inbox.reports.length, 0);
+    } else {
+      assert.equal(inbox.reports.length, 1, `expected exactly one report from ${expectPatternId}`);
+      assert.equal(result.posted, 1);
+      // Confirm the matched line actually belongs to the expected pattern by re-running
+      // its regex over the report detail (first line is the matched line).
+      const pattern = DEFAULT_STUCK_PATTERNS.find((p) => p.id === expectPatternId);
+      assert.ok(pattern, `pattern ${expectPatternId} not registered`);
+      const firstLine = inbox.reports[0].detail.split('\n', 1)[0];
+      assert.ok(pattern.regex.test(firstLine),
+        `expected ${expectPatternId} regex to match first detail line: ${firstLine}`);
+    }
+  });
+}
 
 test('claude_approval pattern also matches the Antigravity permission modal', async () => {
   // Antigravity uses the same "Do you want to proceed?" phrase as Claude, so

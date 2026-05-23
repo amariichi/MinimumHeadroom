@@ -1,0 +1,10 @@
+  Mission body:
+  Please reply with exactly the single word: hello
+
+
+• Working (9s • esc to interrupt)
+
+
+› Explain this codebase
+
+  gpt-5.5 high · ~/github/minimum-headroom/.agent/worktrees/helper-1

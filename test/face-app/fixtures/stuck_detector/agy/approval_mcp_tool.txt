@@ -1,0 +1,18 @@
+● Read(/home/amari1/.gemini/antigravity-cli/mcp/minimum_headroom/agent_report.json)
+● minimum_headroom/agent_report(Agent Report Progress) (ctrl+o to expand)
+
+MCP
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  agent_report (server: minimum_headroom)
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always allow 'minimum_headroom/agent_report' in this conversation
+  3. Yes, and always allow 'minimum_headroom/agent_report' (Persist to settings.json)
+  4. No
+  5. No, and always deny 'minimum_headroom/agent_report' in this conversation
+  6. No, and always deny 'minimum_headroom/agent_report' (Persist to settings.json)
+
+  ↑/↓ Navigate · tab Amend · e edit command
+esc to cancel                                                                             Gemini 3.5 Flash (Medium)

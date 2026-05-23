@@ -1,0 +1,11 @@
+● minimum_headroom/agent_report(Agent Report Done)
+● minimum_headroom/face_event(Face Event CMD Succeeded)
+● minimum_headroom/face_say(Face Say Completion)
+● minimum_headroom/face_event(Face Event Idle) (ctrl+o to expand)
+
+  hello
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                           Gemini 3.5 Flash (Medium)

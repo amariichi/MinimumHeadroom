@@ -117,12 +117,19 @@ The detector ships with a small set of CLI-specific regex patterns. Coverage is 
 
 | Pattern id | regex | Trigger | Covers |
 |---|---|---|---|
-| `claude_approval` | `/Do you want to proceed\?/` | Tool / shell-command approval | **Claude Code**, **Antigravity** (same wording) |
+| `claude_approval` | `/Do you want to proceed\?/` | Tool / shell-command / MCP approval | **Claude Code**, **Antigravity** (same wording, including the MCP tool modal) |
 | `codex_approval` | `/Would you like to run the following command\?/` | Shell-command approval | **Codex** |
-| `codex_picker` | `/Switch to (gpt\|claude\|gemini)-/` | Model picker | **Codex** |
+| `codex_mcp_approval` | `/Allow the .+ MCP server to run tool/` | MCP tool-call approval (separate path from shell-command approval) | **Codex** |
+| `agy_trust_folder` | `/Do you trust the contents of this project\?/` | First-run workspace trust prompt | **Antigravity** |
+| `codex_picker` | `/Select Model and Effort/` | `/model` picker header | **Codex** |
 | `codex_quota` | `/You've hit your usage limit/` | ChatGPT usage limit | **Codex** |
 | `agy_survey` | `/How's the CLI experience/` | Post-session feedback survey | **Antigravity** |
 | `generic_press_enter` | `/Press enter to confirm/` | Generic "press enter" prompt | any CLI |
+
+Real pane snapshots used to verify these patterns (positive + negative) live under
+`test/face-app/fixtures/stuck_detector/{codex,agy}/`. When you discover a new modal,
+add the verbatim capture there and add a row to `FIXTURE_CASES` in
+`test/face-app/helper_stuck_detector.test.mjs` before extending `DEFAULT_STUCK_PATTERNS`.
 
 Things the detector does **not** catch yet:
 
