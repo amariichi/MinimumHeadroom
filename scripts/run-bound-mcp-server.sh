@@ -121,8 +121,11 @@ NODE_BIN="${MH_NODE_BIN:-}"
 if [[ -z "$NODE_BIN" ]]; then
   NODE_BIN="$(command -v node || true)"
 fi
-if [[ -z "$NODE_BIN" && -x "/home/amari1/.nvm/versions/node/v24.12.0/bin/node" ]]; then
-  NODE_BIN="/home/amari1/.nvm/versions/node/v24.12.0/bin/node"
+# Last-resort fallbacks: nvm default symlink (covers most nvm users) and the
+# distro-managed /usr/bin/node. Anything more exotic should be passed via
+# MH_NODE_BIN explicitly.
+if [[ -z "$NODE_BIN" && -x "$HOME/.nvm/versions/node/default/bin/node" ]]; then
+  NODE_BIN="$HOME/.nvm/versions/node/default/bin/node"
 fi
 if [[ -z "$NODE_BIN" && -x "/usr/bin/node" ]]; then
   NODE_BIN="/usr/bin/node"

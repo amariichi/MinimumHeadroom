@@ -13,7 +13,7 @@ set -uo pipefail
 SESSION="atoms3r-bridge"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SHARED_ENV="${MH_SHARED_ENV_FILE:-/home/amari1/.config/minimum-headroom.env}"
+SHARED_ENV="${MH_SHARED_ENV_FILE:-$HOME/.config/minimum-headroom.env}"
 LOG="${ATOMS3R_BRIDGE_LOG:-/tmp/atoms3r-bridge.log}"
 
 if [[ "${MH_SKIP_ATOMS3R_BRIDGE:-0}" == "1" ]]; then

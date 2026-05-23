@@ -13,7 +13,7 @@
 // Token resolution order (matches scripts/run-bound-mcp-server.sh):
 //   1. --token <t>
 //   2. process.env.MH_FACE_AUTH_TOKEN
-//   3. MH_FACE_AUTH_TOKEN= in ${MH_SHARED_ENV_FILE:-/home/amari1/.config/minimum-headroom.env}
+//   3. MH_FACE_AUTH_TOKEN= in ${MH_SHARED_ENV_FILE:-$HOME/.config/minimum-headroom.env}
 //
 // Usage:
 //   node scripts/atoms3r-provision.mjs \
@@ -25,6 +25,8 @@
 //   node scripts/atoms3r-provision.mjs --help
 
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 function usage() {
@@ -86,7 +88,8 @@ function readEnvFileVar(file, name) {
 function resolveToken(opts) {
   if (opts.token != null) return opts.token;
   if (process.env.MH_FACE_AUTH_TOKEN) return process.env.MH_FACE_AUTH_TOKEN;
-  const sharedEnv = process.env.MH_SHARED_ENV_FILE || '/home/amari1/.config/minimum-headroom.env';
+  const sharedEnv = process.env.MH_SHARED_ENV_FILE
+    || path.join(os.homedir(), '.config/minimum-headroom.env');
   return readEnvFileVar(sharedEnv, 'MH_FACE_AUTH_TOKEN') || '';
 }
 

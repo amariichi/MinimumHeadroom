@@ -421,7 +421,7 @@ test('agent lifecycle runtime waits for a codex prompt before injection', async 
         captureCount += 1;
         if (captureCount === 1) {
           return {
-            stdout: 'amari1@host:~/repo$ codex resume --last\n',
+            stdout: 'user@host:~/repo$ codex resume --last\n',
             stderr: '',
             code: 0
           };

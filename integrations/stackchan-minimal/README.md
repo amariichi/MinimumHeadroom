@@ -10,14 +10,14 @@ It does not start the minimum-headroom operator UI. It starts only the pieces St
 
 ## Quick start
 
-The launcher auto-detects this local Qwen GGUF when it exists:
+Set a local GGUF model path explicitly, then run:
 
-    /home/amari1/models/unsloth/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
-
-You can also set a local GGUF model path explicitly, then run:
-
-    export STACKCHAN_LLM_MODEL_PATH=/home/amari1/models/unsloth/Qwen3.6-35B-A3B/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+    export STACKCHAN_LLM_MODEL_PATH=/path/to/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
     ./scripts/run-stackchan-sidecar.sh
+
+(The launcher also reads `STACKCHAN_LLM_MODEL_PATH` from
+`integrations/stackchan-minimal/stackchan.env.example` if you source that
+file before launching. Replace the placeholder path in your local copy.)
 
 To use Nemotron instead, point `STACKCHAN_LLM_MODEL_PATH` at the Nemotron GGUF file. The launcher does not hard-code a model because local filenames and quantization choices vary.
 
