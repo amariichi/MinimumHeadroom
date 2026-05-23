@@ -64,6 +64,8 @@ flowchart LR
   MCP[MCP Server<br/>face_event / face_say / face_ping]
   WS[face-app<br/>WebSocket + HTTP :8765]
   FE[Frontend UI<br/>Browser]
+  ATOM[AtomS3R Device<br/>2D face LCD + Echo speaker + PTT mic]
+  ATOMBR[atoms3r-http-bridge]
   BR[operator-bridge]
   ASRP[/POST /api/operator/asr/]
   ASR[asr-worker<br/>Parakeet ASR<br/>JA/EN]
@@ -73,13 +75,18 @@ flowchart LR
   U -- Direct prompt --> TMUX
   U -- PTT recording --> FE
   U -- Text input --> FE
+  U -- PTT button + voice --> ATOM
+  ATOM -- 2D face + Echo audio --> U
 
   FE -- Audio binary --> ASRP
+  ATOM -- Mic WAV (POST /api/operator/asr) --> ASRP
   ASRP -- JSON (audioBase64,mimeType,lang) --> ASR
   ASR -- JSON transcript --> ASRP
   ASRP -- Transcript --> FE
+  ASRP -- Transcript --> ATOM
 
   FE -- operator_response JSON --> WS
+  ATOM -- operator_response (POST /api/operator/response) --> WS
   WS -- relay --> BR
   BR -- tmux send-keys --> TMUX
   TMUX --> C
@@ -96,6 +103,10 @@ flowchart LR
   WS -- say payload --> TTS
   TTS -- audio + tts state --> FE
 
+  WS -- face/tts payloads (WS) --> ATOMBR
+  ATOMBR -- POST /api/headroom/payload --> ATOM
+  ATOMBR -- POST /api/headroom/audio --> ATOM
+
   FE <-- HTTPS/WS --> TS
   TS <---> WS
 ```
@@ -108,6 +119,8 @@ sequenceDiagram
   participant U as User
   participant TS as Tailscale (optional)
   participant FE as Frontend UI
+  participant ATOM as AtomS3R Device
+  participant ATOMBR as atoms3r-http-bridge
   participant FA as face-app (:8765, /ws, /api/operator/asr)
   participant ASR as asr-worker (Parakeet)
   participant BR as operator-bridge
@@ -123,6 +136,7 @@ sequenceDiagram
 
   FE->>FA: Connect WebSocket /ws
   BR->>FA: Connect WebSocket /ws
+  ATOMBR->>FA: Connect WebSocket /ws
 
   alt Input path A: direct terminal prompt
     U->>TM: Type prompt
@@ -144,6 +158,16 @@ sequenceDiagram
     FA-->>BR: Relay payload
     BR->>TM: tmux send-keys(text + Enter)
     TM->>CX: Prompt arrives
+  else Input path D: AtomS3R PTT
+    U->>ATOM: Hold PTT button
+    ATOM->>FA: POST /api/operator/asr?lang=ja|en (WAV)
+    FA->>ASR: /v1/asr/ja|en (audioBase64,mimeType)
+    ASR-->>FA: Transcript JSON
+    FA-->>ATOM: Transcript response
+    ATOM->>FA: POST /api/operator/response (text)
+    FA-->>BR: Relay payload
+    BR->>TM: tmux send-keys(text + Enter)
+    TM->>CX: Prompt arrives
   end
 
   loop During work
@@ -156,10 +180,15 @@ sequenceDiagram
   CX->>MCP: face_event / face_say / face_ping
   MCP->>FA: Forward WebSocket JSON
   FA-->>FE: event/say/state payloads
+  FA-->>ATOMBR: event/say/state payloads (WS)
+  ATOMBR->>ATOM: POST /api/headroom/payload
 
   FA->>TTS: TTS request
   TTS-->>FA: tts_audio / tts_mouth / say_result
   FA-->>FE: Realtime status + audio
+  FA-->>ATOMBR: tts_audio / tts_mouth (WS)
+  ATOMBR->>ATOM: POST /api/headroom/audio + /payload
+  ATOM-->>U: 2D face on LCD + Echo speaker
   FE-->>U: Voice, facial state, and status updates
 ```
 
@@ -535,6 +564,8 @@ flowchart LR
   MCP[MCP サーバー<br/>face_event / face_say / face_ping]
   WS[face-app<br/>WebSocket + HTTP :8765]
   FE[フロントエンド UI<br/>ブラウザ]
+  ATOM[AtomS3R 端末<br/>2D顔 LCD + Echoスピーカ + PTTマイク]
+  ATOMBR[atoms3r-http-bridge]
   BR[operator-bridge]
   ASRP[/POST /api/operator/asr/]
   ASR[asr-worker<br/>Parakeet ASR<br/>JA/EN]
@@ -544,13 +575,18 @@ flowchart LR
   U -- 直接プロンプト --> TMUX
   U -- PTT録音 --> FE
   U -- テキスト入力 --> FE
+  U -- PTTボタン + 発話 --> ATOM
+  ATOM -- 2D顔 + Echo音声 --> U
 
   FE -- 音声バイナリ --> ASRP
+  ATOM -- マイクWAV (POST /api/operator/asr) --> ASRP
   ASRP -- JSON (audioBase64,mimeType,lang) --> ASR
   ASR -- 文字起こしJSON --> ASRP
   ASRP -- 文字起こし結果 --> FE
+  ASRP -- 文字起こし結果 --> ATOM
 
   FE -- operator_response JSON --> WS
+  ATOM -- operator_response (POST /api/operator/response) --> WS
   WS -- relay --> BR
   BR -- tmux send-keys --> TMUX
   TMUX --> C
@@ -567,6 +603,10 @@ flowchart LR
   WS -- say payload --> TTS
   TTS -- audio + tts state --> FE
 
+  WS -- face/tts payloads (WS) --> ATOMBR
+  ATOMBR -- POST /api/headroom/payload --> ATOM
+  ATOMBR -- POST /api/headroom/audio --> ATOM
+
   FE <-- HTTPS/WS --> TS
   TS <---> WS
 ```
@@ -579,6 +619,8 @@ sequenceDiagram
   participant U as ユーザー
   participant TS as Tailscale (任意)
   participant FE as Frontend UI
+  participant ATOM as AtomS3R 端末
+  participant ATOMBR as atoms3r-http-bridge
   participant FA as face-app (:8765, /ws, /api/operator/asr)
   participant ASR as asr-worker (Parakeet)
   participant BR as operator-bridge
@@ -594,6 +636,7 @@ sequenceDiagram
 
   FE->>FA: WebSocket /ws 接続
   BR->>FA: WebSocket /ws 接続
+  ATOMBR->>FA: WebSocket /ws 接続
 
   alt 入力経路A: 端末直接入力
     U->>TM: プロンプトを入力
@@ -615,6 +658,16 @@ sequenceDiagram
     FA-->>BR: payload relay
     BR->>TM: tmux send-keys(text + Enter)
     TM->>CX: プロンプト到達
+  else 入力経路D: AtomS3R PTT
+    U->>ATOM: PTTボタンを押下
+    ATOM->>FA: POST /api/operator/asr?lang=ja|en (WAV)
+    FA->>ASR: /v1/asr/ja|en (audioBase64,mimeType)
+    ASR-->>FA: 文字起こしJSON
+    FA-->>ATOM: 文字起こし結果
+    ATOM->>FA: POST /api/operator/response (text)
+    FA-->>BR: payload relay
+    BR->>TM: tmux send-keys(text + Enter)
+    TM->>CX: プロンプト到達
   end
 
   loop 作業中
@@ -627,10 +680,15 @@ sequenceDiagram
   CX->>MCP: face_event / face_say / face_ping
   MCP->>FA: WebSocket JSON転送
   FA-->>FE: event/say/state payloads
+  FA-->>ATOMBR: event/say/state payloads (WS)
+  ATOMBR->>ATOM: POST /api/headroom/payload
 
   FA->>TTS: TTS request
   TTS-->>FA: tts_audio / tts_mouth / say_result
   FA-->>FE: リアルタイム状態 + 音声
+  FA-->>ATOMBR: tts_audio / tts_mouth (WS)
+  ATOMBR->>ATOM: POST /api/headroom/audio + /payload
+  ATOM-->>U: 2D顔 (LCD) + Echoスピーカ
   FE-->>U: 音声・表情・状態を表示
 ```
 
