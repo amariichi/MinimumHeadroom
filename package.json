@@ -21,7 +21,6 @@
     "mcp-server:run": "./scripts/run-mcp-server.sh",
     "tts-worker:run": "./scripts/run-tts-worker.sh",
     "tts-worker:smoke": "./scripts/run-tts-worker.sh --smoke",
-    "stackchan:run": "./scripts/run-stackchan-sidecar.sh",
     "atoms3r:bridge": "node scripts/atoms3r-http-bridge.mjs",
     "test": "node --test"
   }
