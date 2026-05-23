@@ -174,6 +174,33 @@ class Qwen3TextPreparationTests(unittest.TestCase):
     )
     self.assertEqual(rendered, 'ノードジェイエス と シーアイ・シーディー を確認します。')
 
+  def test_japanese_profile_prefixes_unknown_leading_ascii_token_with_hai(self) -> None:
+    # Qwen3-Japanese drifts to Mandarin when the first significant token is
+    # halfwidth ASCII before any kana/kanji. The leading filler nudges it
+    # back to Japanese G2P. (Kokoro does not need this, see test_shared_text.)
+    rendered = prepare_qwen3_text(
+      'execplanを作成しました。',
+      ascii_mode='preserve',
+      language='Japanese',
+    )
+    self.assertEqual(rendered, 'はい、execplanを作成しました。')
+
+  def test_japanese_profile_prefixes_leading_numeric_token_with_hai(self) -> None:
+    rendered = prepare_qwen3_text(
+      '23日までに完了します。',
+      ascii_mode='preserve',
+      language='Japanese',
+    )
+    self.assertEqual(rendered, 'はい、23日までに完了します。')
+
+  def test_japanese_profile_leaves_known_leading_ascii_token_alone(self) -> None:
+    rendered = prepare_qwen3_text(
+      'GitHub承認申請をお願いします。',
+      ascii_mode='preserve',
+      language='Japanese',
+    )
+    self.assertEqual(rendered, 'GitHub承認申請をお願いします。')
+
 
 if __name__ == '__main__':
   unittest.main()

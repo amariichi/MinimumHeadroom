@@ -19,6 +19,7 @@ LEADING_JAPANESE_RE = re.compile(rf'^\s*[{JAPANESE_CHAR_CLASS}]')
 INTER_ALNUM_DASH_RE = re.compile(r'([A-Za-z0-9])[-‐‑‒–—−]([A-Za-z0-9])')
 WHITESPACE_RE = re.compile(r'\s+')
 SPACES_ONLY_RE = re.compile(r'[ \t]+')
+HALFWIDTH_TO_FULLWIDTH_DIGIT = str.maketrans('0123456789', '０１２３４５６７８９')
 KNOWN_LEADING_ASCII_TOKENS = {
   'ai',
   'api',
@@ -79,9 +80,17 @@ def normalize_japanese_tts_text(text: str) -> str:
   normalized = _strip_latin_diacritics(normalized)
   normalized = replace_japanese_semver_tokens(normalized)
   normalized = replace_japanese_decimal_separators(normalized)
-  normalized = apply_japanese_leading_numeric_filler(normalized)
-  normalized = apply_japanese_leading_unknown_ascii_filler(normalized)
+  normalized = convert_halfwidth_digits_to_fullwidth(normalized)
   return SPACES_ONLY_RE.sub(' ', normalized).strip()
+
+
+def convert_halfwidth_digits_to_fullwidth(text: str) -> str:
+  # Steers Misaki / Kokoro toward Japanese G2P inside Japanese sentences
+  # ("5月23日" → "５月２３日"). Pure-English utterances do not reach this
+  # branch because normalize_shared_tts_text routes them through the
+  # English normalizer, so digits embedded in English speech are left
+  # alone.
+  return text.translate(HALFWIDTH_TO_FULLWIDTH_DIGIT)
 
 
 def replace_japanese_decimal_separators(text: str) -> str:

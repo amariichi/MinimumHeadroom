@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import re
 
+from .shared_text import (
+  apply_japanese_leading_numeric_filler,
+  apply_japanese_leading_unknown_ascii_filler,
+)
+
 
 QWEN3_ASCII_MODES = {'preserve', 'fullwidth', 'kana_alias'}
 QWEN3_STYLES = {'neutral', 'soft', 'narration'}
@@ -107,6 +112,14 @@ def prepare_qwen3_text(text: str, *, ascii_mode: str, language: str) -> str:
     text = _apply_exact_english_phrase_speech_aliases(text)
     text = _apply_semver_speech_aliases(text)
     return _apply_english_speech_aliases(text)
+
+  # Qwen3 in Japanese mode drifts toward Mandarin pronunciation when a
+  # sentence opens with halfwidth tokens before any kana/kanji appears.
+  # The leading-fillers used to live in shared_text but caused Kokoro,
+  # which does not have that drift, to also receive an unwanted "はい、"
+  # prefix. They now apply only on the Qwen3 path.
+  text = apply_japanese_leading_numeric_filler(text)
+  text = apply_japanese_leading_unknown_ascii_filler(text)
 
   mode = normalize_ascii_mode(ascii_mode)
   if mode == 'preserve':
