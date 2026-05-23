@@ -32,6 +32,17 @@ EOF
   exit 2
 fi
 
+# --- Bootstrap per-CLI rule files (idempotent) -----------------------------
+# CLAUDE.md / AGENTS.md / GEMINI.md are auto-generated from
+# tools/voice-first-rules.md and are .gitignored at the repo root. Regenerate
+# any that are missing so the first cd into this folder makes the CLI happy.
+for rule_file in "$HERE/CLAUDE.md" "$HERE/AGENTS.md" "$HERE/GEMINI.md"; do
+  if [[ ! -f "$rule_file" ]]; then
+    "$HERE/tools/regenerate-rules.sh"
+    break
+  fi
+done
+
 # --- Defaults (overridable via env or CLI) ---------------------------------
 : "${FACE_WS_URL:=ws://127.0.0.1:8765/ws}"
 : "${MH_FACE_AGENT_ID:=__operator__}"

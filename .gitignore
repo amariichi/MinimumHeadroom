@@ -23,9 +23,11 @@ asr-worker/.venv/
 .env.*
 .agent/
 AGENTS.md
+CLAUDE.md
 GEMINI.md
 INSTRUCTIONS.md
 AGENTS.local.md
+CLAUDE.local.md
 GEMINI.local.md
 
 # Large local model assets (downloaded manually)
