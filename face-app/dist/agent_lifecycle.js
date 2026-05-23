@@ -272,8 +272,8 @@ export function inferAgentType(agentCmd) {
     return 'claude';
   }
   const lower = agentCmd.toLowerCase();
-  if (/\bgemini\b/.test(lower)) {
-    return 'gemini';
+  if (/\bagy\b/.test(lower) || /\bantigravity\b/.test(lower)) {
+    return 'antigravity';
   }
   if (/\bcodex\b/.test(lower)) {
     return 'codex';
@@ -300,14 +300,15 @@ export function buildPermissionConfig(agentType, preset) {
     };
   }
 
-  if (agentType === 'gemini') {
-    const readTools = ['read_file', 'search_files', 'list_files'];
-    const editTools = [...readTools, 'edit_file', 'write_file', 'run_shell_command'];
-    const coreTools = preset === 'reviewer' ? readTools : editTools;
+  if (agentType === 'antigravity') {
+    const deny = ['command(git push)', 'command(git push *)'];
+    const allow = preset === 'reviewer'
+      ? ['command(git status)', 'command(git diff)', 'command(git log)', 'command(rg)', 'command(sed)', 'command(cat)', 'command(ls)']
+      : ['command(git)', 'command(npm)', 'command(node)', 'command(rg)', 'command(sed)', 'command(cat)', 'command(ls)'];
     return {
-      configPath: '.gemini/settings.json',
-      configContent: { tools: { core: coreTools } },
-      cmdSuffix: '--yolo'
+      configPath: '.gemini/antigravity-cli/settings.json',
+      configContent: { enableTerminalSandbox: true, permissions: { allow, deny } },
+      cmdSuffix: preset === 'reviewer' ? null : '--dangerously-skip-permissions'
     };
   }
 
@@ -503,9 +504,11 @@ export function createAgentLifecycleRuntime(options = {}) {
   }
 
   function buildAgentIdentityEnvEntries(options = {}) {
+    const agentId = asNonEmptyString(options.agentId);
     return [
-      ['MH_FACE_AGENT_ID', asNonEmptyString(options.agentId)],
-      ['MH_FACE_AGENT_LABEL', asNonEmptyString(options.agentLabel)]
+      ['MH_FACE_AGENT_ID', agentId],
+      ['MH_FACE_AGENT_LABEL', asNonEmptyString(options.agentLabel)],
+      ['MH_HOOK_SUPPRESS_EVENTS', agentId ? 'idle_after_response' : null]
     ].filter(([, value]) => value);
   }
 
@@ -1076,8 +1079,9 @@ export function createAgentLifecycleRuntime(options = {}) {
     const hasCodexBanner = cleanedLines.some((line) => /OpenAI Codex/i.test(line));
     const hasCodexPrompt = cleanedLines.some((line) => line.trimStart().startsWith('›'));
     const hasCodexStatus = cleanedLines.some((line) => /gpt-[\w.-]+/i.test(line) && /left/i.test(line));
-    const hasGeminiBanner = cleanedLines.some((line) => /Gemini CLI/i.test(line));
-    const hasGeminiPrompt = cleanedLines.some((line) => /Type your message(?: or @path\/to\/file)?/i.test(line));
+    const hasAntigravityCommand = /\bagy(?:\s|$)/i.test(joined) || /\bantigravity(?:\s|$)/i.test(joined);
+    const hasAntigravityBanner = cleanedLines.some((line) => /Antigravity CLI|AGY CLI/i.test(line));
+    const hasAntigravityPrompt = cleanedLines.some((line) => /Type your message(?: or @path\/to\/file)?|How can I help|What would you like/i.test(line));
     const hasGenericPrompt = cleanedLines.some((line) => {
       const trimmed = line.trim();
       return trimmed === '>' || trimmed === '›';
@@ -1085,8 +1089,8 @@ export function createAgentLifecycleRuntime(options = {}) {
     const snapshotSignature = nonEmptyLines.join('\n');
     const observedAgent = hasCodexCommand || hasCodexBanner
       ? 'codex'
-      : hasGeminiBanner || /logged in with google/i.test(joined)
-        ? 'gemini'
+      : hasAntigravityCommand || hasAntigravityBanner || /logged in with google/i.test(joined)
+        ? 'antigravity'
         : 'generic';
 
     if (blocker) {
@@ -1118,9 +1122,9 @@ export function createAgentLifecycleRuntime(options = {}) {
       };
     }
 
-    if (hasGeminiBanner && hasGeminiPrompt && hasGenericPrompt) {
+    if ((hasAntigravityCommand || hasAntigravityBanner) && hasAntigravityPrompt && hasGenericPrompt) {
       return {
-        observed_agent: 'gemini',
+        observed_agent: 'antigravity',
         ready: true,
         should_wait: false,
         blocked: false,
@@ -1682,6 +1686,78 @@ export function createAgentLifecycleRuntime(options = {}) {
     };
   }
 
+  async function paneSnapshot(agentId, input = {}) {
+    const agent = getAgentStateOrThrow(agentId);
+    const paneId = asNonEmptyString(agent.pane_id);
+    if (!paneId || !tmuxEnabled) {
+      throw createLifecycleError('invalid_state', 'agent has no pane');
+    }
+    const requestedTail = input?.tail_lines ?? input?.tailLines;
+    const tailLines = parseInteger(requestedTail, 40, 1);
+    const boundedTail = Math.min(tailLines, 400);
+    const lines = await capturePaneTail(paneId, boundedTail);
+    return {
+      ok: true,
+      pane_id: paneId,
+      agent_id: agent.id,
+      tail_lines: boundedTail,
+      lines,
+      captured_at: now()
+    };
+  }
+
+  const PANE_KEY_NAMED_ALLOWLIST = new Set([
+    'Enter', 'Escape', 'Esc', 'Tab', 'BSpace', 'Space',
+    'Up', 'Down', 'Left', 'Right',
+    'Home', 'End', 'PageUp', 'PageDown',
+    'C-c', 'C-m', 'C-d'
+  ]);
+  const PANE_KEY_PRINTABLE_REGEX = /^[\x20-\x7E]+$/;
+  const PANE_KEY_MAX_COUNT = 32;
+
+  function normalizePaneKeysInput(input) {
+    const rawKeys = Array.isArray(input?.keys) ? input.keys : null;
+    if (!rawKeys || rawKeys.length === 0) {
+      throw createLifecycleError('invalid_request', 'keys must be a non-empty array');
+    }
+    if (rawKeys.length > PANE_KEY_MAX_COUNT) {
+      throw createLifecycleError('invalid_request', `keys must contain at most ${PANE_KEY_MAX_COUNT} entries`);
+    }
+    const normalized = [];
+    for (const candidate of rawKeys) {
+      if (typeof candidate !== 'string' || candidate === '') {
+        throw createLifecycleError('invalid_request', 'each key must be a non-empty string');
+      }
+      if (!PANE_KEY_NAMED_ALLOWLIST.has(candidate) && !PANE_KEY_PRINTABLE_REGEX.test(candidate)) {
+        throw createLifecycleError('invalid_request', `key not allowed: ${candidate}`);
+      }
+      normalized.push(candidate);
+    }
+    return normalized;
+  }
+
+  async function paneSendKey(agentId, input = {}) {
+    const agent = getAgentStateOrThrow(agentId);
+    const paneId = asNonEmptyString(agent.pane_id);
+    if (!paneId || !tmuxEnabled) {
+      throw createLifecycleError('invalid_state', 'agent has no pane');
+    }
+    const keys = normalizePaneKeysInput(input);
+    const literal = normalizeBoolean(input?.literal, false);
+    const tmuxArgs = literal
+      ? ['send-keys', '-t', paneId, '-l', '--', ...keys]
+      : ['send-keys', '-t', paneId, ...keys];
+    await runTmux(tmuxArgs);
+    return {
+      ok: true,
+      pane_id: paneId,
+      agent_id: agent.id,
+      keys,
+      literal,
+      sent_at: now()
+    };
+  }
+
   async function dispatchAgentAction(agentId, action, input = {}) {
     switch (action) {
       case 'focus':
@@ -1691,6 +1767,12 @@ export function createAgentLifecycleRuntime(options = {}) {
       case 'delete-worktree':
       case 'delete_worktree':
         return deleteWorktree(agentId, input);
+      case 'pane-snapshot':
+      case 'pane_snapshot':
+        return paneSnapshot(agentId, input);
+      case 'pane-send-key':
+      case 'pane_send_key':
+        return paneSendKey(agentId, input);
       default:
         throw createLifecycleError('invalid_request', `unsupported agent action: ${action}`);
     }
@@ -1706,6 +1788,8 @@ export function createAgentLifecycleRuntime(options = {}) {
     addAgent,
     dispatchAgentAction,
     injectAgent,
+    paneSnapshot,
+    paneSendKey,
     reconcileAgents,
     cleanupAgentsOnStartup
   };

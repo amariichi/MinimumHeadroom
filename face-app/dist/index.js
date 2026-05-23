@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFaceWebSocketServer } from './ws_server.js';
 import { createTtsController } from './tts_controller.js';
+import { createTtsAudioStore } from './tts_audio_store.js';
 import { loadFaceAppConfig } from './config_loader.js';
 import { resolveBrowserAudioMaxChannels } from './browser_audio_config.js';
 import { createOperatorAsrProxy } from './operator_asr_proxy.js';
@@ -15,6 +16,7 @@ import { createAgentAssignmentApi } from './agent_assignment_api.js';
 import { createOwnerInboxStateStore } from './owner_inbox_state.js';
 import { createOwnerInboxApi } from './owner_inbox_api.js';
 import { createHookBridge } from './hook_bridge.js';
+import { createHelperStuckDetector } from './helper_stuck_detector.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -64,6 +66,32 @@ function writeJson(response, statusCode, payload) {
     'cache-control': 'no-store'
   });
   response.end(JSON.stringify(payload));
+}
+
+async function readJsonRequestBody(request, { maxBytes = 32_768 } = {}) {
+  const chunks = [];
+  let byteLength = 0;
+  for await (const chunk of request) {
+    byteLength += chunk.length;
+    if (byteLength > maxBytes) {
+      const error = new Error('request_body_too_large');
+      error.code = 'request_body_too_large';
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  if (byteLength === 0) {
+    const error = new Error('empty_body');
+    error.code = 'empty_body';
+    throw error;
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks, byteLength).toString('utf8'));
+  } catch {
+    const error = new Error('invalid_json');
+    error.code = 'invalid_json';
+    throw error;
+  }
 }
 
 function normalizeOptionalString(value) {
@@ -217,6 +245,27 @@ const agentLifecycleRuntime = createAgentLifecycleRuntime({
 const agentLifecycleApi = createAgentLifecycleApi({
   runtime: agentLifecycleRuntime
 });
+
+const helperStuckDetectorEnabled = (process.env.MH_HELPER_STUCK_DETECTOR ?? '1') !== '0'
+  && (process.env.MH_HELPER_STUCK_DETECTOR ?? '').toLowerCase() !== 'off';
+const helperStuckDetectorIntervalMs = Number.parseInt(process.env.MH_HELPER_STUCK_DETECTOR_INTERVAL_MS ?? '5000', 10);
+const helperStuckDetector = helperStuckDetectorEnabled
+  ? createHelperStuckDetector({
+      runtime: agentLifecycleRuntime,
+      inboxStore: ownerInboxState,
+      assignmentStore: agentAssignmentState,
+      intervalMs: Number.isFinite(helperStuckDetectorIntervalMs) && helperStuckDetectorIntervalMs >= 250
+        ? helperStuckDetectorIntervalMs
+        : 5000,
+      log: console
+    })
+  : null;
+if (helperStuckDetector) {
+  helperStuckDetector.start();
+  console.info(`[face-app] helper stuck detector started (interval=${helperStuckDetector.intervalMs}ms)`);
+} else {
+  console.info('[face-app] helper stuck detector disabled by MH_HELPER_STUCK_DETECTOR');
+}
 const agentAssignmentApi = createAgentAssignmentApi({
   store: agentAssignmentState,
   lifecycleRuntime: agentLifecycleRuntime
@@ -237,11 +286,22 @@ const operatorAsrProxy = createOperatorAsrProxy({
   modelJa: process.env.MH_OPERATOR_ASR_MODEL_JA ?? '',
   modelEn: process.env.MH_OPERATOR_ASR_MODEL_EN ?? '',
   requestTimeoutMs: Number.isNaN(operatorAsrTimeoutMs) ? 20_000 : operatorAsrTimeoutMs,
+  onBargeIn: (reason) => {
+    // Lazily resolved: ttsController is created after this proxy.
+    if (ttsController && typeof ttsController.flushForBargeIn === 'function') {
+      Promise.resolve(ttsController.flushForBargeIn(reason)).catch((error) => {
+        console.error(`[face-app] tts barge-in flush failed: ${error.message}`);
+      });
+    }
+  },
   log: console
 });
 let operatorRealtimeAsrProxy = null;
 
 let ttsController = null;
+const ttsAudioStore = createTtsAudioStore({
+  ttlMs: Number.parseInt(process.env.MH_TTS_AUDIO_REF_TTL_MS ?? '60000', 10)
+});
 
 function normalizeSayPayload(payload) {
   const normalized = { ...payload };
@@ -394,6 +454,54 @@ const server = await startFaceWebSocketServer({
       });
       return true;
     }
+    if (parsedUrl.pathname === '/api/operator/response') {
+      if (request.method !== 'POST') {
+        writeJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed'
+        });
+        return true;
+      }
+      let payload = null;
+      try {
+        payload = await readJsonRequestBody(request);
+      } catch (error) {
+        writeJson(response, error.code === 'request_body_too_large' ? 413 : 400, {
+          ok: false,
+          error: error.code ?? 'invalid_request_body'
+        });
+        return true;
+      }
+      if (!payload || payload.type !== 'operator_response') {
+        writeJson(response, 400, {
+          ok: false,
+          error: 'invalid_operator_response'
+        });
+        return true;
+      }
+      if (typeof payload.value !== 'string' || payload.value.trim() === '') {
+        writeJson(response, 400, {
+          ok: false,
+          error: 'empty_value'
+        });
+        return true;
+      }
+      const normalized = {
+        ...payload,
+        v: payload.v ?? 1,
+        type: 'operator_response',
+        session_id: normalizeSessionId(payload),
+        response_kind: typeof payload.response_kind === 'string' ? payload.response_kind : 'text',
+        value: payload.value.trim(),
+        source: typeof payload.source === 'string' && payload.source.trim() !== '' ? payload.source.trim() : 'http',
+        ts: Date.now()
+      };
+      server.broadcast(normalized);
+      writeJson(response, 202, {
+        ok: true
+      });
+      return true;
+    }
     if (parsedUrl.pathname === '/api/operator/ui-config') {
       writeJson(response, 200, {
         ok: true,
@@ -415,6 +523,9 @@ const server = await startFaceWebSocketServer({
           tokenQueryParam: 'auth_token'
         }
       });
+      return true;
+    }
+    if (ttsAudioStore.handleHttpRequest(request, response)) {
       return true;
     }
     return operatorAsrProxy.handleHttpRequest(request, response);
@@ -461,9 +572,11 @@ if (ttsEnabled) {
     broadcast(payload) {
       return server.broadcast(payload);
     },
+    audioStore: ttsAudioStore,
     defaultTtlMs: faceConfig.tts.defaultTtlMs,
     autoInterruptAfterMs: faceConfig.tts.autoInterruptAfterMs,
     qwenBoundarySpeaker: process.env.MH_QWEN_TTS_BOUNDARY_SPEAKER ?? 'Ono_Anna',
+    maxChunkChars: Number.parseInt(process.env.MH_TTS_CHUNK_MAX_CHARS ?? '120', 10),
     gateConfig: faceConfig.speechGate,
     workerCwd: repoRoot,
     workerEnv: {
@@ -487,6 +600,9 @@ async function shutdown(signal) {
   console.info(`[face-app] ${signal} received, shutting down`);
 
   try {
+    if (helperStuckDetector) {
+      helperStuckDetector.stop();
+    }
     if (ttsController) {
       await ttsController.stop();
     }

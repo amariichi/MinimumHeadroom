@@ -23,6 +23,15 @@ cd "$ROOT_DIR"
 : "${MH_STACK_START_MCP:=0}"
 : "${MH_OPERATOR_FACE_AGENT_ID:=__operator__}"
 : "${MH_OPERATOR_FACE_AGENT_LABEL:=Operator}"
+# Keep each synthesized TTS chunk under the AtomS3R HTTP ingress cap
+# (estimatePayloadLimit ~954 KB with HEADROOM_MAX_BASE64_TTS_SECONDS=15;
+# bigger -> HTTP 413 -> mouth-only). ~64 chars is the current safe default
+# for Japanese TTS chunks on the Atom HTTP audio path:
+# the inter-chunk gap is the per-chunk synth-after-playback wait (no
+# server-side prefetch), so fewer/larger chunks = far fewer gaps. Set here,
+# the single chokepoint every operator bring-up path passes through, since
+# env exported upstream does not reliably cross the operator tmux allowlist.
+: "${MH_TTS_CHUNK_MAX_CHARS:=64}"
 
 DEFAULT_OPERATOR_ASR_BASE_URL="http://${ASR_HOST}:${ASR_PORT}"
 STACK_OPERATOR_ASR_BASE_URL="$MH_OPERATOR_ASR_BASE_URL"
@@ -102,10 +111,16 @@ fi
 start_proc "face-app" \
   env FACE_WS_HOST="$FACE_WS_HOST" FACE_WS_PORT="$FACE_WS_PORT" FACE_WS_PATH="$FACE_WS_PATH" \
   FACE_AUDIO_TARGET="$FACE_AUDIO_TARGET" FACE_UI_MODE="$FACE_UI_MODE" FACE_OPERATOR_PANEL_ENABLED="1" MH_OPERATOR_ASR_BASE_URL="$STACK_OPERATOR_ASR_BASE_URL" \
+  MH_TTS_CHUNK_MAX_CHARS="$MH_TTS_CHUNK_MAX_CHARS" \
   MH_OPERATOR_REALTIME_ASR_ENABLED="$MH_OPERATOR_REALTIME_ASR_ENABLED" \
   MH_OPERATOR_REALTIME_ASR_WS_URL="$MH_OPERATOR_REALTIME_ASR_WS_URL" \
   MH_OPERATOR_REALTIME_ASR_MODEL="$MH_OPERATOR_REALTIME_ASR_MODEL" \
   ./scripts/run-face-app.sh --audio-target "$FACE_AUDIO_TARGET" --ui-mode "$FACE_UI_MODE"
+
+# Ensure the AtomS3R PC->Atom bridge is up. Best-effort and decoupled from
+# the stack supervisor (a missing/offline Atom must never stop the stack);
+# idempotent, so every operator bring-up keeps the Atom from going silent.
+./scripts/ensure-atoms3r-bridge.sh || true
 
 start_proc "operator-bridge" \
   env MH_BRIDGE_TMUX_PANE="${MH_BRIDGE_TMUX_PANE:-}" MH_BRIDGE_RECOVERY_TMUX_PANE="${MH_BRIDGE_RECOVERY_TMUX_PANE:-}" MH_BRIDGE_WS_URL="$FACE_WS_URL" \

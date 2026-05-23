@@ -129,6 +129,7 @@ export function createOperatorAsrProxy(options = {}) {
   const modelEn = asNonEmptyString(options.modelEn);
   const modelJa = asNonEmptyString(options.modelJa);
   const fetchImpl = typeof options.fetchImpl === 'function' ? options.fetchImpl : globalThis.fetch;
+  const onBargeIn = typeof options.onBargeIn === 'function' ? options.onBargeIn : null;
 
   if (typeof fetchImpl !== 'function') {
     throw new Error('fetch API is unavailable for operator ASR proxy');
@@ -148,6 +149,18 @@ export function createOperatorAsrProxy(options = {}) {
           error: 'method_not_allowed'
         });
         return true;
+      }
+
+      // The user has taken the turn (PTT released, audio incoming):
+      // stop any in-flight/queued agent speech so it does not talk over
+      // the transcript that is about to be delivered. Cross-transport
+      // (Atom posts here too; it has no usable WebSocket client).
+      if (onBargeIn) {
+        try {
+          onBargeIn('operator_ptt');
+        } catch (error) {
+          log.error(`[face-app] operator ASR barge-in handler failed: ${error.message}`);
+        }
       }
 
       const requestedLanguage = normalizeLanguage(

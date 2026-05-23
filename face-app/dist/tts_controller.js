@@ -57,6 +57,76 @@ function normalizePolicy(value) {
   return value === 'interrupt' ? 'interrupt' : 'replace';
 }
 
+// Split a long utterance into ordered, sentence-bounded chunks so each
+// synthesized WAV stays small enough for memory-constrained sinks (the
+// AtomS3R firmware drops a single oversized base64/HTTP WAV while the
+// mouth keeps animating from the independent tts_mouth stream). Short
+// text (<= maxChars) is returned verbatim as a single chunk so existing
+// single-utterance behavior is unchanged.
+export function segmentTtsText(text, maxChars = 120) {
+  const source = typeof text === 'string' ? text : '';
+  const limit = Number.isInteger(maxChars) && maxChars > 0 ? maxChars : 120;
+  if (source.length <= limit) {
+    return source.length > 0 ? [source] : [];
+  }
+
+  // Hard sentence boundaries keep their terminator; newlines also split.
+  const hardBoundary = /[^。．.!?！？…\n]*(?:[。．.!?！？…]+|\n+|$)/gu;
+  const sentences = [];
+  let match;
+  while ((match = hardBoundary.exec(source)) !== null) {
+    if (match.index === hardBoundary.lastIndex) {
+      hardBoundary.lastIndex += 1;
+    }
+    if (match[0] && match[0].trim() !== '') {
+      sentences.push(match[0]);
+    }
+    if (hardBoundary.lastIndex >= source.length) {
+      break;
+    }
+  }
+  if (sentences.length === 0) {
+    sentences.push(source);
+  }
+
+  // Soft-split any sentence still longer than the limit, preferring a
+  // late comma/semicolon boundary, then a hard cut as a last resort.
+  const units = [];
+  for (const sentence of sentences) {
+    let rest = sentence;
+    while (rest.length > limit) {
+      const window = rest.slice(0, limit);
+      const soft = window.match(/[、，,;；](?=[^、，,;；]*$)/u);
+      const cut = soft && soft.index >= Math.floor(limit * 0.4) ? soft.index + 1 : limit;
+      units.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+    if (rest.trim() !== '') {
+      units.push(rest);
+    }
+  }
+
+  // Greedily pack consecutive units so we do not emit one chunk per tiny
+  // sentence.
+  const chunks = [];
+  let buffer = '';
+  for (const unit of units) {
+    if (buffer === '') {
+      buffer = unit;
+    } else if ((buffer + unit).length <= limit) {
+      buffer += unit;
+    } else {
+      chunks.push(buffer.trim());
+      buffer = unit;
+    }
+  }
+  if (buffer.trim() !== '') {
+    chunks.push(buffer.trim());
+  }
+
+  return chunks.filter((chunk) => chunk !== '');
+}
+
 function normalizeAudioTarget(value) {
   if (typeof value !== 'string') {
     return 'local';
@@ -248,6 +318,7 @@ export function createTtsController(options = {}) {
   const log = toLogger(options.log ?? console);
   const now = typeof options.now === 'function' ? options.now : () => Date.now();
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => false;
+  const audioStore = options.audioStore ?? null;
   const audioTarget = normalizeAudioTarget(options.audioTarget);
   const browserAudioEnabled = audioTarget === 'browser' || audioTarget === 'both';
   const defaultTtlMs = Number.isInteger(options.defaultTtlMs) ? Math.max(1, options.defaultTtlMs) : 60_000;
@@ -255,6 +326,10 @@ export function createTtsController(options = {}) {
     Number.isInteger(options.autoInterruptAfterMs) && options.autoInterruptAfterMs >= 0
       ? options.autoInterruptAfterMs
       : null;
+  const maxChunkChars =
+    Number.isInteger(options.maxChunkChars) && options.maxChunkChars > 0
+      ? options.maxChunkChars
+      : 120;
   const gate = options.gate ?? createSayGate(options.gateConfig ?? {});
 
   const worker = options.worker ?? createStdioWorkerClient({
@@ -273,7 +348,19 @@ export function createTtsController(options = {}) {
   let active = null;
   let activeQueuedAt = null;
   let activePlayStartedAt = null;
-  let pending = null;
+  // FIFO of ordered chunks belonging to the current logical utterance.
+  // A newer accepted say flushes this and replaces it.
+  let queue = [];
+
+  function clearQueue() {
+    queue = [];
+  }
+
+  function enqueueEntries(entries) {
+    for (const entry of entries) {
+      queue.push(entry);
+    }
+  }
 
   function emitState(sessionId, utteranceId, phase, extra = {}) {
     const payload = {
@@ -345,6 +432,27 @@ export function createTtsController(options = {}) {
       ttlMs,
       createdAt,
       dedupeKey: typeof payload?.dedupe_key === 'string' ? payload.dedupe_key : null
+    };
+  }
+
+  function makeChildEntry(parent, text, index, count) {
+    if (count <= 1) {
+      return parent;
+    }
+    const speaker = selectQwenSpeakerForText(text, {
+      engine: workerEngine,
+      defaultVoice: workerVoice,
+      boundarySpeaker: qwenBoundarySpeaker
+    });
+    const suffix = `#${index + 1}/${count}`;
+    return {
+      ...parent,
+      text,
+      speaker,
+      utteranceId: `${parent.utteranceId}${suffix}`,
+      messageId: `${parent.messageId}${suffix}`,
+      chunkIndex: index,
+      chunkCount: count
     };
   }
 
@@ -445,12 +553,11 @@ export function createTtsController(options = {}) {
   }
 
   function maybeStartPending() {
-    if (active || !pending) {
+    if (active || queue.length === 0) {
       return;
     }
 
-    const next = pending;
-    pending = null;
+    const next = queue.shift();
     dispatchSpeak(next, 'dequeued');
   }
 
@@ -545,9 +652,6 @@ export function createTtsController(options = {}) {
     }
 
     if (message.type === 'audio') {
-      if (!browserAudioEnabled) {
-        return;
-      }
       if (!active || !Number.isInteger(message.generation) || message.generation !== active.generation) {
         return;
       }
@@ -555,21 +659,45 @@ export function createTtsController(options = {}) {
         return;
       }
 
-      broadcast({
-        v: 1,
-        type: 'tts_audio',
-        session_id: active.sessionId,
-        ...(active.agentId ? { agent_id: active.agentId } : {}),
-        ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
-        utterance_id: active.utteranceId,
-        generation: active.generation,
-        message_id: active.messageId,
-        revision: active.revision,
-        mime_type: typeof message.mime_type === 'string' ? message.mime_type : 'audio/wav',
-        audio_base64: message.audio_base64,
-        sample_rate: Number.isInteger(message.sample_rate) ? message.sample_rate : null,
-        ts: now()
-      });
+      const mimeType = typeof message.mime_type === 'string' ? message.mime_type : 'audio/wav';
+      const sampleRate = Number.isInteger(message.sample_rate) ? message.sample_rate : null;
+
+      if (audioStore && typeof audioStore.putAudio === 'function' && typeof audioStore.toReferencePayload === 'function') {
+        const entry = audioStore.putAudio({
+          audioBase64: message.audio_base64,
+          mimeType,
+          sampleRate,
+          sessionId: active.sessionId,
+          agentId: active.agentId,
+          agentLabel: active.agentLabel,
+          utteranceId: active.utteranceId,
+          generation: active.generation,
+          messageId: active.messageId,
+          revision: active.revision
+        });
+        const refPayload = audioStore.toReferencePayload(entry);
+        if (refPayload) {
+          broadcast(refPayload);
+        }
+      }
+
+      if (browserAudioEnabled) {
+        broadcast({
+          v: 1,
+          type: 'tts_audio',
+          session_id: active.sessionId,
+          ...(active.agentId ? { agent_id: active.agentId } : {}),
+          ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
+          utterance_id: active.utteranceId,
+          generation: active.generation,
+          message_id: active.messageId,
+          revision: active.revision,
+          mime_type: mimeType,
+          audio_base64: message.audio_base64,
+          sample_rate: sampleRate,
+          ts: now()
+        });
+      }
       return;
     }
 
@@ -641,7 +769,7 @@ export function createTtsController(options = {}) {
       activeQueuedAt = null;
       activePlayStartedAt = null;
     }
-    pending = null;
+    clearQueue();
 
     emitState('-', null, 'worker_unavailable', {
       reason: `exit:${info.code ?? 'null'}:${info.signal ?? 'none'}`
@@ -712,40 +840,54 @@ export function createTtsController(options = {}) {
 
     generation = entry.generation;
 
+    // Split long utterances so each synthesized WAV stays small; short
+    // text yields a single chunk and the original code path.
+    const segments = segmentTtsText(entry.text, maxChunkChars);
+    const children =
+      segments.length > 1
+        ? segments.map((seg, index) => makeChildEntry(entry, seg, index, segments.length))
+        : [entry];
+    const head = children[0];
+    const tail = children.slice(1);
+
     const forceInterrupt = entry.policy === 'interrupt' || entry.priority >= 3;
     const autoInterrupt = shouldPromoteToAutoInterrupt(entry, acceptedAt);
 
     if (forceInterrupt || autoInterrupt) {
-      pending = null;
+      clearQueue();
       if (active) {
         interruptActive(autoInterrupt ? 'auto_interrupt' : 'superseded', entry.generation);
       }
 
-      return dispatchSpeak(entry, autoInterrupt ? 'auto_interrupt' : 'interrupt');
+      enqueueEntries(tail);
+      return dispatchSpeak(head, autoInterrupt ? 'auto_interrupt' : 'interrupt');
     }
 
     if (active) {
-      pending = entry;
-      emitState(entry.sessionId, entry.utteranceId, 'queued', {
-        ...(entry.agentId ? { agent_id: entry.agentId } : {}),
-        ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
+      // A newer utterance supersedes the previous one's queued remainder.
+      clearQueue();
+      enqueueEntries(children);
+      emitState(head.sessionId, head.utteranceId, 'queued', {
+        ...(head.agentId ? { agent_id: head.agentId } : {}),
+        ...(head.agentLabel ? { agent_label: head.agentLabel } : {}),
         reason: 'pending_replace',
-        generation: entry.generation,
-        message_id: entry.messageId,
-        revision: entry.revision
+        generation: head.generation,
+        message_id: head.messageId,
+        revision: head.revision
       });
       return {
         accepted: true,
         spoken: true,
-        generation: entry.generation,
+        generation: head.generation,
         queued: true,
-        message_id: entry.messageId,
-        revision: entry.revision,
+        message_id: head.messageId,
+        revision: head.revision,
         reason: null
       };
     }
 
-    return dispatchSpeak(entry, 'immediate');
+    enqueueEntries(tail);
+    return dispatchSpeak(head, 'immediate');
   }
 
   async function interruptCurrent(reason = 'manual_interrupt') {
@@ -755,13 +897,43 @@ export function createTtsController(options = {}) {
     interruptActive(reason, generation);
   }
 
+  // Barge-in: the operator took the turn (PTT). Drop every queued chunk,
+  // stop the active chunk, advance the generation so any late worker
+  // audio/mouth for the old utterance is ignored, and clear stored audio
+  // refs so a memory-constrained sink cannot pull a stale chunk.
+  async function flushForBargeIn(reason = 'operator_ptt') {
+    clearQueue();
+    if (active) {
+      interruptActive(reason, generation);
+      emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision, {
+        agent_id: active.agentId,
+        agent_label: active.agentLabel
+      });
+      emitState(active.sessionId, active.utteranceId, 'play_stop', {
+        ...(active.agentId ? { agent_id: active.agentId } : {}),
+        ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
+        reason,
+        generation: active.generation,
+        message_id: active.messageId,
+        revision: active.revision
+      });
+      active = null;
+      activeQueuedAt = null;
+      activePlayStartedAt = null;
+    }
+    generation += 1;
+    if (audioStore && typeof audioStore.clear === 'function') {
+      audioStore.clear();
+    }
+  }
+
   async function stop() {
     if (stopped) {
       return;
     }
 
     stopped = true;
-    pending = null;
+    clearQueue();
 
     if (active) {
       emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision, {
@@ -774,18 +946,23 @@ export function createTtsController(options = {}) {
     }
 
     worker.stop();
+    if (audioStore && typeof audioStore.clear === 'function') {
+      audioStore.clear();
+    }
   }
 
   return {
     handleSayPayload,
     interruptCurrent,
+    flushForBargeIn,
     stop,
     snapshot() {
       return {
         workerReady,
         generation,
         activeGeneration: active?.generation ?? null,
-        pendingGeneration: pending?.generation ?? null
+        pendingGeneration: queue[0]?.generation ?? null,
+        queuedChunks: queue.length
       };
     }
   };

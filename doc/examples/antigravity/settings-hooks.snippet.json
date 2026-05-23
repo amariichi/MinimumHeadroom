@@ -7,7 +7,7 @@
           {
             "name": "mh-hook-permission",
             "type": "command",
-            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime gemini --event permission_required",
+            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime antigravity --stdout-mode silent --event permission_required",
             "timeout": 5000
           }
         ]
@@ -20,7 +20,7 @@
           {
             "name": "mh-hook-idle",
             "type": "command",
-            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime gemini --event idle_after_response",
+            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime antigravity --stdout-mode silent --event idle_after_response",
             "timeout": 5000
           }
         ]

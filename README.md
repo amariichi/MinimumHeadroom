@@ -32,7 +32,7 @@ A face and operator companion app for coding agents.
 ## At a Glance
 
 - **Control your PC coding agent from your phone** — approve, type, or speak commands via mobile browser.
-- **Works with Claude Code, Codex CLI, and Gemini CLI** — any agent that runs in a terminal.
+- **Works with Claude Code, Codex CLI, and Antigravity CLI** — any agent that runs in a terminal.
 - **tmux operator bridge** relays input/output between the browser UI and the agent pane.
 - **3D face + TTS + MCP signaling** give your agent a voice and expressions that reflect its state.
 - **Multi-agent support** (experimental) — spawn helper agents in isolated worktrees with permission presets and durable mission tracking. See [Multi-Agent Guide](doc/guides/multi-agent.md).
@@ -43,8 +43,8 @@ A face and operator companion app for coding agents.
 
 - **Operator input** — terminal direct prompt, browser PTT (JA/EN ASR), text fallback, desktop `Space`/`Shift+Space` hold-to-talk safety, key controls (`Esc`, `↑`, `Select`, `↓`)
 - **Terminal mirror** — read-only tmux tail snapshots at 500ms change-only intervals; lines render at native width with horizontal scroll, and on touch devices you can pinch-to-zoom (anchored under your fingers) and double-tap to reset
-- **Multi-agent** (experimental) — spawn/focus/delete helpers from desktop tiles or mobile list, permission presets, mission assignment and delivery, owner inbox. See [Multi-Agent Guide](doc/guides/multi-agent.md).
-- **MCP signaling** — `face.event` / `face.say` / `face.ping` plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `owner.inbox.*`)
+- **Multi-agent** (experimental) — spawn/focus/delete helpers from desktop tiles or mobile list, permission presets, mission assignment and delivery, owner inbox. A background stuck-detector scans each helper's tmux pane and posts auto `blocked` reports to the owner inbox when a known CLI modal (approval prompt, model picker, usage-limit notice, survey) is visible, so the operator notices stalled helpers without polling. See [Multi-Agent Guide](doc/guides/multi-agent.md).
+- **MCP signaling** — `face.event` / `face.say` / `face.ping` plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`)
 - **3D face** — eyebrow/eye/mouth/head animation, state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`), drag control, panel toggles
 - **TTS** — Kokoro ONNX + Misaki default, optional Qwen3-TTS Japanese backend, freshness-first speech policy. See [TTS and Speech Guide](doc/guides/tts-and-speech.md).
 - **ASR** — Parakeet batch, optional Voxtral realtime. See [Operator Stack and ASR Guide](doc/guides/operator-stack.md).
@@ -339,32 +339,53 @@ parent process, or from `MH_FACE_ENV_FILE`. The default env file is
 `~/.config/minimum-headroom.env`. Keep real tokens out of checked-in Codex
 config files.
 
-### Gemini CLI
+### Antigravity (CLI and GUI)
 
-Use `doc/examples/antigravity/mcp_config.json` as a template. Place in `~/.gemini/` or a project-local `.gemini/` folder. Gemini requires `MCP_TOOL_NAME_STYLE=underscore`.
+Both the `agy` terminal CLI and the Antigravity GUI (Electron desktop app) are supported. They share `~/.gemini/` but read MCP servers and skills from **different paths**, so the install steps differ — see [Antigravity setup details](doc/examples/antigravity/README.md) for the full matrix. The CLI uses `agy plugin install` into `~/.gemini/antigravity-cli/plugins/`; the GUI reads `~/.gemini/config/mcp_config.json` and looks for skills under `~/.gemini/config/plugins/`. Hooks can use `hooks.json`; current builds can also use the shared `~/.gemini/settings.json` snippet. Replace `/ABS/PATH/minimum-headroom` in `mcp_config.json`, `hooks.json`, and `settings-hooks.snippet.json` with the absolute path to your checkout first.
 
-```json
-{
-  "mcpServers": {
-    "minimum-headroom": {
-      "command": "/ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh",
-      "args": [],
-      "env": {
-        "FACE_WS_URL": "ws://127.0.0.1:8765/ws",
-        "MCP_TOOL_NAME_STYLE": "underscore"
-      }
-    }
-  }
-}
+```bash
+# 0. Edit doc/examples/antigravity/{mcp_config.json,hooks.json,settings-hooks.snippet.json}:
+#    replace /ABS/PATH/minimum-headroom with the absolute path of your checkout.
+
+# --- CLI (agy) -----------------------------------------------------------------
+agy plugin install doc/examples/antigravity                   # idempotent
+# optional: also drop the skill so /skills shows it
+mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
+cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+   ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
+
+# --- GUI -----------------------------------------------------------------------
+# 1. Merge mcp_config.json into ~/.gemini/config/mcp_config.json
+#    (this file is often a 0-byte stub that silently breaks every MCP server until valid).
+# 2. Drop plugin.json + the skill under ~/.gemini/config/plugins/minimum-headroom/
+mkdir -p ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops
+cp doc/examples/antigravity/plugin.json \
+   ~/.gemini/config/plugins/minimum-headroom/plugin.json
+cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+   ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
+
+# --- shared: hooks --------------------------------------------------------------
+# Use doc/examples/antigravity/hooks.json, or merge settings-hooks.snippet.json into
+# ~/.gemini/settings.json if your installed agy build does not load plugin hooks.
 ```
 
-See [Gemini setup details](doc/examples/antigravity/README.md) for permission presets and AGENTS.md guidance.
+After installing, restart `agy` (CLI) and **fully quit + relaunch** the GUI (close-to-tray does not re-read configs). In `agy` type `/mcp`; in the GUI ask the chat `List every MCP tool you can call right now`. Both should list `minimum_headroom` with `face_event` / `face_say` / `face_ping` and the agent lifecycle tools.
+
+See [Antigravity setup details](doc/examples/antigravity/README.md) for the path matrix, common failure modes (especially the 0-byte `mcp_config.json` trap on GUI), permission presets, and the `GEMINI.md` rule placement. The RMH voice-first launcher at `examples/rmh-voice-mode/start-rmh.sh --agent agy` handles the CLI plugin install automatically with the machine's path resolved.
 
 ### Agent Instructions
 
 - Place an `AGENTS.md` in your target repository root (use `doc/examples/AGENTS.sample.md` as the starting template).
 - Include signaling rules from `doc/examples/AGENT_RULES.md` in the agent instructions.
-- For Claude Code, you can also use `CLAUDE.md` for Claude-specific project instructions.
+- For Claude Code, use `CLAUDE.md`; for Antigravity CLI (`agy`), use `GEMINI.md`; Codex CLI reads `AGENTS.md`.
+
+### Real Minimum Headroom (RMH) voice-first launcher
+
+If you have an AtomS3R running the firmware in `firmware/atoms3r-headroom/`, `examples/rmh-voice-mode/` is a turnkey workspace that makes any of Claude Code, Codex, or Antigravity CLI talk to you through the device. From there:
+
+    examples/rmh-voice-mode/start-rmh.sh --agent {claude|codex|agy} [--model <id>]
+
+The script auto-detects the repo root (no hard-coded paths), exports `MH_FACE_AGENT_ID=__operator__`, renders the per-CLI MCP config into a runtime directory, and launches the chosen CLI in this folder so it reads the voice-first rules in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`. For Codex, that generated config also includes hooks; for agy, the script installs the MCP plugin and leaves hook setup as the one-time Antigravity step documented above. Conservative light-model defaults (`haiku` for Claude, `gpt-5-mini` for Codex) keep RMH conversations responsive. See `examples/rmh-voice-mode/README.md` for details.
 
 ### Tool name style
 
@@ -383,7 +404,7 @@ If your MCP client rejects tool names with dots (for example `face.event`), set 
 events to a `face_say` + `face_event` (and an owner-inbox entry for helpers),
 so the face speaks even when the agent forgets to call `face_say` voluntarily.
 Currently supports Claude Code, Codex (new `hooks` system + legacy `notify`
-fallback), and Gemini CLI.
+fallback), and Antigravity CLI.
 
 Configuration:
 
@@ -391,7 +412,7 @@ Configuration:
 - Embedded in the per-runtime setup READMEs: `doc/examples/claude-code/README.md`, `doc/examples/codex/config.toml`, `doc/examples/antigravity/README.md`
 
 The hook only fires when `MH_FACE_AGENT_ID` is set in the agent process
-environment, so unrelated Claude/Codex/Gemini sessions on the same machine are
+environment, so unrelated Claude/Codex/Antigravity sessions on the same machine are
 unaffected. Templates (the lines spoken on each event) live at
 `~/.minimum-headroom/face-templates.json`; if absent, the built-in
 Japanese + English defaults are used. Language is auto-detected from the
@@ -419,7 +440,7 @@ This repository includes reusable skill packages under `doc/examples/skills/`:
 
 Each folder contains a `SKILL.md` and can be copied into your local skills directory (for example `$CODEX_HOME/skills/`) if your agent supports local skill loading.
 
-If you are using the minimum-headroom operator/helper runtime, install `minimum-headroom-ops`. It covers the expected MCP lifecycle flow (`agent.list`, `agent.spawn`, `agent.assign`, `agent.inject`, `agent.assignment.list`, `owner.inbox.*`, `agent.delete`) and the helper reporting contract.
+If you are using the minimum-headroom operator/helper runtime, install `minimum-headroom-ops`. It covers the expected MCP lifecycle flow (`agent.list`, `agent.spawn`, `agent.assign`, `agent.inject`, `agent.assignment.list`, `owner.inbox.*`, `agent.delete`), the stuck-helper recovery flow (`agent.pane_snapshot`, `agent.pane_send_key`), and the helper reporting contract.
 
 ## Release Checklist
 
@@ -482,7 +503,7 @@ npm run asr-worker:smoke
 ## 全体像（要点）
 
 - **スマホから PC のコーディングエージェントを操作** — モバイルブラウザで承認・入力・音声コマンドを送信できます。
-- **Claude Code、Codex CLI、Gemini CLI に対応** — ターミナルで動くエージェントなら何でも使えます。
+- **Claude Code、Codex CLI、Antigravity CLI に対応** — ターミナルで動くエージェントなら何でも使えます。
 - **tmux operator bridge** がブラウザ UI とエージェントペイン間の入出力を中継します。
 - **3D フェイス + TTS + MCP シグナリング** でエージェントに声と表情を与え、状態をリアルタイムに反映します。
 - **マルチエージェント対応**（実験的） — 分離 worktree に helper を生成し、権限プリセットとミッション追跡で管理します。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
@@ -493,8 +514,8 @@ npm run asr-worker:smoke
 
 - **オペレーター入力** — 端末直接入力、ブラウザ PTT（JA/EN ASR）、テキスト入力、Desktop `Space`/`Shift+Space` 長押し安全装置、キー操作（`Esc`, `↑`, `Select`, `↓`）
 - **ターミナルミラー** — tmux 末尾出力の読み取り専用スナップショット（500ms、変更時のみ）。実機の幅そのままで描画され、長い行は横スクロール。タッチ端末では指の位置を中心にピンチズーム、ダブルタップで等倍復帰
-- **マルチエージェント**（実験的） — Desktop タイルまたは Mobile リストから helper の生成/フォーカス/削除、権限プリセット、ミッション割当・配信、owner inbox。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
-- **MCP シグナリング** — `face.event` / `face.say` / `face.ping` およびエージェントライフサイクルツール（`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `owner.inbox.*`）
+- **マルチエージェント**（実験的） — Desktop タイルまたは Mobile リストから helper の生成/フォーカス/削除、権限プリセット、ミッション割当・配信、owner inbox。バックグラウンドの stuck-detector が各 helper の tmux pane を監視し、既知の CLI モーダル（承認プロンプト、モデルピッカー、利用上限通知、サーベイ）を検出すると owner inbox に自動で `blocked` レポートを投函するので、ポーリング不要で停止に気づけます。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
+- **MCP シグナリング** — `face.event` / `face.say` / `face.ping` およびエージェントライフサイクルツール（`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`）
 - **3D フェイス** — 眉・目・口・頭のアニメーション、状態モード（`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`）、ドラッグ制御、パネル切替
 - **TTS** — Kokoro ONNX + Misaki 既定、任意 Qwen3-TTS 日本語 backend、鮮度優先発話ポリシー。[TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) を参照。
 - **ASR** — Parakeet batch、任意 Voxtral realtime。[Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) を参照。
@@ -787,33 +808,46 @@ face-app をループバック外に bind して `MH_FACE_AUTH_TOKEN` が必要�
 `~/.config/minimum-headroom.env` です。実 token は Codex config に
 チェックインしないでください。
 
-### Gemini CLI
+### Antigravity (CLI と GUI)
 
-`doc/examples/antigravity/mcp_config.json` をテンプレートとして使い、`~/.gemini/` またはプロジェクト内 `.gemini/` に配置。Gemini は `MCP_TOOL_NAME_STYLE=underscore` が必要です。
+`agy` ターミナル CLI と Antigravity GUI (Electron アプリ) の両方に対応します。両者は `~/.gemini/` を共有しますが **MCP サーバ・skill の読み取りパスが異なる**ので、導入手順も別です — 詳細マトリクスは [Antigravity setup](doc/examples/antigravity/README.md) を参照。CLI は `agy plugin install` で `~/.gemini/antigravity-cli/plugins/` へ、GUI は `~/.gemini/config/mcp_config.json` を直接読み、skill は `~/.gemini/config/plugins/` 配下を見ます。hook は `hooks.json` を利用できます。現行 build では共有 `~/.gemini/settings.json` snippet も使えます。事前に `mcp_config.json`、`hooks.json`、`settings-hooks.snippet.json` の `/ABS/PATH/minimum-headroom` をご自分のチェックアウトの絶対パスへ置換してください。
 
-```json
-{
-  "mcpServers": {
-    "minimum-headroom": {
-      "command": "/ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh",
-      "args": [],
-      "env": {
-        "FACE_WS_URL": "ws://127.0.0.1:8765/ws",
-        "MCP_TOOL_NAME_STYLE": "underscore"
-      }
-    }
-  }
-}
+```bash
+# 0. doc/examples/antigravity/{mcp_config.json,hooks.json,settings-hooks.snippet.json} の
+#    /ABS/PATH/minimum-headroom を絶対パスへ置換
+
+# --- CLI (agy) ---
+agy plugin install doc/examples/antigravity                   # 冪等
+# 任意: skill も入れて /skills に出るようにする
+mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
+cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+   ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
+
+# --- GUI ---
+# 1. ~/.gemini/config/mcp_config.json に mcp_config.json をマージ
+#    （このファイルが 0 バイトだと全 MCP が無音で落ちるトラップ。要確認）
+# 2. plugin.json + skill を ~/.gemini/config/plugins/minimum-headroom/ 配下に配置
+mkdir -p ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops
+cp doc/examples/antigravity/plugin.json \
+   ~/.gemini/config/plugins/minimum-headroom/plugin.json
+cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+   ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
+
+# --- 共通: hook ---
+# doc/examples/antigravity/hooks.json を使うか、plugin hooks を読まない agy build では
+# settings-hooks.snippet.json を ~/.gemini/settings.json にマージ
 ```
 
-権限プリセットと AGENTS.md の詳細は [Gemini setup](doc/examples/antigravity/README.md) を参照。
+インストール後 `agy` を再起動、GUI は **完全終了 → 再起動** (タスクトレイに残ったままだと設定を読み直しません)。CLI なら `/mcp`、GUI ならチャットで `List every MCP tool you can call right now` と聞くと `minimum_headroom` の `face_event` / `face_say` / `face_ping` 及び agent ライフサイクルツールが列挙されます。
+
+詳細パスマトリクス、よくある失敗パターン (特に GUI の 0 バイト `mcp_config.json` トラップ)、権限プリセット、`GEMINI.md` ルール配置は [Antigravity setup](doc/examples/antigravity/README.md) を参照。RMH voice-first ランチャ `examples/rmh-voice-mode/start-rmh.sh --agent agy` は CLI のプラグインインストールをマシン固有のパス解決込みで自動実行します。
 
 ### Hook ブリッジ（face_say の安全網）
 
-エージェントが `face_say` を呼び忘れて承認待ちで沈黙した場合や、最終 report なしで turn が終わった場合に、ランタイムの hook 機構から自動的に face を喋らせる仕組みです。Claude Code / Codex（新 `hooks` 系）/ Gemini CLI に対応。
+エージェントが `face_say` を呼び忘れて承認待ちで沈黙した場合や、最終 report なしで turn が終わった場合に、ランタイムの hook 機構から自動的に face を喋らせる仕組みです。Claude Code / Codex（新 `hooks` 系）/ Antigravity CLI に対応。
 
 - ドロップインの設定例: `doc/hook-bridge/`
-- 各ランタイムの setup README（Claude / Codex / Gemini）にも同じスニペットを掲載
+- 各ランタイムの setup README（Claude / Codex / Antigravity）にも同じスニペットを掲載
 - 詳細な設定手順: `doc/hook-bridge/README.md`
 
 `MH_FACE_AGENT_ID` が agent process に設定されていないとき hook は何もせず exit 0 で終了するため、関係ない別 session には影響しません。発話テンプレートは `~/.minimum-headroom/face-templates.json` で上書き可能（無い場合は日本語 + 英語の組込みデフォルト）。言語は直近の `face_say` 履歴から自動判定（CJK 文字 → `ja`、それ以外 → `en`）、`MH_FACE_LANG` がフォールバック。
@@ -826,7 +860,15 @@ Codex は user-defined hook を起動時に untrusted として silent skip す�
 
 - target repository のルートに `AGENTS.md` を配置（`doc/examples/AGENTS.sample.md` をテンプレートとして使用）。
 - `doc/examples/AGENT_RULES.md` のシグナリング規約をエージェント指示に含める。
-- Claude Code の場合は `CLAUDE.md` で Claude 固有のプロジェクト指示も利用可能。
+- Claude Code は `CLAUDE.md`、Antigravity CLI (`agy`) は `GEMINI.md`、Codex CLI は `AGENTS.md` を読み込みます。
+
+### Real Minimum Headroom (RMH) 音声優先ランチャ
+
+AtomS3R に `firmware/atoms3r-headroom/` のファームを焼いた物理デバイスがある場合、`examples/rmh-voice-mode/` は Claude Code / Codex / Antigravity CLI のいずれでも AtomS3R で音声会話するためのワークスペース雛形です。
+
+    examples/rmh-voice-mode/start-rmh.sh --agent {claude|codex|agy} [--model <id>]
+
+スクリプトはリポジトリのルートを自動検出（ハードコーディングなし）し、`MH_FACE_AGENT_ID=__operator__` を export、CLI 別の MCP 設定をランタイムディレクトリへ展開してから、このフォルダ内で CLI を起動します。Codex では生成 config に hook も含めます。agy では MCP plugin をインストールし、hook 設定は上記 Antigravity 手順の 1 回限りの設定として残します。これにより `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` の voice-first ルールが読み込まれ、回答は `face_say` で音声化されます。軽量モデル既定（Claude=`haiku`, Codex=`gpt-5-mini`）で RMH 会話のレスポンスを軽快に保ちます。詳細は `examples/rmh-voice-mode/README.md` を参照。
 
 ### ツール名スタイル
 
@@ -849,7 +891,7 @@ MCP クライアントがドット付きツール名（例: `face.event`）を�
 
 各フォルダには `SKILL.md` があり、対応エージェントではローカルスキルディレクトリ（例: `$CODEX_HOME/skills/`）へコピーして利用できます。
 
-minimum-headroom の operator/helper runtime を使う場合は、`minimum-headroom-ops` の導入を推奨します。`agent.list`, `agent.spawn`, `agent.assign`, `agent.inject`, `agent.assignment.list`, `owner.inbox.*`, `agent.delete` を使う標準フローと、helper report の規約をまとめています。
+minimum-headroom の operator/helper runtime を使う場合は、`minimum-headroom-ops` の導入を推奨します。`agent.list`, `agent.spawn`, `agent.assign`, `agent.inject`, `agent.assignment.list`, `owner.inbox.*`, `agent.delete` の標準フロー、`agent.pane_snapshot` / `agent.pane_send_key` による stuck helper 復旧フロー、helper report の規約をまとめています。
 
 ## リリースチェックリスト
 

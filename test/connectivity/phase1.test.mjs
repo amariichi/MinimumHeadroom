@@ -192,14 +192,23 @@ test('phase1 connectivity forwards face.event and face.say to face-app', async (
   assert.equal(sayPayload.text, 'できた！');
   assert.equal(typeof sayPayload.utterance_id, 'string');
 
-  const invalidCallResult = await client.request('tools/call', {
+  const priorEventCount = receivedPayloads.filter((payload) => payload.type === 'event').length;
+  const defaultSessionCallResult = await client.request('tools/call', {
     name: 'face.event',
     arguments: {
-      name: 'cmd_started'
+      name: 'cmd_succeeded'
     }
   });
-  assert.equal(invalidCallResult.isError, true);
-  assert.match(invalidCallResult.content[0].text, /session_id/);
+  assert.equal(defaultSessionCallResult.isError, undefined);
+  await waitFor(
+    () => receivedPayloads.filter((payload) => payload.type === 'event').length > priorEventCount,
+    3000,
+    'default session event payload'
+  );
+  const defaultSessionPayload = receivedPayloads.find(
+    (payload) => payload.type === 'event' && payload.name === 'cmd_succeeded'
+  );
+  assert.equal(defaultSessionPayload.session_id, 'operator');
 
   assert.match(stderrLog, /ready; forwarding to/);
 });

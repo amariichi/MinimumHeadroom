@@ -1,6 +1,6 @@
 {
   "name": "minimum-headroom",
-  "version": "1.16.1",
+  "version": "1.17.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,6 +21,7 @@
     "mcp-server:run": "./scripts/run-mcp-server.sh",
     "tts-worker:run": "./scripts/run-tts-worker.sh",
     "tts-worker:smoke": "./scripts/run-tts-worker.sh --smoke",
+    "atoms3r:bridge": "node scripts/atoms3r-http-bridge.mjs",
     "test": "node --test"
   }
 }

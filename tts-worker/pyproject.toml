@@ -1,7 +1,7 @@
 [project]
 name = "minimum-headroom-tts-worker"
-version = "1.16.1"
-description = "Minimum Headroom phase3 tts worker"
+version = "1.17.0"
+description = "Minimum Headroom TTS worker (Kokoro ONNX default, optional Qwen3-TTS)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

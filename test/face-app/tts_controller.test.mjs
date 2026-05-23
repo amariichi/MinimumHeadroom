@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTtsController } from '../../face-app/dist/tts_controller.js';
+import { createTtsController, segmentTtsText } from '../../face-app/dist/tts_controller.js';
 
 class FakeWorker {
   constructor() {
@@ -523,6 +523,98 @@ test('tts controller relays worker audio payload when browser audio is enabled',
   assert.equal(relayed.audio_base64, 'ZmFrZQ==');
 });
 
+test('tts controller broadcasts audio reference when audio store is configured', async () => {
+  const worker = new FakeWorker();
+  const broadcasts = [];
+  const stored = [];
+  const controller = createTtsController({
+    worker,
+    now: () => 32_000,
+    audioTarget: 'browser',
+    audioStore: {
+      putAudio(payload) {
+        stored.push(payload);
+        return {
+          id: 'audio-1',
+          sessionId: payload.sessionId,
+          agentId: payload.agentId,
+          agentLabel: payload.agentLabel,
+          utteranceId: payload.utteranceId,
+          generation: payload.generation,
+          messageId: payload.messageId,
+          revision: payload.revision,
+          mimeType: payload.mimeType,
+          sampleRate: payload.sampleRate,
+          byteLength: 4,
+          durationMs: null,
+          expiresAt: 92_000
+        };
+      },
+      toReferencePayload(entry) {
+        return {
+          v: 1,
+          type: 'tts_audio_ref',
+          session_id: entry.sessionId,
+          utterance_id: entry.utteranceId,
+          generation: entry.generation,
+          message_id: entry.messageId,
+          revision: entry.revision,
+          mime_type: entry.mimeType,
+          sample_rate: entry.sampleRate,
+          byte_length: entry.byteLength,
+          duration_ms: entry.durationMs,
+          expires_at: entry.expiresAt,
+          url: `/api/tts/audio/${entry.id}.wav`,
+          ts: 32_000
+        };
+      }
+    },
+    gate: { check: () => ({ allow: true }) },
+    broadcast(payload) {
+      broadcasts.push(payload);
+      return true;
+    },
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro', playback_backend: 'silent' });
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    message_id: 'm-1',
+    revision: 123,
+    agent_id: '__operator__',
+    text: 'browser audio',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 4_000,
+    ts: 32_000
+  });
+
+  worker.emit('message', {
+    type: 'audio',
+    generation: 1,
+    mime_type: 'audio/wav',
+    sample_rate: 24_000,
+    audio_base64: 'ZmFrZQ=='
+  });
+
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].audioBase64, 'ZmFrZQ==');
+  assert.equal(stored[0].agentId, '__operator__');
+
+  const ref = broadcasts.find((payload) => payload.type === 'tts_audio_ref');
+  assert.ok(ref);
+  assert.equal(ref.url, '/api/tts/audio/audio-1.wav');
+  assert.equal(ref.message_id, 'm-1');
+  assert.equal(ref.sample_rate, 24_000);
+
+  const base64 = broadcasts.find((payload) => payload.type === 'tts_audio');
+  assert.ok(base64);
+  assert.equal(base64.audio_base64, 'ZmFrZQ==');
+});
+
 test('tts controller does not relay worker audio payload in local-only mode', async () => {
   const worker = new FakeWorker();
   const broadcasts = [];
@@ -636,4 +728,175 @@ test('tts controller drops punctuation-only utterance after normalization', asyn
   assert.equal(result.accepted, false);
   assert.equal(result.reason, 'invalid_payload');
   assert.equal(speaks(worker).length, 0);
+});
+
+// --- Step 1: long-utterance sentence chunking + sequential FIFO ---
+
+test('segmentTtsText returns short text verbatim as a single chunk', () => {
+  assert.deepEqual(segmentTtsText('こんにちは。ありがとう。', 120), ['こんにちは。ありがとう。']);
+  assert.deepEqual(segmentTtsText('', 120), []);
+});
+
+test('segmentTtsText splits long text on sentence boundaries within the limit', () => {
+  const text = '一つ目の文です。二つ目の文です。三つ目の文です。';
+  const chunks = segmentTtsText(text, 8);
+  assert.deepEqual(chunks, ['一つ目の文です。', '二つ目の文です。', '三つ目の文です。']);
+  for (const chunk of chunks) {
+    assert.ok(chunk.length <= 8, `chunk too long: ${chunk}`);
+  }
+  assert.equal(chunks.join(''), text);
+});
+
+test('segmentTtsText soft-splits an oversized single sentence on commas', () => {
+  const text = 'あ、'.repeat(40); // 80 chars, no hard boundary
+  const chunks = segmentTtsText(text, 20);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) {
+    assert.ok(chunk.length <= 20, `chunk too long: ${chunk}`);
+  }
+});
+
+function makeController(options = {}) {
+  const worker = new FakeWorker();
+  const controller = createTtsController({
+    worker,
+    now: () => 42_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    ...options
+  });
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+  return { worker, controller };
+}
+
+function finishActive(worker, generation) {
+  worker.emit('message', { type: 'event', phase: 'play_stop', generation });
+}
+
+test('tts controller dispatches long-utterance chunks sequentially in order', async () => {
+  const { worker, controller } = makeController({ maxChunkChars: 8 });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '一つ目の文です。二つ目の文です。三つ目の文です。'
+  });
+
+  // Only the first chunk is sent to the worker until it finishes.
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(speaks(worker)[0].text, '一つ目の文です。');
+
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 2);
+  assert.equal(speaks(worker)[1].text, '二つ目の文です。');
+
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 3);
+  assert.equal(speaks(worker)[2].text, '三つ目の文です。');
+
+  // Draining the queue does not resend anything.
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 3);
+});
+
+test('tts controller flushes queued chunks when an interrupt utterance arrives', async () => {
+  const { worker, controller } = makeController({ maxChunkChars: 8 });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '一つ目の文です。二つ目の文です。三つ目の文です。'
+  });
+  assert.equal(speaks(worker).length, 1);
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u2',
+    priority: 3,
+    policy: 'interrupt',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '緊急。'
+  });
+
+  assert.equal(interrupts(worker).length, 1);
+  assert.equal(speaks(worker).length, 2);
+  assert.equal(speaks(worker)[1].text, '緊急。');
+
+  // The superseded utterance's queued chunks must not replay.
+  finishActive(worker, 2);
+  finishActive(worker, 2);
+  assert.equal(speaks(worker).length, 2);
+});
+
+// --- Step 2: operator PTT barge-in flushes the queue ---
+
+test('tts controller flushForBargeIn drops active and queued chunks', async () => {
+  const { worker, controller } = makeController({ maxChunkChars: 8 });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '一つ目の文です。二つ目の文です。三つ目の文です。'
+  });
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(controller.snapshot().queuedChunks, 2);
+
+  await controller.flushForBargeIn('operator_ptt');
+
+  assert.equal(interrupts(worker).length, 1);
+  assert.equal(controller.snapshot().activeGeneration, null);
+  assert.equal(controller.snapshot().queuedChunks, 0);
+
+  // Stale worker completion must not resurrect queued chunks.
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 1);
+
+  // A new utterance after barge-in uses a fresh, higher generation.
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u2',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '再開します。'
+  });
+  assert.equal(speaks(worker).length, 2);
+  assert.ok(speaks(worker)[1].generation > speaks(worker)[0].generation);
+});
+
+test('tts controller flushForBargeIn clears the audio store', async () => {
+  const worker = new FakeWorker();
+  let cleared = 0;
+  const controller = createTtsController({
+    worker,
+    now: () => 42_000,
+    gate: { check: () => ({ allow: true }) },
+    broadcast: () => true,
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    audioStore: { clear: () => { cleared += 1; } }
+  });
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+
+  await controller.flushForBargeIn('operator_ptt');
+  assert.equal(cleared, 1);
 });

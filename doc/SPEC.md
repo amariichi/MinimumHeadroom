@@ -49,7 +49,7 @@
 - **stdio型**にしてクライアント汎用（Codex/Claude Code/Antigravity）
 
 3) 任意: アダプタ（ログ監視）
-- Codex/Claude/Gemini等、特定CLIログから event を自動生成するのは後付け可能
+- Codex/Claude/Antigravity等、特定CLIログから event を自動生成するのは後付け可能
 - MVPでは agent 自身が MCPツールを呼べればOK
 - ただし「呼ばない日」の保険として後で導入しやすい設計にする
 

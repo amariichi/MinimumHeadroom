@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.16.0';
+const SERVER_VERSION = '1.17.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_AUTH_TOKEN = (() => {
@@ -47,6 +47,20 @@ const FACE_AGENT_ID_REQUIRED = (() => {
   const raw = process.env.MH_FACE_AGENT_ID_REQUIRED ?? process.env.MH_FACE_IDENTITY_STRICT;
   return typeof raw === 'string' && ['1', 'true', 'yes'].includes(raw.trim().toLowerCase());
 })();
+// session_id is an identifier, not the routing key (agent_id routes). Weak
+// local models often fail to supply it, so auto-fill from MH_FACE_SESSION_ID
+// with a stable fallback, mirroring the MH_FACE_AGENT_ID auto-fill.
+const DEFAULT_FACE_SESSION_ID = (() => {
+  const raw = process.env.MH_FACE_SESSION_ID;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : 'operator';
+})();
+function resolveSessionId(args) {
+  const raw = args?.session_id;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    return raw.trim();
+  }
+  return DEFAULT_FACE_SESSION_ID;
+}
 
 const EVENT_NAMES = new Set([
   'cmd_started',
@@ -61,7 +75,7 @@ const EVENT_NAMES = new Set([
 ]);
 
 const HOOK_EVENT_NAMES = new Set(['permission_required', 'idle_after_response']);
-const HOOK_RUNTIMES = new Set(['claude', 'codex', 'gemini']);
+const HOOK_RUNTIMES = new Set(['claude', 'codex', 'antigravity']);
 
 const BASE_TOOL_DEFINITIONS = [
   {
@@ -70,7 +84,7 @@ const BASE_TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       additionalProperties: true,
-      required: ['session_id', 'name'],
+      required: ['name'],
       properties: {
         session_id: { type: 'string', minLength: 1 },
         agent_id: { type: ['string', 'null'] },
@@ -88,7 +102,7 @@ const BASE_TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       additionalProperties: true,
-      required: ['session_id', 'text'],
+      required: ['text'],
       properties: {
         session_id: { type: 'string', minLength: 1 },
         agent_id: { type: ['string', 'null'] },
@@ -110,7 +124,7 @@ const BASE_TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       additionalProperties: true,
-      required: ['session_id'],
+      required: [],
       properties: {
         session_id: { type: 'string', minLength: 1 },
         agent_id: { type: ['string', 'null'] },
@@ -129,7 +143,7 @@ const BASE_TOOL_DEFINITIONS = [
         event: { type: 'string', enum: ['permission_required', 'idle_after_response'] },
         agent_id: { type: ['string', 'null'] },
         session_id: { type: ['string', 'null'] },
-        runtime: { type: ['string', 'null'], enum: ['claude', 'codex', 'gemini', null] },
+        runtime: { type: ['string', 'null'], enum: ['claude', 'codex', 'antigravity', null] },
         meta: { type: 'object' }
       }
     }
@@ -191,6 +205,38 @@ const BASE_TOOL_DEFINITIONS = [
       required: ['agent_id'],
       properties: {
         agent_id: { type: 'string', minLength: 1 }
+      }
+    }
+  },
+  {
+    name: 'agent.pane_snapshot',
+    description: "Return the tail of a helper agent's tmux pane (ANSI stripped).",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      required: ['agent_id'],
+      properties: {
+        agent_id: { type: 'string', minLength: 1 },
+        tail_lines: { type: ['integer', 'null'], minimum: 1, maximum: 400 }
+      }
+    }
+  },
+  {
+    name: 'agent.pane_send_key',
+    description: "Send raw tmux keys to a helper agent's pane (e.g. ['2','Enter']). For answering CLI modals, not for delivering missions.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      required: ['agent_id', 'keys'],
+      properties: {
+        agent_id: { type: 'string', minLength: 1 },
+        keys: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 32,
+          items: { type: 'string', minLength: 1 }
+        },
+        literal: { type: ['boolean', 'null'] }
       }
     }
   },
@@ -352,6 +398,12 @@ function canonicalizeToolName(toolName) {
   }
   if (toolName === 'agent_delete') {
     return 'agent.delete';
+  }
+  if (toolName === 'agent_pane_snapshot') {
+    return 'agent.pane_snapshot';
+  }
+  if (toolName === 'agent_pane_send_key') {
+    return 'agent.pane_send_key';
   }
   if (toolName === 'agent_assign') {
     return 'agent.assign';
@@ -706,7 +758,7 @@ async function forwardToFace(payload, options = {}) {
 
 function normalizeEventPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
-  const sessionId = requireString(args, 'session_id');
+  const sessionId = resolveSessionId(args);
   const identity = resolveFaceIdentity(args);
   const name = requireString(args, 'name');
   if (!EVENT_NAMES.has(name)) {
@@ -740,7 +792,7 @@ function normalizeEventPayload(rawArguments) {
 
 function normalizeSayPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
-  const sessionId = requireString(args, 'session_id');
+  const sessionId = resolveSessionId(args);
   const identity = resolveFaceIdentity(args);
   const text = requireString(args, 'text');
   const priority = clamp(optionalInteger(args, 'priority', 0), 0, 3);
@@ -823,7 +875,7 @@ function normalizeHookPayload(rawArguments) {
 
 function normalizePingPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
-  const sessionId = requireString(args, 'session_id');
+  const sessionId = resolveSessionId(args);
   const identity = resolveFaceIdentity(args);
 
   const payload = {
@@ -978,6 +1030,47 @@ function normalizeAgentDeletePayload(rawArguments) {
   return {
     agent_id: requireString(args, 'agent_id')
   };
+}
+
+function normalizeAgentPaneSnapshotPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const payload = {
+    agent_id: requireString(args, 'agent_id')
+  };
+  if (args.tail_lines !== undefined && args.tail_lines !== null) {
+    if (!Number.isInteger(args.tail_lines) || args.tail_lines < 1 || args.tail_lines > 400) {
+      throw new Error('tail_lines must be integer between 1 and 400 or null');
+    }
+    payload.tail_lines = args.tail_lines;
+  }
+  return payload;
+}
+
+function normalizeAgentPaneSendKeyPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const agentId = requireString(args, 'agent_id');
+  if (!Array.isArray(args.keys) || args.keys.length === 0) {
+    throw new Error('keys must be a non-empty array of strings');
+  }
+  if (args.keys.length > 32) {
+    throw new Error('keys must contain at most 32 entries');
+  }
+  for (const candidate of args.keys) {
+    if (typeof candidate !== 'string' || candidate === '') {
+      throw new Error('each key must be a non-empty string');
+    }
+  }
+  const payload = {
+    agent_id: agentId,
+    keys: args.keys.slice()
+  };
+  if (args.literal !== undefined && args.literal !== null) {
+    if (typeof args.literal !== 'boolean') {
+      throw new Error('literal must be boolean or null');
+    }
+    payload.literal = args.literal;
+  }
+  return payload;
 }
 
 function normalizeAgentAssignPayload(rawArguments) {
@@ -1302,6 +1395,62 @@ async function handleToolCall(params) {
       });
     } catch (error) {
       return toolTextResult(`agent.delete failed: ${error.message}`, {
+        isError: true,
+        structuredContent: { ok: false, http: FACE_HTTP_BASE_URL }
+      });
+    }
+  }
+
+  if (toolName === 'agent.pane_snapshot') {
+    try {
+      const payload = normalizeAgentPaneSnapshotPayload(rawArguments);
+      const body = payload.tail_lines !== undefined ? { tail_lines: payload.tail_lines } : {};
+      const { response, payload: apiPayload, url } = await callFaceHttp(`/api/agents/${encodeURIComponent(payload.agent_id)}/pane-snapshot`, {
+        method: 'POST',
+        body
+      });
+      if (!response.ok || apiPayload?.ok !== true) {
+        const detail = typeof apiPayload?.detail === 'string' ? apiPayload.detail : `http_${response.status}`;
+        return toolTextResult(`agent.pane_snapshot failed: ${detail}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, payload: apiPayload }
+        });
+      }
+      const lines = Array.isArray(apiPayload?.result?.lines) ? apiPayload.result.lines : [];
+      return toolTextResult(`captured agent_id=${payload.agent_id} lines=${lines.length}`, {
+        structuredContent: { ok: true, http: url, request: payload, result: apiPayload.result }
+      });
+    } catch (error) {
+      return toolTextResult(`agent.pane_snapshot failed: ${error.message}`, {
+        isError: true,
+        structuredContent: { ok: false, http: FACE_HTTP_BASE_URL }
+      });
+    }
+  }
+
+  if (toolName === 'agent.pane_send_key') {
+    try {
+      const payload = normalizeAgentPaneSendKeyPayload(rawArguments);
+      const body = { keys: payload.keys };
+      if (payload.literal !== undefined) {
+        body.literal = payload.literal;
+      }
+      const { response, payload: apiPayload, url } = await callFaceHttp(`/api/agents/${encodeURIComponent(payload.agent_id)}/pane-send-key`, {
+        method: 'POST',
+        body
+      });
+      if (!response.ok || apiPayload?.ok !== true) {
+        const detail = typeof apiPayload?.detail === 'string' ? apiPayload.detail : `http_${response.status}`;
+        return toolTextResult(`agent.pane_send_key failed: ${detail}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, payload: apiPayload }
+        });
+      }
+      return toolTextResult(`sent keys=${payload.keys.length} to agent_id=${payload.agent_id}`, {
+        structuredContent: { ok: true, http: url, request: payload, result: apiPayload.result }
+      });
+    } catch (error) {
+      return toolTextResult(`agent.pane_send_key failed: ${error.message}`, {
         isError: true,
         structuredContent: { ok: false, http: FACE_HTTP_BASE_URL }
       });

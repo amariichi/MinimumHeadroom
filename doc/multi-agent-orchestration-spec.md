@@ -20,7 +20,7 @@ The main problem is stall. When `operator` is waiting for user input on stdin, o
 
 The second problem is conversational ownership. The user usually did not delegate work directly to helper agents. The user delegated work to `operator`. If helper agents ask the user questions directly, the user must reconstruct internal decomposition that only `operator` knows. That is poor UX and will fail often.
 
-The third problem is heterogeneous agents. This repository can host more than Codex. A future workflow might use one Gemini-like agent for design ideation, one Codex helper for implementation, and another Codex helper for review. The orchestration rules must therefore avoid product-specific assumptions whenever possible.
+The third problem is heterogeneous agents. This repository can host more than Codex. A future workflow might use one Antigravity-like agent for design ideation, one Codex helper for implementation, and another Codex helper for review. The orchestration rules must therefore avoid product-specific assumptions whenever possible.
 
 The fourth problem is false confidence from weak lifecycle signals. This repository can infer `prompt_idle` from activity silence, but that signal is not authoritative enough to drive orchestration decisions by itself. A helper can appear quiet because it is finished, because it is blocked, or because the owner is stalled.
 
@@ -435,6 +435,30 @@ At minimum:
 
 This prevents durable inbox state from remaining forever active after the work stream itself has ended.
 
+### 7.7 Stuck CLI Modals and Pane Control
+
+The stall behavior above assumes a helper that is either making progress, finished, or reachable for an explicit `blocked` / `question` report. There is a fourth state that does not fit those cases: the helper's CLI is showing a modal dialog (tool-approval prompt, model picker, usage-limit notice, feedback survey) that captures terminal input, so the underlying LLM is not reading anything. In that state the helper cannot emit `agent.report` on its own, mission delivery via `agent.inject` is consumed by the modal instead of the model, and `agent.assignment.list` eventually shows `delivery_state=timeout` with no diagnostic information.
+
+A time-resilient orchestration system must surface this case the same way it surfaces helper-originated reports: as an unresolved item in the owner inbox that the owner can act on after returning attention.
+
+Required behavior:
+
+- the runtime should run a background detector that periodically inspects each active helper's pane buffer and matches it against a small, evolving set of known CLI-modal patterns (`Do you want to proceed?`, `Switch to gpt-…`, `You've hit your usage limit`, `How's the CLI experience`, `Press enter to confirm`, and similar)
+- on a fresh match the detector must post a `kind=blocked` report into the owner inbox with the matched line and a short pane snippet as `detail`, so that the owner inbox is the single place where attention surfaces — equivalent to a helper-originated `blocked` report
+- the detector must dedupe so that a stable, unchanged modal does not produce repeated reports while attention is already pending; a window of roughly `interval * 6` seconds is the version-one default
+- the detector must be MCP-client-agnostic: it must work whether the owner is Claude Code, Codex CLI, Antigravity CLI, or an automation script, because none of those can reliably reach the helper's tmux pane directly
+
+The required response capability has two pieces:
+
+- read access via `agent.pane_snapshot`, returning the last N lines of a helper's pane with ANSI stripped, so the owner can see the full modal text before deciding what to press
+- write access via `agent.pane_send_key`, accepting an allowlisted set of raw tmux key sequences (printable ASCII plus a small set of named keys such as `Enter`, `Escape`, `Up`, `Down`, control combinations like `C-c` / `C-m` / `C-d`), so the owner can answer the modal directly
+
+Both are tools for raw terminal interaction. They must remain separate from `agent.inject`. `agent.inject` delivers a stored mission to the LLM input channel; `agent.pane_send_key` answers a modal on the terminal channel while the LLM is not reading. Conflating them would force every caller to know which channel applies and would break invariants of mission delivery.
+
+The detector must never auto-press keys. Detection and response are intentionally split: the runtime makes the stuck state visible, the owner chooses the response. This avoids irreversible choices such as `No, and always deny` happening on a regex match.
+
+When the modal is cleared, the mission text that was originally injected may have been lost (consumed by the modal). The owner should re-inject after confirming, via a second `agent.pane_snapshot`, that the modal is gone.
+
 ## 8. Presence and UI Semantics
 
 This section maps orchestration semantics onto the current UI direction of the repository.
@@ -628,7 +652,7 @@ The repository must assume that helper agents may be different products.
 Examples:
 
 - Codex helper for implementation
-- Gemini-like helper for graphics or ideation
+- Antigravity-like helper for graphics or ideation
 - Codex review helper for regression analysis
 
 Therefore, the orchestration contract must depend only on repository-local primitives where possible:

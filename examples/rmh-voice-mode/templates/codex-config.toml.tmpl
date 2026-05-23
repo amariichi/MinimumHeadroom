@@ -1,0 +1,29 @@
+# Project-local Codex config used by start-rmh.sh --agent codex.
+# Loaded via CODEX_HOME=<runtime-dir>. Keep tokens out of this template;
+# run-bound-mcp-server.sh forwards MH_FACE_AUTH_TOKEN from the env or from
+# ~/.config/minimum-headroom.env at launch time.
+
+model = "__CODEX_MODEL__"
+
+[mcp_servers.minimum_headroom]
+command = "__MH_REPO_ROOT__/scripts/run-bound-mcp-server.sh"
+args = []
+env = { "FACE_WS_URL" = "__FACE_WS_URL__", "MCP_TOOL_NAME_STYLE" = "underscore" }
+
+[features]
+hooks = true
+
+[[hooks.PermissionRequest]]
+matcher = ".*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime codex --event permission_required"
+timeout = 5
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime codex --event idle_after_response"
+timeout = 5

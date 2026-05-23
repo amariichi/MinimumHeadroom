@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "minimum-headroom": {
+    "minimum_headroom": {
       "command": "/ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh",
       "args": [],
       "env": {

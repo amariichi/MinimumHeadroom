@@ -14,8 +14,7 @@ when the agent forgets to call `face_say` voluntarily.
 - `codex-config.toml.example` — paste into `~/.codex/config.toml`. Wires the new
   Codex `hooks` system (`PermissionRequest` + `Stop`) and keeps the legacy
   `notify` line as a fallback.
-- `gemini-settings.json.example` — paste into `~/.gemini/settings.json`. Wires
-  Gemini CLI's `Notification` and `AfterAgent` events.
+- `antigravity-hooks.json.example` — copy into an Antigravity `hooks.json`. Wires `Stop` and includes a disabled `PreToolUse` approval-attention example.
 
 ## Codex-specific: trust grant required (one time, user-level)
 
@@ -61,16 +60,15 @@ Source: `codex-rs/hooks/src/engine/discovery.rs` (`HookTrustStatus` filter), `co
 
 ## Output discipline
 
-`mh-hook.mjs` is hard-wired to write nothing to stdout and exit `0` under all
-conditions, including failures. This is required because:
+`mh-hook.mjs` always exits `0`. For Claude Code and Codex it writes nothing to stdout, preserving their hook contracts. For Antigravity CLI, `--runtime antigravity` writes the minimal JSON that Antigravity expects for `PreToolUse` and `Stop` hooks while still forwarding the face hook payload.
 
-- Gemini CLI parses hook stdout as JSON; any stray bytes corrupt the parse.
-- Gemini's `AfterAgent` interprets exit code `2` as "retry this turn with
-  stderr as the new prompt" — exiting non-zero from a safety-net hook would
-  silently kick the agent into an unwanted retry loop.
-- Codex hooks treat exit `2` as a generic block.
+This is required because:
 
-If you customise the wrapper, preserve these invariants.
+- Antigravity hooks use stdout JSON for flow control on events such as `PreToolUse` and `Stop`.
+- Claude Code and Codex hooks should not receive stray stdout from a safety-net hook.
+- Codex hooks treat exit `2` as a generic block, so the wrapper must never exit non-zero.
+
+If you customize the wrapper, preserve these invariants.
 
 ## Templates file
 
@@ -96,13 +94,13 @@ falling back to `MH_FACE_LANG` when the agent has not spoken yet.
 
 ## 日本語
 
-このディレクトリには、各 agent runtime（Claude Code / Codex / Gemini CLI）の hook 機構を `scripts/mh-hook.mjs` に配線するための設定例が入っています。wrapper は canonical な hook event（`permission_required` または `idle_after_response`）を `face_say` + `face_event`、helper の場合はさらに owner inbox エントリに変換します。agent 自身が `face_say` を呼び忘れたときの安全網。
+このディレクトリには、各 agent runtime（Claude Code / Codex / Antigravity CLI）の hook 機構を `scripts/mh-hook.mjs` に配線するための設定例が入っています。wrapper は canonical な hook event（`permission_required` または `idle_after_response`）を `face_say` + `face_event`、helper の場合はさらに owner inbox エントリに変換します。agent 自身が `face_say` を呼び忘れたときの安全網。
 
 ### 同梱ファイル
 
 - `claude-settings.json.example` — `~/.claude/settings.json` にマージ。Claude Code の `Notification` / `Stop` イベントを配線。
 - `codex-config.toml.example` — `~/.codex/config.toml` に追記。Codex の新 `hooks` 系（`PermissionRequest` + `Stop`）を配線。互換のため legacy `notify` フォールバック行もコメント付きで掲載。
-- `gemini-settings.json.example` — `~/.gemini/settings.json` にマージ。Gemini CLI の `Notification` / `AfterAgent` イベントを配線。
+- `antigravity-hooks.json.example` — Antigravity の `hooks.json` として利用。`Stop` と、無効化済みの `PreToolUse` 承認通知例を含みます。
 
 ### Codex 固有：trust 付与は1回だけ・user 単位・helper にも自動継承
 
@@ -141,11 +139,13 @@ trust は user 単位で `~/.codex/config.toml` の `[hooks.state.*]` に永続�
 
 ### 出力規律（重要）
 
-`mh-hook.mjs` は **どんな状況でも stdout に何も出さず exit 0** に固定されています。理由：
+`mh-hook.mjs` は **どんな状況でも exit 0** に固定されています。Claude Code / Codex では stdout に何も出しません。Antigravity CLI では `--runtime antigravity` のときだけ、`PreToolUse` / `Stop` が要求する最小 JSON を stdout に返しながら face hook payload を転送します。
 
-- Gemini CLI は hook の stdout を JSON としてパースする → 余計な出力で破綻
-- Gemini の `AfterAgent` は exit code `2` を「stderr を新しい prompt として retry」と解釈 → safety net hook が exit 2 すると無限 retry ループに陥る
-- Codex hook も exit `2` を block として扱う
+理由：
+
+- Antigravity hook は `PreToolUse` / `Stop` で stdout JSON を flow control に使う
+- Claude Code / Codex では safety-net hook の余計な stdout を避ける必要がある
+- Codex hook は exit `2` を block として扱うため、wrapper は non-zero exit してはいけない
 
 wrapper を改造する場合もこの不変条件は維持してください。
 
