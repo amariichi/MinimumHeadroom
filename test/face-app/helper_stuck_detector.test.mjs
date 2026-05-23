@@ -198,8 +198,67 @@ test('DEFAULT_STUCK_PATTERNS exports the documented pattern ids', () => {
   assert.deepEqual(ids, [
     'agy_survey',
     'claude_approval',
+    'codex_approval',
     'codex_picker',
     'codex_quota',
     'generic_press_enter'
   ]);
+});
+
+test('codex_approval pattern matches the Codex shell-command approval modal', async () => {
+  const agents = [{ id: 'codex-1', pane_id: '%9', stream_id: 'repo:/test', status: 'active' }];
+  const runtime = createFakeRuntime(agents, {
+    'codex-1': [
+      '  Would you like to run the following command?',
+      '',
+      '  Reason: demo',
+      '',
+      '  $ true',
+      '',
+      '› 1. Yes, proceed (y)',
+      '  2. Yes, and don\'t ask again for commands that start with `true` (p)',
+      '  3. No, and tell Codex what to do differently (esc)'
+    ]
+  });
+  const inbox = createFakeInbox();
+  const detector = createHelperStuckDetector({
+    runtime, inboxStore: inbox, log: quietLog
+  });
+
+  const result = await detector.tick();
+
+  assert.equal(result.posted, 1);
+  assert.equal(inbox.reports.length, 1);
+  const report = inbox.reports[0];
+  assert.equal(report.kind, 'blocked');
+  assert.equal(report.from_agent_id, 'codex-1');
+  assert.equal(report.summary, 'helper paused on approval prompt');
+  assert.ok(report.detail.includes('Would you like to run the following command?'));
+});
+
+test('claude_approval pattern also matches the Antigravity permission modal', async () => {
+  // Antigravity uses the same "Do you want to proceed?" phrase as Claude, so
+  // the existing claude_approval pattern covers it without a separate rule.
+  const agents = [{ id: 'agy-1', pane_id: '%11', stream_id: 'repo:/test', status: 'active' }];
+  const runtime = createFakeRuntime(agents, {
+    'agy-1': [
+      '  Requesting permission for: whoami',
+      '',
+      'Do you want to proceed?',
+      '> 1. Yes',
+      '  2. Yes, and always allow in this conversation for commands that start with \'whoami\'',
+      '  3. Yes, and always allow for commands that start with \'whoami\' (Persist to settings.json)',
+      '  4. No'
+    ]
+  });
+  const inbox = createFakeInbox();
+  const detector = createHelperStuckDetector({
+    runtime, inboxStore: inbox, log: quietLog
+  });
+
+  const result = await detector.tick();
+
+  assert.equal(result.posted, 1);
+  assert.equal(inbox.reports.length, 1);
+  assert.equal(inbox.reports[0].from_agent_id, 'agy-1');
 });

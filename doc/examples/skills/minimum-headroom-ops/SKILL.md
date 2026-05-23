@@ -111,9 +111,31 @@ A helper can stall inside a CLI-level dialog (tool approval, model picker, usage
 4. Re-snapshot to confirm the modal cleared. If the original mission text was consumed by the modal, call `agent.inject` again to re-deliver it.
 5. `owner.inbox.resolve action=resolved` on the auto-generated `blocked` report.
 
-Notes:
+### What the detector catches today
+
+The detector ships with a small set of CLI-specific regex patterns. Coverage is intentionally narrow to avoid false positives on helper LLM output that incidentally contains words like `Yes` or `No`.
+
+| Pattern id | regex | Trigger | Covers |
+|---|---|---|---|
+| `claude_approval` | `/Do you want to proceed\?/` | Tool / shell-command approval | **Claude Code**, **Antigravity** (same wording) |
+| `codex_approval` | `/Would you like to run the following command\?/` | Shell-command approval | **Codex** |
+| `codex_picker` | `/Switch to (gpt\|claude\|gemini)-/` | Model picker | **Codex** |
+| `codex_quota` | `/You've hit your usage limit/` | ChatGPT usage limit | **Codex** |
+| `agy_survey` | `/How's the CLI experience/` | Post-session feedback survey | **Antigravity** |
+| `generic_press_enter` | `/Press enter to confirm/` | Generic "press enter" prompt | any CLI |
+
+Things the detector does **not** catch yet:
+
+- New / changed prompt wording from any CLI vendor (the pattern set is a snapshot in time).
+- Network / sign-in modals, OAuth confirmations, update notices.
+- Free-text input prompts (e.g. "type your feedback here").
+- Per-helper conversational stalls that have no CLI-level modal at all.
+
+For anything outside the table, fall back to `agent.pane_snapshot` directly, or extend `DEFAULT_STUCK_PATTERNS` in `face-app/dist/helper_stuck_detector.js` with a new entry (no MCP API change required; just append + add a test).
+
+### Notes
 
 - The detector posts; it never auto-presses keys. Operator (or user) decides every response so a regex match cannot pick `No, and always deny` for you.
 - Same `(helper, pattern, matched line)` matches dedupe for ~30 seconds; changing the line re-arms the alarm.
 - Disable the detector with `MH_HELPER_STUCK_DETECTOR=off`. Adjust cadence with `MH_HELPER_STUCK_DETECTOR_INTERVAL_MS` (default 5000, minimum 250).
-- The three tools (`agent.pane_snapshot`, `agent.pane_send_key`, and the detector that drives them) are part of the same `minimum_headroom` MCP server. No per-CLI MCP configuration change is required to use them — only the auto-approval allowlist in each CLI's settings if you want to skip per-call confirm dialogs.
+- The two MCP tools (`agent.pane_snapshot`, `agent.pane_send_key`) and the detector that drives them are part of the same `minimum_headroom` MCP server. No per-CLI MCP configuration change is required to use them — only the auto-approval allowlist in each CLI's settings if you want to skip per-call confirm dialogs.

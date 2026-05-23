@@ -7,7 +7,17 @@ export const DEFAULT_STUCK_PATTERNS = [
   {
     id: 'claude_approval',
     category: 'approval',
+    // Matches the literal "Do you want to proceed?" phrase used by both
+    // Claude Code's tool-approval modal and Antigravity's permission modal.
     regex: /Do you want to proceed\?/,
+    summary: () => 'helper paused on approval prompt'
+  },
+  {
+    id: 'codex_approval',
+    category: 'approval',
+    // Codex uses a different opening phrase for its shell-command approval
+    // modal ("Would you like to run the following command?").
+    regex: /Would you like to run the following command\?/,
     summary: () => 'helper paused on approval prompt'
   },
   {
