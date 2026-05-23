@@ -83,3 +83,37 @@ When MCP is available, emit:
 Keep `agent_id` stable on every face_* payload. Prefer setting `MH_FACE_AGENT_ID` in the agent process environment so the MCP server auto-fills `agent_id`; pass it explicitly only when that default is unavailable. Use `"__operator__"` for the user-facing operator pane and `"<assigned helper id>"` for helpers. Do not hard-code `"__operator__"` when running as a helper. Without the correct `agent_id`, the visible 3D head may stop animating its mouth even though the text bubble and audio still arrive.
 
 For concrete timing and priority rules, follow `doc/examples/AGENT_RULES.md`.
+
+## Multi-agent lifecycle (operator side)
+
+When acting as the user-facing operator, prefer first-class MCP tools over raw `tmux send-keys` or direct HTTP calls. Standard flow:
+
+1. `agent.list scope=stream` — see current helpers
+2. `agent.spawn` — create a helper with a `permission_preset` and (optionally) a `create_worktree` / `create_tmux` request
+3. `agent.assign` — store the mission durably; set `role`, `target_paths`, `completion_criteria`, `timebox_minutes`, `max_findings` when they help bound the work
+4. `agent.inject` — deliver the stored mission to the helper's LLM input
+5. `agent.assignment.list` — confirm `delivery_state` reaches `acked`
+6. `owner.inbox.list` — read helper reports as they arrive
+7. `owner.inbox.resolve` — close out done / review_findings / informational items
+8. `agent.delete` — remove finished helpers (also cascades to assignment and inbox records)
+
+## Recovering a helper stuck on a CLI modal
+
+A helper can stall inside a CLI-level dialog (tool approval, model picker, usage-limit notice, CLI feedback survey) before its LLM reads any input. In that state injected missions are eaten by the modal, no report arrives, and `agent.assignment.list` ends up at `delivery_state=timeout` with no diagnostic. The runtime addresses this in three pieces. Operators of any CLI (claude, codex, agy) follow the same flow:
+
+1. The background stuck-detector inside face-app scans active helper panes every ~5 seconds and matches known modal patterns. On a fresh match it posts `{kind: "blocked", from_agent_id, summary: "helper paused on …", detail: "<matched line>\n---\n<pane tail>"}` into the owner inbox. You will see it via `owner.inbox.list`.
+2. Call `agent.pane_snapshot agent_id=<helper> tail_lines=30` to read the full modal verbatim (ANSI stripped). This is the operator-callable equivalent of `tmux capture-pane`, so it works from any MCP client, not just one that has shell access.
+3. Decide the response and call `agent.pane_send_key agent_id=<helper> keys=[…]`. Examples:
+   - Number-keyed selector (`1. Yes / 2. Yes, always allow / 3. No`): `keys=["2","Enter"]`
+   - Arrow-keyed selector (`› 1. Switch model`): `keys=["Down","Enter"]`
+   - Cancel an unwanted modal: `keys=["Escape"]`
+   - Free-text input: `keys=["hello world"], literal=true`
+4. Re-snapshot to confirm the modal cleared. If the original mission text was consumed by the modal, call `agent.inject` again to re-deliver it.
+5. `owner.inbox.resolve action=resolved` on the auto-generated `blocked` report.
+
+Notes:
+
+- The detector posts; it never auto-presses keys. Operator (or user) decides every response so a regex match cannot pick `No, and always deny` for you.
+- Same `(helper, pattern, matched line)` matches dedupe for ~30 seconds; changing the line re-arms the alarm.
+- Disable the detector with `MH_HELPER_STUCK_DETECTOR=off`. Adjust cadence with `MH_HELPER_STUCK_DETECTOR_INTERVAL_MS` (default 5000, minimum 250).
+- The three tools (`agent.pane_snapshot`, `agent.pane_send_key`, and the detector that drives them) are part of the same `minimum_headroom` MCP server. No per-CLI MCP configuration change is required to use them — only the auto-approval allowlist in each CLI's settings if you want to skip per-call confirm dialogs.

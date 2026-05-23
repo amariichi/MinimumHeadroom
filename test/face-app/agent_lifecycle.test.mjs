@@ -965,7 +965,7 @@ test('agent lifecycle runtime stops injection when startup is blocked by trust p
       if (command === 'tmux' && args[0] === 'capture-pane') {
         return {
           stdout: [
-            'Gemini CLI v0.33.1',
+            'Antigravity CLI v2.0.0',
             'Do you trust this folder?',
             '1. Trust folder',
             '2. Trust parent folder'
@@ -1694,8 +1694,9 @@ test('inferAgentType detects agent types from command strings', () => {
   assert.equal(inferAgentType('claude --dangerously-skip-permissions'), 'claude');
   assert.equal(inferAgentType('codex'), 'codex');
   assert.equal(inferAgentType('codex --approval-mode full-auto'), 'codex');
-  assert.equal(inferAgentType('gemini'), 'gemini');
-  assert.equal(inferAgentType('gemini --yolo'), 'gemini');
+  assert.equal(inferAgentType('agy'), 'antigravity');
+  assert.equal(inferAgentType('agy --dangerously-skip-permissions'), 'antigravity');
+  assert.equal(inferAgentType('antigravity'), 'antigravity');
   assert.equal(inferAgentType(null), 'claude');
   assert.equal(inferAgentType(''), 'claude');
   assert.equal(inferAgentType('my-custom-agent'), 'claude');
@@ -1723,15 +1724,17 @@ test('buildPermissionConfig returns correct config per agent type and preset', (
   const codexReviewer = buildPermissionConfig('codex', 'reviewer');
   assert.equal(codexReviewer.cmdSuffix, '-a untrusted');
 
-  const geminiImpl = buildPermissionConfig('gemini', 'implementer');
-  assert.equal(geminiImpl.configPath, '.gemini/settings.json');
-  assert.ok(geminiImpl.configContent.tools.core.includes('edit_file'));
-  assert.equal(geminiImpl.cmdSuffix, '--yolo');
+  const antigravityImpl = buildPermissionConfig('antigravity', 'implementer');
+  assert.equal(antigravityImpl.configPath, '.gemini/antigravity-cli/settings.json');
+  assert.equal(antigravityImpl.configContent.enableTerminalSandbox, true);
+  assert.ok(antigravityImpl.configContent.permissions.allow.includes('command(npm)'));
+  assert.ok(antigravityImpl.configContent.permissions.deny.includes('command(git push)'));
+  assert.equal(antigravityImpl.cmdSuffix, '--dangerously-skip-permissions');
 
-  const geminiReviewer = buildPermissionConfig('gemini', 'reviewer');
-  assert.ok(geminiReviewer.configContent.tools.core.includes('read_file'));
-  assert.equal(geminiReviewer.configContent.tools.core.includes('edit_file'), false);
-  assert.equal(geminiReviewer.cmdSuffix, '--yolo');
+  const antigravityReviewer = buildPermissionConfig('antigravity', 'reviewer');
+  assert.ok(antigravityReviewer.configContent.permissions.allow.includes('command(git diff)'));
+  assert.equal(antigravityReviewer.configContent.permissions.allow.includes('command(npm)'), false);
+  assert.equal(antigravityReviewer.cmdSuffix, null);
 
   const noPreset = buildPermissionConfig('claude', null);
   assert.equal(noPreset.configPath, null);
@@ -1798,6 +1801,7 @@ test('addAgent auto-injects helper face identity into the launch command', async
   assert.equal(result.agent.agent_cmd, 'codex --profile helper');
   assert.match(result.agent.launch_command, /MH_FACE_AGENT_ID='agent-face-auto'/);
   assert.match(result.agent.launch_command, /MH_FACE_AGENT_LABEL='agent-face-auto'/);
+  assert.match(result.agent.launch_command, /MH_HOOK_SUPPRESS_EVENTS='idle_after_response'/);
   assert.match(result.agent.launch_command, /codex --profile helper/);
   const launchCmd = commands.find(
     (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('MH_FACE_AGENT_ID'))
@@ -1831,6 +1835,7 @@ test('addAgent injects helper face identity inside docker exec launch commands',
   assert.match(result.agent.launch_command, /docker' 'exec'/);
   assert.match(result.agent.launch_command, /'-e' 'MH_FACE_AGENT_ID=agent-docker-face'/);
   assert.match(result.agent.launch_command, /'-e' 'MH_FACE_AGENT_LABEL=agent-docker-face'/);
+  assert.match(result.agent.launch_command, /'-e' 'MH_HOOK_SUPPRESS_EVENTS=idle_after_response'/);
   assert.doesNotMatch(result.agent.launch_command, /^env /);
   const launchCmd = commands.find(
     (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('MH_FACE_AGENT_ID=agent-docker-face'))
@@ -1899,23 +1904,25 @@ test('reconcileAgents recreates helper panes with the stored launch command', as
   cleanup(repoRoot);
 });
 
-test('addAgent writes gemini settings for gemini helper', async () => {
+test('addAgent writes Antigravity settings for Antigravity helper', async () => {
   const { repoRoot, runtime } = createRuntimeHarness();
 
   const result = await runtime.addAgent({
-    id: 'agent-perm-gemini',
+    id: 'agent-perm-antigravity',
     create_worktree: true,
     create_tmux: false,
     source_repo_path: repoRoot,
-    agent_cmd: 'gemini',
+    agent_cmd: 'agy',
     permission_preset: 'implementer'
   });
 
   assert.equal(result.ok, true);
-  const configPath = path.join(result.agent.worktree_path, '.gemini/settings.json');
+  const configPath = path.join(result.agent.worktree_path, '.gemini/antigravity-cli/settings.json');
   assert.equal(fs.existsSync(configPath), true);
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  assert.ok(config.tools.core.includes('edit_file'));
+  assert.equal(config.enableTerminalSandbox, true);
+  assert.ok(config.permissions.allow.includes('command(npm)'));
+  assert.ok(config.permissions.deny.includes('command(git push)'));
   const stat = fs.statSync(configPath);
   assert.equal(stat.mode & 0o777, 0o444, 'settings.json should be read-only');
 
@@ -1936,6 +1943,157 @@ test('addAgent skips permission config when no preset is given', async () => {
   assert.equal(result.ok, true);
   const configPath = path.join(result.agent.worktree_path, '.claude/settings.json');
   assert.equal(fs.existsSync(configPath), false);
+
+  cleanup(repoRoot);
+});
+
+test('pane_snapshot returns ANSI-stripped tail lines for an agent with a pane', async () => {
+  const { repoRoot, runtime, stateStore, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return {
+          stdout: '\x1b[31malpha\x1b[0m\nbeta\ngamma\n',
+          stderr: '',
+          code: 0
+        };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  stateStore.addAgent({ id: 'agent-snap', pane_id: '%42' });
+
+  const result = await runtime.dispatchAgentAction('agent-snap', 'pane_snapshot', { tail_lines: 3 });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.pane_id, '%42');
+  assert.equal(result.agent_id, 'agent-snap');
+  assert.equal(result.tail_lines, 3);
+  assert.deepEqual(result.lines, ['alpha', 'beta', 'gamma']);
+  const captureCmd = commands.find((entry) => entry[0] === 'tmux' && entry[1] === 'capture-pane');
+  assert.ok(captureCmd, 'capture-pane was invoked');
+  assert.equal(captureCmd.includes('%42'), true);
+
+  cleanup(repoRoot);
+});
+
+test('pane_snapshot rejects when agent has no pane id', async () => {
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness();
+  stateStore.addAgent({ id: 'agent-no-pane', pane_id: null });
+
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-no-pane', 'pane_snapshot', {}),
+    /agent has no pane/
+  );
+
+  cleanup(repoRoot);
+});
+
+test('pane_snapshot bounds tail_lines to 400', async () => {
+  let capturedLineCount = null;
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        const startArgIndex = args.indexOf('-S');
+        if (startArgIndex !== -1) {
+          capturedLineCount = Number.parseInt(args[startArgIndex + 1].replace('-', ''), 10);
+        }
+        return { stdout: 'x\n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  stateStore.addAgent({ id: 'agent-bound', pane_id: '%99' });
+
+  const result = await runtime.dispatchAgentAction('agent-bound', 'pane_snapshot', { tail_lines: 5000 });
+  assert.equal(result.tail_lines, 400);
+  assert.equal(capturedLineCount, 400);
+
+  cleanup(repoRoot);
+});
+
+test('pane_send_key sends named keys via tmux send-keys', async () => {
+  const { repoRoot, runtime, stateStore, commands } = createRuntimeHarness();
+  stateStore.addAgent({ id: 'agent-keys', pane_id: '%77' });
+
+  const result = await runtime.dispatchAgentAction('agent-keys', 'pane_send_key', { keys: ['2', 'Enter'] });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.pane_id, '%77');
+  assert.deepEqual(result.keys, ['2', 'Enter']);
+  assert.equal(result.literal, false);
+  const sendKeysCmd = commands.find(
+    (entry) =>
+      entry[0] === 'tmux' &&
+      entry[1] === 'send-keys' &&
+      entry[2] === '-t' &&
+      entry[3] === '%77' &&
+      entry[4] === '2' &&
+      entry[5] === 'Enter'
+  );
+  assert.ok(sendKeysCmd, 'send-keys with positional named keys was invoked');
+
+  cleanup(repoRoot);
+});
+
+test('pane_send_key with literal=true passes -l -- to tmux', async () => {
+  const { repoRoot, runtime, stateStore, commands } = createRuntimeHarness();
+  stateStore.addAgent({ id: 'agent-lit', pane_id: '%55' });
+
+  const result = await runtime.dispatchAgentAction('agent-lit', 'pane_send_key', {
+    keys: ['hello world'],
+    literal: true
+  });
+
+  assert.equal(result.literal, true);
+  const cmd = commands.find(
+    (entry) =>
+      entry[0] === 'tmux' &&
+      entry[1] === 'send-keys' &&
+      entry[2] === '-t' &&
+      entry[3] === '%55' &&
+      entry[4] === '-l' &&
+      entry[5] === '--' &&
+      entry[6] === 'hello world'
+  );
+  assert.ok(cmd, 'literal send-keys invocation present');
+
+  cleanup(repoRoot);
+});
+
+test('pane_send_key rejects empty keys array', async () => {
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness();
+  stateStore.addAgent({ id: 'agent-empty', pane_id: '%1' });
+
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-empty', 'pane_send_key', { keys: [] }),
+    /non-empty array/
+  );
+
+  cleanup(repoRoot);
+});
+
+test('pane_send_key rejects keys containing non-ASCII or unknown names', async () => {
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness();
+  stateStore.addAgent({ id: 'agent-bad-keys', pane_id: '%2' });
+
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-bad-keys', 'pane_send_key', { keys: ['日本語'] }),
+    /key not allowed/
+  );
+
+  cleanup(repoRoot);
+});
+
+test('pane_send_key caps key count at 32', async () => {
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness();
+  stateStore.addAgent({ id: 'agent-many-keys', pane_id: '%3' });
+
+  const tooMany = Array.from({ length: 33 }, () => 'a');
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-many-keys', 'pane_send_key', { keys: tooMany }),
+    /at most 32 entries/
+  );
 
   cleanup(repoRoot);
 });

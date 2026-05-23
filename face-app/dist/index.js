@@ -16,6 +16,7 @@ import { createAgentAssignmentApi } from './agent_assignment_api.js';
 import { createOwnerInboxStateStore } from './owner_inbox_state.js';
 import { createOwnerInboxApi } from './owner_inbox_api.js';
 import { createHookBridge } from './hook_bridge.js';
+import { createHelperStuckDetector } from './helper_stuck_detector.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -244,6 +245,27 @@ const agentLifecycleRuntime = createAgentLifecycleRuntime({
 const agentLifecycleApi = createAgentLifecycleApi({
   runtime: agentLifecycleRuntime
 });
+
+const helperStuckDetectorEnabled = (process.env.MH_HELPER_STUCK_DETECTOR ?? '1') !== '0'
+  && (process.env.MH_HELPER_STUCK_DETECTOR ?? '').toLowerCase() !== 'off';
+const helperStuckDetectorIntervalMs = Number.parseInt(process.env.MH_HELPER_STUCK_DETECTOR_INTERVAL_MS ?? '5000', 10);
+const helperStuckDetector = helperStuckDetectorEnabled
+  ? createHelperStuckDetector({
+      runtime: agentLifecycleRuntime,
+      inboxStore: ownerInboxState,
+      assignmentStore: agentAssignmentState,
+      intervalMs: Number.isFinite(helperStuckDetectorIntervalMs) && helperStuckDetectorIntervalMs >= 250
+        ? helperStuckDetectorIntervalMs
+        : 5000,
+      log: console
+    })
+  : null;
+if (helperStuckDetector) {
+  helperStuckDetector.start();
+  console.info(`[face-app] helper stuck detector started (interval=${helperStuckDetector.intervalMs}ms)`);
+} else {
+  console.info('[face-app] helper stuck detector disabled by MH_HELPER_STUCK_DETECTOR');
+}
 const agentAssignmentApi = createAgentAssignmentApi({
   store: agentAssignmentState,
   lifecycleRuntime: agentLifecycleRuntime
@@ -578,6 +600,9 @@ async function shutdown(signal) {
   console.info(`[face-app] ${signal} received, shutting down`);
 
   try {
+    if (helperStuckDetector) {
+      helperStuckDetector.stop();
+    }
     if (ttsController) {
       await ttsController.stop();
     }

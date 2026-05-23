@@ -148,6 +148,38 @@ test('mcp agent lifecycle tools call the face-app HTTP API', async () => {
         return;
       }
 
+      if (request.url === '/api/agents/helper-a/pane-snapshot') {
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({
+          ok: true,
+          result: {
+            ok: true,
+            agent_id: 'helper-a',
+            pane_id: '%42',
+            tail_lines: 3,
+            lines: ['alpha', 'beta', 'gamma'],
+            captured_at: 1
+          }
+        }));
+        return;
+      }
+
+      if (request.url === '/api/agents/helper-a/pane-send-key') {
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({
+          ok: true,
+          result: {
+            ok: true,
+            agent_id: 'helper-a',
+            pane_id: '%42',
+            keys: ['2', 'Enter'],
+            literal: false,
+            sent_at: 1
+          }
+        }));
+        return;
+      }
+
       response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({ ok: false, error: 'not_found' }));
     });
@@ -232,11 +264,35 @@ test('mcp agent lifecycle tools call the face-app HTTP API', async () => {
     });
     assert.match(deleteResponse.result.content[0].text, /deleted agent id=helper-a/);
 
+    const snapshotResponse = await rpc.call('tools/call', {
+      name: 'agent.pane_snapshot',
+      arguments: {
+        agent_id: 'helper-a',
+        tail_lines: 3
+      }
+    });
+    assert.match(snapshotResponse.result.content[0].text, /captured agent_id=helper-a lines=3/);
+    const snapshotRequest = requests.find((item) => item.url === '/api/agents/helper-a/pane-snapshot');
+    assert.equal(snapshotRequest?.body?.tail_lines, 3);
+
+    const sendKeyResponse = await rpc.call('tools/call', {
+      name: 'agent.pane_send_key',
+      arguments: {
+        agent_id: 'helper-a',
+        keys: ['2', 'Enter']
+      }
+    });
+    assert.match(sendKeyResponse.result.content[0].text, /sent keys=2 to agent_id=helper-a/);
+    const sendKeyRequest = requests.find((item) => item.url === '/api/agents/helper-a/pane-send-key');
+    assert.deepEqual(sendKeyRequest?.body?.keys, ['2', 'Enter']);
+
     assert.equal(requests.some((item) => item.url?.startsWith('/api/agents?')), true);
     assert.equal(requests.some((item) => item.url === '/api/agents?scope=active'), true);
     assert.equal(requests.some((item) => item.url === '/api/agents/add'), true);
     assert.equal(requests.some((item) => item.url === '/api/agents/helper-a/focus'), true);
     assert.equal(requests.some((item) => item.url === '/api/agents/helper-a/delete'), true);
+    assert.equal(requests.some((item) => item.url === '/api/agents/helper-a/pane-snapshot'), true);
+    assert.equal(requests.some((item) => item.url === '/api/agents/helper-a/pane-send-key'), true);
   } finally {
     await stopChild(child);
     await new Promise((resolve) => server.close(resolve));
