@@ -11,6 +11,7 @@ import numpy as np
 
 from .chunking import TextChunk, split_text_chunks
 from .engine import EngineMetadata
+from .kokoro_text import strip_japanese_silent_punctuation
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,8 @@ class KokoroEngine:
       source_text = chunk.text
       if chunk.is_phonemes:
         source_text = self._to_ja_phonemes(chunk.text)
+        if not source_text:
+          continue
 
       audio, chunk_rate = self._kokoro_create(
         source_text,
@@ -130,10 +133,14 @@ class KokoroEngine:
     return combined.astype(np.float32, copy=False), sample_rate
 
   def _to_ja_phonemes(self, text: str) -> str:
+    cleaned = strip_japanese_silent_punctuation(text).strip()
+    if not cleaned:
+      return ''
+
     capture = io.StringIO()
     # Some pyopenjtalk-backed helpers print progress text to stdout; keep protocol stdout JSON-only.
     with contextlib.redirect_stdout(capture):
-      raw = self._ja_g2p(text)
+      raw = self._ja_g2p(cleaned)
 
     echoed = capture.getvalue().strip()
     if echoed:
