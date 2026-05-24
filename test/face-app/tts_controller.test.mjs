@@ -900,3 +900,95 @@ test('tts controller flushForBargeIn clears the audio store', async () => {
   await controller.flushForBargeIn('operator_ptt');
   assert.equal(cleared, 1);
 });
+
+test('tts controller defers idle notification behind all queued answer chunks', async () => {
+  const { worker, controller } = makeController({ maxChunkChars: 8 });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '一つ目の文です。二つ目の文です。三つ目の文です。'
+  });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 'hook',
+    utterance_id: 'idle',
+    priority: 1,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: '待機中です。',
+    defer_until_idle: true
+  });
+
+  assert.equal(interrupts(worker).length, 0);
+  assert.equal(speaks(worker).length, 1);
+  assert.equal(controller.snapshot().queuedChunks, 3);
+
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 2);
+  assert.equal(speaks(worker)[1].text, '二つ目の文です。');
+
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 3);
+  assert.equal(speaks(worker)[2].text, '三つ目の文です。');
+
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 4);
+  assert.equal(speaks(worker)[3].text, '待機中です。');
+  assert.equal(speaks(worker)[3].generation, 2);
+});
+
+test('tts controller drops expired deferred idle notification at queue drain', async () => {
+  let nowMs = 42_000;
+  const worker = new FakeWorker();
+  const broadcasts = [];
+  const controller = createTtsController({
+    worker,
+    now: () => nowMs,
+    gate: { check: () => ({ allow: true }) },
+    broadcast(payload) { broadcasts.push(payload); return true; },
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    maxChunkChars: 8
+  });
+  worker.emit('message', { type: 'ready', voice: 'af_heart', engine: 'kokoro' });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: nowMs,
+    text: '一つ目の文です。二つ目の文です。'
+  });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 'hook',
+    utterance_id: 'idle',
+    priority: 1,
+    policy: 'replace',
+    ttl_ms: 1_000,
+    ts: nowMs,
+    text: '待機中です。',
+    defer_until_idle: true
+  });
+
+  finishActive(worker, 1);
+  assert.equal(speaks(worker).length, 2);
+  nowMs += 2_000;
+  finishActive(worker, 1);
+
+  assert.equal(speaks(worker).length, 2);
+  const dropped = broadcasts.find((payload) => payload.type === 'tts_state' && payload.phase === 'dropped' && payload.generation === 2);
+  assert.ok(dropped);
+  assert.equal(dropped.reason, 'ttl_expired');
+});

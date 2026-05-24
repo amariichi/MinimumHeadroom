@@ -125,6 +125,7 @@ export function createHookBridge(options = {}) {
   }
 
   function buildSayPayload({ agentId, sessionId, event, ts, text }) {
+    const isIdleNotification = event === 'idle_after_response';
     return {
       v: 1,
       type: 'say',
@@ -133,9 +134,11 @@ export function createHookBridge(options = {}) {
       ts,
       utterance_id: `hook-${event}-${ts}-utt`,
       text,
-      priority: 3,
-      policy: 'interrupt',
-      ttl_ms: 30000,
+      priority: isIdleNotification ? 1 : 3,
+      policy: isIdleNotification ? 'replace' : 'interrupt',
+      ttl_ms: isIdleNotification ? 8000 : 30000,
+      ...(isIdleNotification ? { defer_until_idle: true } : {}),
+      notification_event: event,
       dedupe_key: null,
       message_id: `hook-${event}-${ts}`,
       revision: ts
