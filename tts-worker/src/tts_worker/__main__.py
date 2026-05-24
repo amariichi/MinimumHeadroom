@@ -30,6 +30,16 @@ def resolve_audio_target(raw: Optional[str]) -> str:
   raise ValueError(f'unsupported MH_AUDIO_TARGET: {raw} (expected local|browser|both)')
 
 
+def resolve_remote_prefetch_ms(raw: Optional[str], default: int = 900) -> int:
+  if raw is None or raw.strip() == '':
+    return default
+  try:
+    value = int(raw)
+  except ValueError:
+    return default
+  return max(0, min(3000, value))
+
+
 @dataclass
 class SpeakRequest:
   request_id: Optional[str]
@@ -49,6 +59,7 @@ class WorkerRuntime:
     self.engine = create_tts_engine()
     self.audio_target = resolve_audio_target(os.environ.get('MH_AUDIO_TARGET'))
     self.browser_audio_enabled = self.audio_target in ('browser', 'both')
+    self.remote_prefetch_ms = resolve_remote_prefetch_ms(os.environ.get('MH_TTS_REMOTE_PREFETCH_MS')) if self.audio_target == 'browser' else 0
     self.playback = PlaybackEngine(allow_local_output=self.audio_target in ('local', 'both'))
 
     self.latest_generation = -1
@@ -473,11 +484,22 @@ class WorkerRuntime:
       )
 
     try:
+      finish_after_s = None
+      completion_reason = 'completed'
+      if self.remote_prefetch_ms > 0 and sample_rate > 0:
+        duration_s = max(0.0, float(audio.shape[0]) / float(sample_rate))
+        prefetch_window_s = max(0.0, duration_s - 0.16)
+        lead_s = min(float(self.remote_prefetch_ms) / 1000.0, prefetch_window_s * 0.5)
+        if lead_s > 0.0:
+          finish_after_s = duration_s - lead_s
+          completion_reason = 'remote_prefetch'
       reason = await self.playback.play(
         audio,
         sample_rate,
         on_mouth=on_mouth,
         should_stop=lambda: is_stale() or is_expired(),
+        finish_after_s=finish_after_s,
+        completion_reason=completion_reason,
       )
     except asyncio.CancelledError:
       self.playback.stop()

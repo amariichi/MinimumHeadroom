@@ -183,7 +183,7 @@ bool HeadroomTransport::handleJsonPayload(const uint8_t* payload, size_t length)
   if (type == "event") {
     handleEventPayload(stringField(doc, "name"));
   } else if (type == "tts_state") {
-    handleTtsStatePayload(stringField(doc, "phase"));
+    handleTtsStatePayload(doc);
   } else if (type == "tts_mouth") {
     if (!faceState_) {
       return true;
@@ -260,12 +260,30 @@ void HeadroomTransport::handleEventPayload(const String& name) {
   }
 }
 
-void HeadroomTransport::handleTtsStatePayload(const String& phase) {
+void HeadroomTransport::handleTtsStatePayload(JsonDocument& doc) {
+  String phase = stringField(doc, "phase");
+  String reason = stringField(doc, "reason");
+
+  if (phase == "interrupt_requested" || (phase == "play_stop" && reason == "interrupted")) {
+    if (audio_) {
+      audio_->stop();
+    }
+    if (faceState_) {
+      faceState_->mouthOpen = 0.0f;
+    }
+    setExpression(HeadroomExpression::Neutral);
+    return;
+  }
+
   if (phase == "queued" || phase == "synth_start") {
     setExpression(HeadroomExpression::Thinking);
   } else if (phase == "play_start") {
     setExpression(HeadroomExpression::Speaking);
   } else if (phase == "play_stop") {
+    if (audio_ && audio_->busy()) {
+      setExpression(HeadroomExpression::Speaking);
+      return;
+    }
     if (faceState_) {
       faceState_->mouthOpen = 0.0f;
     }

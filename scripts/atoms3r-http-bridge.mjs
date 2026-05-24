@@ -133,8 +133,6 @@ async function handleWsMessage(data) {
     resetGenerationWindow('worker_ready');
   }
 
-  observeGeneration(payload);
-
   if (payload.type === 'tts_mouth' && !shouldForwardMouth(payload)) {
     return;
   }
@@ -142,6 +140,7 @@ async function handleWsMessage(data) {
   if (payload.type === 'tts_state') {
     console.log(`[atoms3r-bridge] received tts_state phase=${payload.phase ?? 'unknown'}`);
   } else if (payload.type === 'tts_audio') {
+    observeGeneration(payload);
     await forwardDirectAudio(payload);
     return;
   }

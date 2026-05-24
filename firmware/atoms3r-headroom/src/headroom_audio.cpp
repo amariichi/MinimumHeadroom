@@ -41,11 +41,24 @@ void HeadroomAudio::begin(const HeadroomSettingsData& settings) {
 
 void HeadroomAudio::loop() {
   releaseActive();
+  if (recording_ || M5.Speaker.isPlaying() || activeWav_) {
+    return;
+  }
+
+  QueuedWav next;
+  while (popQueuedWav(&next)) {
+    HeadroomAudioResult result = startOwnedWavNow(next.data, next.length, true);
+    if (result == HeadroomAudioResult::Ok) {
+      return;
+    }
+    Serial.printf("queued wav playback failed result=%d\n", static_cast<int>(result));
+  }
 }
 
 void HeadroomAudio::stop() {
   M5.Speaker.stop();
   releaseActive();
+  releaseQueued();
 }
 
 void HeadroomAudio::playCueTone(uint16_t freqHz, uint32_t ms) {
@@ -57,6 +70,7 @@ void HeadroomAudio::playCueTone(uint16_t freqHz, uint32_t ms) {
   // codec is quiescent before the mic window opens.
   M5.Speaker.stop();
   releaseActive();
+  releaseQueued();
   beginSpeaker();
   const uint8_t cueVolume = speakerVolume_ > 1 ? speakerVolume_ / 2 : 1;
   M5.Speaker.setVolume(cueVolume);
@@ -90,8 +104,9 @@ void HeadroomAudio::restoreAfterRecording() {
 }
 
 bool HeadroomAudio::busy() const {
-  return M5.Speaker.isPlaying();
+  return M5.Speaker.isPlaying() || queuedWavCount_ > 0;
 }
+
 
 float HeadroomAudio::currentMouthOpen() {
   uint32_t nowMs = millis();
@@ -341,7 +356,59 @@ void HeadroomAudio::releaseActive() {
   }
 }
 
+void HeadroomAudio::releaseQueued() {
+  for (size_t i = 0; i < queuedWavCount_; ++i) {
+    free(queuedWavs_[i].data);
+    queuedWavs_[i].data = nullptr;
+    queuedWavs_[i].length = 0;
+  }
+  queuedWavCount_ = 0;
+}
+
+bool HeadroomAudio::enqueueOwnedWav(uint8_t* wav, size_t length) {
+  if (!wav || length == 0) {
+    return false;
+  }
+  if (queuedWavCount_ >= kQueuedWavCapacity) {
+    Serial.printf("wav fifo full count=%u capacity=%u\n", static_cast<unsigned>(queuedWavCount_), static_cast<unsigned>(kQueuedWavCapacity));
+    return false;
+  }
+  queuedWavs_[queuedWavCount_].data = wav;
+  queuedWavs_[queuedWavCount_].length = length;
+  ++queuedWavCount_;
+  return true;
+}
+
+bool HeadroomAudio::popQueuedWav(QueuedWav* out) {
+  if (!out || queuedWavCount_ == 0) {
+    return false;
+  }
+  *out = queuedWavs_[0];
+  for (size_t i = 1; i < queuedWavCount_; ++i) {
+    queuedWavs_[i - 1] = queuedWavs_[i];
+  }
+  --queuedWavCount_;
+  queuedWavs_[queuedWavCount_].data = nullptr;
+  queuedWavs_[queuedWavCount_].length = 0;
+  return true;
+}
+
 HeadroomAudioResult HeadroomAudio::playOwnedWav(uint8_t* wav, size_t length, bool takeOwnership) {
+  releaseActive();
+  if (M5.Speaker.isPlaying() || activeWav_) {
+    if (!takeOwnership) {
+      return HeadroomAudioResult::PlaybackFailed;
+    }
+    if (enqueueOwnedWav(wav, length)) {
+      return HeadroomAudioResult::Ok;
+    }
+    free(wav);
+    return HeadroomAudioResult::Ignored;
+  }
+  return startOwnedWavNow(wav, length, takeOwnership);
+}
+
+HeadroomAudioResult HeadroomAudio::startOwnedWavNow(uint8_t* wav, size_t length, bool takeOwnership) {
   releaseActive();
   M5.Speaker.stop();
   if (activeWav_) {

@@ -330,7 +330,14 @@ cd /path/to/target-repo
 
 # choose Qwen3 TTS only when you want that path explicitly
 ./scripts/run-operator-once.sh --profile qwen3-realtime
+
+# remote-only audio (recommended for PC browser tab, mobile, and AtomS3R)
+# turns on the TTS worker's remote prefetch and the browser/Atom FIFO queues,
+# which shorten the inter-chunk gaps on long multi-sentence answers
+./scripts/run-operator-once.sh --profile realtime --audio-target browser
 ```
+
+See [Audio target and UI mode](doc/guides/operator-stack.md#audio-target-and-ui-mode) for when to pick `browser`, `local`, or `both`.
 
 <a id="en-agent-setup"></a>
 ## Agent Setup
@@ -828,7 +835,14 @@ cd /path/to/target-repo
 
 # Qwen3 TTS を使いたい時だけ明示的に選ぶ
 ./scripts/run-operator-once.sh --profile qwen3-realtime
+
+# リモート出力のみ（PC ブラウザ／スマホ／AtomS3R 向けの推奨）
+# worker のリモート先読みと、ブラウザ／Atom 側 FIFO キューが有効になり、
+# 長文の文間ギャップが短くなります
+./scripts/run-operator-once.sh --profile realtime --audio-target browser
 ```
+
+`browser` / `local` / `both` の選び方は[音声出力先と UI モード](doc/guides/operator-stack.md#音声出力先と-ui-モード)を参照してください。
 
 <a id="ja-agent-setup"></a>
 ## エージェント設定

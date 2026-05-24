@@ -97,6 +97,6 @@ If `face-app` is bound outside loopback and requires `MH_FACE_AUTH_TOKEN`, the b
 
 ## Troubleshooting
 
-- **The face does not speak.** Confirm the operator stack is up (`scripts/restart-operator-stack-in-place.sh` if needed), confirm the AtomS3R bridge tmux pane is alive, and confirm `FACE_AUDIO_TARGET` is `both` or `browser` (RMH needs `both` so direct `tts_audio` reaches the bridge).
+- **The face does not speak.** Confirm the operator stack is up (`scripts/restart-operator-stack-in-place.sh` if needed), confirm the AtomS3R bridge tmux pane is alive, and confirm `FACE_AUDIO_TARGET` is `browser` (recommended) or `both`. `browser` is preferred for RMH because the TTS worker's remote prefetch + the Atom-side WAV FIFO only engage in that mode, giving the shortest inter-chunk gaps on long answers; `both` also forwards `tts_audio` to the bridge but disables prefetch so remote playback falls back to the older synthesize-then-play pacing.
 - **Audio plays but mouth does not move.** The agent is probably calling `face_say` with the wrong `agent_id`. This script sets `MH_FACE_AGENT_ID=__operator__`; if the agent is overriding it manually, fix that in your prompt.
 - **Long answers play as voice-then-silence.** A chunk likely exceeded the Atom HTTP ingress cap. Confirm `MH_TTS_CHUNK_MAX_CHARS=64` is in effect on the running stack (`scripts/run-operator-stack.sh` sets it as the default).

@@ -49,6 +49,13 @@ private:
   uint8_t speakerVolume_ = 112;
   uint8_t* activeWav_ = nullptr;
   size_t activeWavLength_ = 0;
+  static constexpr size_t kQueuedWavCapacity = 1;  // Bound AtomS3R RAM: one active WAV plus one pending chunk.
+  struct QueuedWav {
+    uint8_t* data = nullptr;
+    size_t length = 0;
+  };
+  QueuedWav queuedWavs_[kQueuedWavCapacity];
+  size_t queuedWavCount_ = 0;
   bool recording_ = false;
 
   // Window over the in-flight PCM, captured at playRaw() time, used by
@@ -65,6 +72,10 @@ private:
   void beginSpeaker();
   void resetSpeaker();
   void releaseActive();
+  void releaseQueued();
+  bool enqueueOwnedWav(uint8_t* wav, size_t length);
+  bool popQueuedWav(QueuedWav* out);
+  HeadroomAudioResult startOwnedWavNow(uint8_t* wav, size_t length, bool takeOwnership);
   HeadroomAudioResult playOwnedWav(uint8_t* wav, size_t length, bool takeOwnership);
   bool inspectWav(const uint8_t* wav, size_t length, int* sampleRate, size_t* dataOffset, size_t* dataBytes, uint16_t* bitsPerSample,
                   uint16_t* channels);

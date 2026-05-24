@@ -73,6 +73,8 @@ class PlaybackEngine:
     sample_rate: int,
     on_mouth: MouthCallback,
     should_stop: ShouldStop,
+    finish_after_s: float | None = None,
+    completion_reason: str = 'completed',
   ) -> str:
     if samples.size == 0:
       await _emit_mouth(on_mouth, 0.0)
@@ -80,11 +82,13 @@ class PlaybackEngine:
 
     audio = _apply_fade(np.asarray(samples, dtype=np.float32), sample_rate)
     duration = max(0.0, float(audio.shape[0]) / float(sample_rate))
+    wait_duration = duration if finish_after_s is None else max(0.0, min(duration, float(finish_after_s)))
+    final_reason = 'completed' if wait_duration >= duration else completion_reason
     aplay_feed_task: asyncio.Task[None] | None = None
 
-    if self.backend == 'sounddevice' and self._sd is not None:
+    if wait_duration >= duration and self.backend == 'sounddevice' and self._sd is not None:
       self._sd.play(audio, sample_rate, blocking=False)
-    elif self.backend == 'aplay' and self._aplay_path:
+    elif wait_duration >= duration and self.backend == 'aplay' and self._aplay_path:
       pcm = _to_int16_pcm_bytes(audio)
       proc = subprocess.Popen(
         [self._aplay_path, '-f', 'S16_LE', '-r', str(sample_rate), '-c', '1', '-q'],
@@ -104,12 +108,16 @@ class PlaybackEngine:
         return 'interrupted'
 
       elapsed = time.monotonic() - started
-      if elapsed >= duration:
+      if elapsed >= wait_duration:
         break
 
       mouth_open = _estimate_mouth_open(audio, sample_rate, elapsed)
       await _emit_mouth(on_mouth, mouth_open)
       await asyncio.sleep(0.04)
+
+    if wait_duration < duration:
+      await _emit_mouth(on_mouth, 0.0)
+      return final_reason
 
     if self.backend == 'sounddevice' and self._sd is not None:
       try:
