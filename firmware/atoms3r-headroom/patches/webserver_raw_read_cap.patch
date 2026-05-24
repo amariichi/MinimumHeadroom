@@ -1,0 +1,36 @@
+Cap WebServer raw upload reads to the remaining content length so the final
+partial chunk does not wait the full 5 s WiFiClient timeout.
+
+ESP32 Arduino WebServer's raw upload loop calls
+  client.readBytes(buf, HTTP_RAW_BUFLEN /* 1436 */)
+on every iteration. When the remaining bytes are smaller than HTTP_RAW_BUFLEN
+(almost always true on the last chunk), readBytes blocks waiting for bytes that
+will never arrive, until HTTP_MAX_SEND_WAIT (5000 ms) elapses. This adds a
+fixed ~5 second tail to every audio POST regardless of payload size.
+
+The fix caps the read request to the actual remaining bytes so readBytes
+returns immediately once it has read the last byte.
+
+Target file (system package, not in this repository):
+  ~/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/Parsing.cpp
+
+Applied automatically at build time by scripts/apply_webserver_patch.py.
+Apply manually with:
+  patch -p0 -d <framework dir>/libraries/WebServer/src < patches/webserver_raw_read_cap.patch
+
+--- Parsing.cpp.orig
++++ Parsing.cpp
+@@ -184,7 +184,12 @@
+       _currentRaw->status = RAW_WRITE;
+
+       while (_currentRaw->totalSize < _clientContentLength) {
+-        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, HTTP_RAW_BUFLEN);
++        // PATCH(minimum-headroom): cap readBytes() to remaining bytes so the
++        // final partial chunk does not wait the full 5s WiFiClient timeout.
++        size_t toRead = HTTP_RAW_BUFLEN;
++        size_t remaining = _clientContentLength - _currentRaw->totalSize;
++        if (remaining < toRead) toRead = remaining;
++        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, toRead);
+         _currentRaw->totalSize += _currentRaw->currentSize;
+         if (_currentRaw->currentSize == 0) {
+           _currentRaw->status = RAW_ABORTED;

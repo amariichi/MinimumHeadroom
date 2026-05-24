@@ -42,6 +42,67 @@ cd firmware/atoms3r-headroom
 pio run
 ```
 
+The first build prints `[webserver-patch] applied: …` once, then
+`[webserver-patch] already applied: …` on every later build. See
+[WebServer library patch](#webserver-library-patch) for what this is and why
+it is required.
+
+## WebServer library patch
+
+The Arduino ESP32 core's `WebServer` library has a behavior that adds a fixed
+~5 second tail to every audio POST on this firmware. Without the patch, chunked
+TTS playback chops noticeably because each chunk waits 5 s for an HTTP response
+that should take ~30 ms.
+
+**Root cause.** The raw-upload loop in
+`framework-arduinoespressif32/libraries/WebServer/src/Parsing.cpp` reads
+`HTTP_RAW_BUFLEN` (1436) bytes per iteration regardless of how many body bytes
+remain. The final iteration almost always asks for more than is left, so
+`WiFiClient::readBytes` blocks waiting for bytes that will never arrive until
+`HTTP_MAX_SEND_WAIT` (5000 ms) elapses.
+
+**Fix.** Cap each `readBytes` request to the actual remaining body bytes so the
+last read returns immediately.
+
+**How it is applied.** A pre-build PlatformIO hook
+(`scripts/apply_webserver_patch.py`, registered as `extra_scripts` in
+`platformio.ini`) edits the system library file in place. The hook is
+idempotent (it self-marks with a `PATCH(minimum-headroom):` comment) and fails
+loudly if the upstream library no longer matches the expected snippet, so a
+framework upgrade cannot silently regress the fix.
+
+**The patch itself.** Equivalent unified diff at
+`patches/webserver_raw_read_cap.patch`:
+
+```diff
+       while (_currentRaw->totalSize < _clientContentLength) {
+-        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, HTTP_RAW_BUFLEN);
++        // PATCH(minimum-headroom): cap readBytes() to remaining bytes so the
++        // final partial chunk does not wait the full 5s WiFiClient timeout.
++        size_t toRead = HTTP_RAW_BUFLEN;
++        size_t remaining = _clientContentLength - _currentRaw->totalSize;
++        if (remaining < toRead) toRead = remaining;
++        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, toRead);
+         _currentRaw->totalSize += _currentRaw->currentSize;
+```
+
+To apply by hand instead of relying on the hook:
+
+```bash
+FW=$(pio pkg show framework-arduinoespressif32 --json-output 2>/dev/null \
+  | python -c "import json,sys;print(json.load(sys.stdin)['__pkg_dir'])")
+patch -p0 -d "$FW/libraries/WebServer/src" \
+  < firmware/atoms3r-headroom/patches/webserver_raw_read_cap.patch
+```
+
+To undo (e.g. after upgrading the framework package, which will overwrite the
+patched file with the upstream version), simply rerun `pio run` and the hook
+will reapply the patch.
+
+Measured effect on this firmware: audio POST round-trip for a 30 KB chunk drops
+from ~5.17 s to ~0.18 s; 180 KB drops from ~5.58 s to ~0.68 s. End-to-end
+chunked TTS plays smoothly instead of choppy.
+
 ## Flash
 
 Put the AtomS3R in download mode if needed, then run:
@@ -263,6 +324,63 @@ Atomic Echo Base は必須です。AtomS3R 本体にはスピーカーもマイ�
 cd firmware/atoms3r-headroom
 pio run
 ```
+
+初回ビルドで `[webserver-patch] applied: …` が一度だけ出力され、以降は
+`[webserver-patch] already applied: …` になります。これが何で、なぜ必要かは
+[WebServer ライブラリパッチ](#webserver-ライブラリパッチ)を参照してください。
+
+## WebServer ライブラリパッチ
+
+Arduino ESP32 コアの `WebServer` ライブラリには、本ファームウェアの音声 POST
+ごとに固定で約 5 秒の遅延を生むふるまいがあります。パッチを当てないと、
+チャンク TTS 再生がはっきり途切れます(本来 30 ms で返るはずの HTTP 応答を
+チャンクごとに 5 秒待つため)。
+
+**原因。** `framework-arduinoespressif32/libraries/WebServer/src/Parsing.cpp`
+の生ボディアップロードループは、残りバイト数に関係なく毎回 `HTTP_RAW_BUFLEN`
+(1436) バイトを要求します。最後の周回はほぼ常に残量より大きな要求になり、
+`WiFiClient::readBytes` は来ないバイトを `HTTP_MAX_SEND_WAIT` (5000 ms) 経過まで
+待ち続けます。
+
+**修正。** `readBytes` の要求量を実残量にキャップし、最後の読み取りが即座に
+戻るようにします。
+
+**適用方法。** PlatformIO の pre-build フック
+(`scripts/apply_webserver_patch.py` を `platformio.ini` の `extra_scripts` に
+登録)が、システムライブラリのファイルを直接書き換えます。フックは冪等で
+(`PATCH(minimum-headroom):` という自己マーカーを残します)、上流のライブラリが
+想定スニペットを失っていれば明示的に失敗します。フレームワーク更新で
+修正が黙って消えることはありません。
+
+**パッチ本体。** `patches/webserver_raw_read_cap.patch` と等価:
+
+```diff
+       while (_currentRaw->totalSize < _clientContentLength) {
+-        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, HTTP_RAW_BUFLEN);
++        // PATCH(minimum-headroom): cap readBytes() to remaining bytes so the
++        // final partial chunk does not wait the full 5s WiFiClient timeout.
++        size_t toRead = HTTP_RAW_BUFLEN;
++        size_t remaining = _clientContentLength - _currentRaw->totalSize;
++        if (remaining < toRead) toRead = remaining;
++        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, toRead);
+         _currentRaw->totalSize += _currentRaw->currentSize;
+```
+
+フックに頼らず手動で当てるには:
+
+```bash
+FW=$(pio pkg show framework-arduinoespressif32 --json-output 2>/dev/null \
+  | python -c "import json,sys;print(json.load(sys.stdin)['__pkg_dir'])")
+patch -p0 -d "$FW/libraries/WebServer/src" \
+  < firmware/atoms3r-headroom/patches/webserver_raw_read_cap.patch
+```
+
+フレームワーク更新でパッチ済みファイルが上流版に戻った場合は、`pio run` を
+再実行すればフックが再適用します。
+
+このファームでの実測効果: 30 KB チャンクの音声 POST 往復が約 5.17 秒 → 約
+0.18 秒、180 KB は約 5.58 秒 → 約 0.68 秒。チャンク TTS が途切れず滑らかに
+再生されるようになります。
 
 ## 書き込み
 
