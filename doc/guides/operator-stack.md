@@ -45,9 +45,9 @@ Advanced debug override, if you intentionally want the mobile mirror to follow t
 
 All launchers accept the same `FACE_AUDIO_TARGET` values:
 
-- `local`: play on the host speaker only
-- `browser`: send audio to connected browser clients only
-- `both`: play on both
+- `browser` (recommended for remote sinks): send audio to connected browser clients only. PC browser tabs, mobile browsers, and the AtomS3R bridge all benefit from the TTS worker's remote prefetch (~900 ms lead) plus the browser/Atom FIFO queues — long multi-sentence answers play with much shorter inter-chunk gaps.
+- `local`: play on the host speaker only. Use this for a headless PC where you want the worker to drive a local sound device directly.
+- `both`: play on the host speaker and broadcast to remote sinks. Convenient when you want PC speaker output alongside a browser/Atom listener, but worker prefetch is **disabled** in this mode (the local clock cannot be cut short), so remote sinks hear the older synthesize-then-send-then-play pacing.
 
 All launchers also accept `--ui-mode <auto|pc|mobile>` (the CLI form of `FACE_UI_MODE`):
 
@@ -355,9 +355,9 @@ Wrong pane is mirrored on mobile:
 
 `FACE_AUDIO_TARGET`:
 
-- `local`: ホストスピーカーのみ
-- `browser`: ブラウザクライアントのみ
-- `both`: 両方
+- `browser`（リモート向けの推奨）: 接続中のブラウザ／AtomS3R などへのみ送出。worker のリモート先読み（既定 ~900 ms リード）とブラウザ／Atom 側 FIFO キューが有効になり、長文の文間ギャップが大幅に短くなります。PC ブラウザ・スマホブラウザ・AtomS3R いずれも対象。
+- `local`: ホストスピーカーのみ。ヘッドレス PC で worker に直接ローカル音声デバイスを叩かせたいとき。
+- `both`: ホストスピーカーで再生しつつリモートにもブロードキャスト。PC スピーカーとブラウザ／Atom を同時に使いたいとき便利だが、worker の先読みはこのモードでは **無効**（ローカル再生クロックを早めに切れない）のため、リモート側は従来の「合成→送信→再生完了待ち」の間が残ります。
 
 `--ui-mode <auto|pc|mobile>` / `FACE_UI_MODE`:
 

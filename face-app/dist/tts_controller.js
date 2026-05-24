@@ -362,6 +362,10 @@ export function createTtsController(options = {}) {
     }
   }
 
+  function removeDeferredEntries() {
+    queue = queue.filter((entry) => !entry.deferUntilIdle);
+  }
+
   function emitState(sessionId, utteranceId, phase, extra = {}) {
     const payload = {
       v: 1,
@@ -431,6 +435,7 @@ export function createTtsController(options = {}) {
       policy,
       ttlMs,
       createdAt,
+      deferUntilIdle: payload?.defer_until_idle === true,
       dedupeKey: typeof payload?.dedupe_key === 'string' ? payload.dedupe_key : null
     };
   }
@@ -557,8 +562,22 @@ export function createTtsController(options = {}) {
       return;
     }
 
-    const next = queue.shift();
-    dispatchSpeak(next, 'dequeued');
+    while (!active && queue.length > 0) {
+      const next = queue.shift();
+      if (isEntryExpired(next)) {
+        emitState(next.sessionId, next.utteranceId, 'dropped', {
+          ...(next.agentId ? { agent_id: next.agentId } : {}),
+          ...(next.agentLabel ? { agent_label: next.agentLabel } : {}),
+          reason: 'ttl_expired',
+          generation: next.generation,
+          message_id: next.messageId,
+          revision: next.revision
+        });
+        continue;
+      }
+
+      dispatchSpeak(next, 'dequeued');
+    }
   }
 
   function shouldPromoteToAutoInterrupt(entry, acceptedAt) {
@@ -852,6 +871,34 @@ export function createTtsController(options = {}) {
 
     const forceInterrupt = entry.policy === 'interrupt' || entry.priority >= 3;
     const autoInterrupt = shouldPromoteToAutoInterrupt(entry, acceptedAt);
+
+    if (entry.deferUntilIdle) {
+      removeDeferredEntries();
+
+      if (active || queue.length > 0) {
+        enqueueEntries(children);
+        emitState(head.sessionId, head.utteranceId, 'queued', {
+          ...(head.agentId ? { agent_id: head.agentId } : {}),
+          ...(head.agentLabel ? { agent_label: head.agentLabel } : {}),
+          reason: 'deferred_until_idle',
+          generation: head.generation,
+          message_id: head.messageId,
+          revision: head.revision
+        });
+        return {
+          accepted: true,
+          spoken: true,
+          generation: head.generation,
+          queued: true,
+          message_id: head.messageId,
+          revision: head.revision,
+          reason: null
+        };
+      }
+
+      enqueueEntries(tail);
+      return dispatchSpeak(head, 'deferred_until_idle');
+    }
 
     if (forceInterrupt || autoInterrupt) {
       clearQueue();

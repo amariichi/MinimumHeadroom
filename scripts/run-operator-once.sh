@@ -140,7 +140,7 @@ Examples:
   ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
   ./scripts/run-operator-once.sh --agent-cmd 'bash -l'
   ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
-  ASR_GPU=1 ./scripts/run-operator-once.sh --profile default --audio-target both
+  ASR_GPU=1 ./scripts/run-operator-once.sh --profile default --audio-target browser
 EOF
 }
 

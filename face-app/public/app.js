@@ -151,6 +151,7 @@ const LG_POLYFILL_SOURCES = [
 const SILENT_WAV_SAMPLE_RATE = 24_000;
 const SILENT_WAV_DURATION_MS = 60;
 const UNLOCK_TIMEOUT_MS = 1200;
+const BROWSER_AUDIO_PENDING_PER_CHANNEL_MAX = 8;
 const DOUBLE_TAP_MAX_INTERVAL_MS = 520;
 const DOUBLE_TAP_MAX_DISTANCE_PX = 44;
 const DRAG_START_THRESHOLD_PX = 10;
@@ -3866,7 +3867,8 @@ function createBrowserAudioChannel() {
     sessionId: null,
     generation: null,
     startedAt: 0,
-    release: null
+    release: null,
+    queue: []
   };
 }
 
@@ -3887,8 +3889,28 @@ function releaseBrowserAudioChannelResource(channel) {
   channel.release = null;
 }
 
-function clearBrowserAudioChannel(channel) {
+function releaseBrowserAudioSource(source) {
+  if (source && typeof source.release === 'function') {
+    source.release();
+  }
+}
+
+function releaseQueuedBrowserAudioSources(channel) {
+  if (!Array.isArray(channel.queue) || channel.queue.length === 0) {
+    return;
+  }
+  for (const source of channel.queue) {
+    releaseBrowserAudioSource(source);
+  }
+  channel.queue = [];
+}
+
+function clearBrowserAudioChannel(channel, options = {}) {
+  const clearQueue = options.clearQueue !== false;
   releaseBrowserAudioChannelResource(channel);
+  if (clearQueue) {
+    releaseQueuedBrowserAudioSources(channel);
+  }
   channel.active = false;
   channel.sessionId = null;
   channel.generation = null;
@@ -4146,26 +4168,47 @@ function queueReplayPayload(payload) {
   showAudioReplayButton();
 }
 
-async function playAudioSource(src, generation = null, release = null, sessionId = '-') {
-  const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : '-';
-  const channel = reserveBrowserAudioChannel(normalizedSessionId);
+function pruneBrowserAudioQueue(channel) {
+  if (!Array.isArray(channel.queue)) {
+    channel.queue = [];
+    return;
+  }
+  while (channel.queue.length > BROWSER_AUDIO_PENDING_PER_CHANNEL_MAX) {
+    releaseBrowserAudioSource(channel.queue.shift());
+  }
+}
+
+function drainQueuedBrowserAudioChannel(channel) {
+  if (!channel || channel.active || !Array.isArray(channel.queue) || channel.queue.length === 0) {
+    return;
+  }
+  const next = channel.queue.shift();
+  void startBrowserAudioSourceOnChannel(channel, next).catch(() => {
+    releaseBrowserAudioSource(next);
+    setTtsPhase('browser_error', 'warn');
+    drainQueuedBrowserAudioChannel(channel);
+  });
+}
+
+async function startBrowserAudioSourceOnChannel(channel, source) {
   const token = channel.token + 1;
   channel.token = token;
   pauseAndResetBrowserAudioChannel(channel);
-  clearBrowserAudioChannel(channel);
-  channel.player.src = src;
+  clearBrowserAudioChannel(channel, { clearQueue: false });
+  channel.player.src = source.src;
   channel.player.currentTime = 0;
-  channel.release = typeof release === 'function' ? release : null;
+  channel.release = typeof source.release === 'function' ? source.release : null;
   channel.active = true;
-  channel.sessionId = normalizedSessionId;
-  channel.generation = Number.isInteger(generation) ? generation : null;
+  channel.sessionId = source.sessionId;
+  channel.generation = source.generation;
   channel.startedAt = Date.now();
 
   const finalizeIfCurrent = () => {
     if (channel.token !== token) {
       return;
     }
-    clearBrowserAudioChannel(channel);
+    clearBrowserAudioChannel(channel, { clearQueue: false });
+    drainQueuedBrowserAudioChannel(channel);
   };
   channel.player.onended = finalizeIfCurrent;
   channel.player.onerror = () => {
@@ -4185,6 +4228,33 @@ async function playAudioSource(src, generation = null, release = null, sessionId
     }
     throw error;
   }
+}
+
+async function playAudioSource(src, generation = null, release = null, sessionId = '-') {
+  const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : '-';
+  const channel = reserveBrowserAudioChannel(normalizedSessionId);
+  const source = {
+    src,
+    release: typeof release === 'function' ? release : null,
+    sessionId: normalizedSessionId,
+    generation: Number.isInteger(generation) ? generation : null
+  };
+
+  if (channel.active && channel.sessionId === normalizedSessionId) {
+    if (!Array.isArray(channel.queue)) {
+      channel.queue = [];
+    }
+    channel.queue.push(source);
+    pruneBrowserAudioQueue(channel);
+    return { superseded: false, queued: true };
+  }
+
+  if (channel.active) {
+    pauseAndResetBrowserAudioChannel(channel);
+    clearBrowserAudioChannel(channel);
+  }
+
+  return startBrowserAudioSourceOnChannel(channel, source);
 }
 
 async function playBrowserAudioPayload(payload) {

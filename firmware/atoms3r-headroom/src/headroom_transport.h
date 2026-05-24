@@ -31,7 +31,7 @@ private:
   void handleAudioPayload(JsonDocument& doc, const String& type);
   bool shouldApplyPayload(const String& agentId, const String& type, uint32_t nowMs);
   void handleEventPayload(const String& name);
-  void handleTtsStatePayload(const String& phase);
+  void handleTtsStatePayload(JsonDocument& doc);
   void updateExpressionTimeout(uint32_t nowMs);
   void setExpression(HeadroomExpression expression);
 };

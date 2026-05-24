@@ -59,6 +59,35 @@ test('handleHook emits broadcast event + say payloads for permission_required', 
   cleanup();
 });
 
+test('handleHook emits deferred low-priority say payload for idle_after_response', async () => {
+  const { bridge, cleanup } = makeBridgeWithTemplates({
+    permission_required: { en: ['Approval needed.'], ja: ['承認をお願いします。'] },
+    idle_after_response: { en: ['Idle.'], ja: ['アイドルです。'] }
+  });
+  const broadcasted = [];
+  const server = { broadcast: (p) => broadcasted.push(p) };
+
+  const result = await bridge.handleHook({
+    payload: { type: 'hook', agent_id: 'helper-1', event: 'idle_after_response', runtime: 'codex' },
+    server
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.event, 'idle_after_response');
+  assert.equal(broadcasted.length, 2);
+  assert.equal(broadcasted[0].type, 'event');
+  assert.equal(broadcasted[0].name, 'idle_after_response');
+  assert.equal(broadcasted[1].type, 'say');
+  assert.equal(broadcasted[1].priority, 1);
+  assert.equal(broadcasted[1].policy, 'replace');
+  assert.equal(broadcasted[1].ttl_ms, 8000);
+  assert.equal(broadcasted[1].defer_until_idle, true);
+  assert.equal(broadcasted[1].notification_event, 'idle_after_response');
+  assert.equal(broadcasted[1].text, 'Idle.');
+
+  cleanup();
+});
+
 test('handleHook rejects unknown event names', async () => {
   const bridge = createHookBridge({ log: { warn: () => {} }, templatesPath: '/nonexistent/path.json' });
   const result = await bridge.handleHook({
