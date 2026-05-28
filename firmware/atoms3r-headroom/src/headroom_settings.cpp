@@ -26,6 +26,13 @@ int readInt(Preferences& prefs, const char* key, int fallback) {
   return prefs.getInt(key, fallback);
 }
 
+bool readBool(Preferences& prefs, const char* key, bool fallback) {
+  if (!prefs.isKey(key)) {
+    return fallback;
+  }
+  return prefs.getBool(key, fallback);
+}
+
 }  // namespace
 
 void HeadroomSettings::begin() {
@@ -65,6 +72,7 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   prefs.putString("display_id", normalized.displayAgentId);
   prefs.putString("input_id", normalized.inputTargetAgentId);
   prefs.putString("asr_lang", normalized.asrLanguage);
+  prefs.putBool("vad_on", normalized.continuousVadEnabled);
   prefs.putInt("max_b64_sec", normalized.maxBase64TtsSeconds);
   prefs.putInt("max_http_b", normalized.maxHttpTtsBytes);
   prefs.putInt("rotation", normalized.faceRotationDegrees);
@@ -185,6 +193,7 @@ void HeadroomSettings::loadCompileDefaults() {
   data_.displayAgentId = HEADROOM_DISPLAY_AGENT_ID;
   data_.inputTargetAgentId = HEADROOM_INPUT_TARGET_AGENT_ID;
   data_.asrLanguage = normalizeAsrLanguage(HEADROOM_ASR_LANGUAGE);
+  data_.continuousVadEnabled = HEADROOM_CONTINUOUS_VAD_ENABLED != 0;
   data_.maxBase64TtsSeconds = HEADROOM_MAX_BASE64_TTS_SECONDS;
   data_.maxHttpTtsBytes = HEADROOM_MAX_HTTP_TTS_BYTES;
   data_.faceRotationDegrees = normalizeRotation(HEADROOM_FACE_ROTATION_DEGREES);
@@ -212,11 +221,11 @@ void HeadroomSettings::loadNvsOverrides() {
   data_.wifiPassword3 = readString(prefs, "wifi_pw3", data_.wifiPassword3);
   data_.faceHttpBase = readString(prefs, "http_base", data_.faceHttpBase);
   data_.faceWsUrl = readString(prefs, "ws_url", data_.faceWsUrl);
-  if ((data_.faceHttpBase.indexOf("192.168.1.10") >= 0 || data_.faceHttpBase.indexOf("192.168.1.34") >= 0) &&
+  if ((data_.faceHttpBase.indexOf("192.168.1.10") >= 0) &&
       compileHttpBase.length() > 0) {
     data_.faceHttpBase = compileHttpBase;
   }
-  if ((data_.faceWsUrl.indexOf("192.168.1.10") >= 0 || data_.faceWsUrl.indexOf("192.168.1.34") >= 0) &&
+  if ((data_.faceWsUrl.indexOf("192.168.1.10") >= 0) &&
       compileWsUrl.length() > 0) {
     data_.faceWsUrl = compileWsUrl;
   }
@@ -228,6 +237,7 @@ void HeadroomSettings::loadNvsOverrides() {
   data_.displayAgentId = readString(prefs, "display_id", data_.displayAgentId);
   data_.inputTargetAgentId = readString(prefs, "input_id", data_.inputTargetAgentId);
   data_.asrLanguage = normalizeAsrLanguage(readString(prefs, "asr_lang", data_.asrLanguage));
+  data_.continuousVadEnabled = readBool(prefs, "vad_on", data_.continuousVadEnabled);
   data_.maxBase64TtsSeconds = readInt(prefs, "max_b64_sec", data_.maxBase64TtsSeconds);
   data_.maxHttpTtsBytes = readInt(prefs, "max_http_b", data_.maxHttpTtsBytes);
   data_.faceRotationDegrees = normalizeRotation(readInt(prefs, "rotation", data_.faceRotationDegrees));

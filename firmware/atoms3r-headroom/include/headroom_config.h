@@ -10,6 +10,10 @@
 #define HEADROOM_ASR_LANGUAGE "ja"
 #endif
 
+#ifndef HEADROOM_CONTINUOUS_VAD_ENABLED
+#define HEADROOM_CONTINUOUS_VAD_ENABLED 0
+#endif
+
 // Wi-Fi slots 2/3 are optional. Guard them so a pre-existing
 // headroom_config.local.h that predates multi-AP support still compiles.
 #ifndef HEADROOM_WIFI_SSID2

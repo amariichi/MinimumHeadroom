@@ -84,10 +84,22 @@ HeadroomPttState HeadroomPtt::state() const {
   return state_;
 }
 
+void HeadroomPtt::setBeforeRecordingCallback(void (*callback)(void*), void* context) {
+  beforeRecordingCallback_ = callback;
+  beforeRecordingContext_ = context;
+}
+
 bool HeadroomPtt::startRecording() {
   if (!audio_ || !transport_ || !faceState_) {
     return false;
   }
+  // Notify subscribers that PTT is about to take the mic. Wired to the
+  // continuous VAD state machine so its generation bumps and it transitions
+  // to SuspendedForPtt BEFORE the shared codec is reconfigured.
+  if (beforeRecordingCallback_) {
+    beforeRecordingCallback_(beforeRecordingContext_);
+  }
+
   // Audible arming cue ("ピッ"). Played and fully drained while the codec is
   // still in DAC mode; doubles as the "speak now" signal so the kArmMs hold
   // delay does not clip the user's speech. Hardware-verified to sound correct.

@@ -91,8 +91,16 @@ echo "[run-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${MH_OPERATOR_FACE_AGENT_ID
 if [[ "${MH_STACK_SKIP_ASR}" == "1" ]]; then
   echo "[run-operator-stack] skipping asr-worker startup (MH_STACK_SKIP_ASR=1)."
 else
+  # Force the ASR worker onto CUDA when launched from the stack. The user's
+  # ~/.bashrc exports ASR_DEVICE=cpu as a safety default, which bleeds into
+  # any restart that does not explicitly set MH_ASR_DEVICE; the result was
+  # parakeet loading on CPU and adding several hundred ms of ASR latency
+  # for each VAD utterance. run-asr-worker.sh prefers MH_ASR_DEVICE over
+  # ASR_DEVICE precisely so this kind of override survives.
+  : "${MH_ASR_DEVICE:=cuda}"
+  echo "[run-operator-stack] MH_ASR_DEVICE=${MH_ASR_DEVICE}"
   start_proc "asr-worker" \
-    env ASR_HOST="$ASR_HOST" ASR_PORT="$ASR_PORT" \
+    env ASR_HOST="$ASR_HOST" ASR_PORT="$ASR_PORT" MH_ASR_DEVICE="$MH_ASR_DEVICE" \
     ./scripts/run-asr-worker.sh
 fi
 

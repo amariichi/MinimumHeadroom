@@ -5,6 +5,7 @@
 
 #include "face_renderer.h"
 #include "headroom_audio.h"
+#include "headroom_continuous_vad.h"
 #include "headroom_ingress_server.h"
 #include "headroom_ptt.h"
 #include "headroom_serial_provision.h"
@@ -21,6 +22,7 @@ HeadroomAudio audio;
 HeadroomTransport transport;
 HeadroomIngressServer ingressServer;
 HeadroomPtt ptt;
+HeadroomContinuousVad continuousVad;
 HeadroomFaceRenderer renderer;
 HeadroomFaceState faceState;
 
@@ -125,6 +127,41 @@ void applyTripleTapRotation() {
   faceState.mouthOpen = 0.0f;
   Serial.printf("face rotation -> %d deg\n", next.faceRotationDegrees);
 }
+
+// Before-playback callback used by both HeadroomTransport (direct WS TTS) and
+// HeadroomIngressServer (HTTP TTS bridge). Goes through the state machine so
+// VAD enters Cooldown and resists thrash on the very next update() tick after
+// playback finishes; calling stop() directly would skip the cooldown gate.
+void suspendContinuousVadForPlayback(void*) {
+  continuousVad.suspendForPlayback();
+}
+
+// Pre-recording callback for HeadroomPtt. Fires before audio_->stopForRecording()
+// so the VAD state machine transitions to SuspendedForPtt and bumps generation
+// BEFORE the shared codec is reconfigured to ADC mode.
+void suspendContinuousVadForPtt(void*) {
+  continuousVad.suspendForPtt();
+}
+
+void setContinuousVadEnabled(bool enabled) {
+  HeadroomSettingsData next = settings.editable();
+  if (next.continuousVadEnabled == enabled) {
+    return;
+  }
+  next.continuousVadEnabled = enabled;
+  if (!settings.save(next)) {
+    faceState.expression = HeadroomExpression::Failed;
+    faceState.mouthOpen = 0.0f;
+    Serial.println("continuous VAD toggle save failed");
+    return;
+  }
+  ingressServer.setContinuousVadEnabled(next.continuousVadEnabled);
+  continuousVad.setEnabled(next.continuousVadEnabled);
+  faceState.expression = next.continuousVadEnabled ? HeadroomExpression::Listening : HeadroomExpression::Neutral;
+  faceState.mouthOpen = 0.0f;
+  Serial.printf("continuous VAD -> %s\n", next.continuousVadEnabled ? "on" : "off");
+}
+
 
 void updateDemoMotion(uint32_t nowMs) {
   if (wifiConnected && !setupMode) {
@@ -274,7 +311,10 @@ void setup() {
     faceState.connected = true;
     transport.begin(data, faceState, audio);
     ingressServer.begin(data, transport, audio, faceState);
+    ingressServer.setBeforeAudioPlaybackCallback(&suspendContinuousVadForPlayback, nullptr);
     ptt.begin(data, audio, transport, faceState);
+    ptt.setBeforeRecordingCallback(&suspendContinuousVadForPtt, nullptr);
+    continuousVad.begin(data, audio, transport, faceState);
   }
 
   if (!wifiConnected) {
@@ -290,10 +330,22 @@ void loop() {
   setupPortal.handleClient();
   audio.loop();
   if (!setupMode && wifiConnected) {
+    // Press-edge: suspend continuous VAD capture immediately so a long-hold
+    // for PTT does not race with VAD owning the mic, but do NOT persist the
+    // VAD-off setting here. Persistence is reserved for the short-tap-confirmed
+    // path below (tapCount == 1 after the gap timer expires), so a long hold
+    // for PTT no longer doubles as a destructive NVS write of the VAD setting.
+    {
+      bool pressedNow = M5.BtnA.isPressed();
+      if (pressedNow && !btnDownPrev && settings.data().continuousVadEnabled) {
+        continuousVad.suspendForPtt();
+      }
+    }
     ptt.update();
     if (!ptt.recording()) {
       ingressServer.loop();
       transport.loop();
+      continuousVad.update();
     }
     faceState.connected = transport.connected() || ingressServer.recentlyActive(10000);
 
@@ -328,10 +380,16 @@ void loop() {
   }
   uint32_t nowMs = millis();
 
-  // Unified screen-button tap gesture (all modes). Short taps: in offline /
-  // setup mode each tap cycles the expression preview; three quick taps in any
-  // mode rotate the face 90° clockwise and persist it (no PC needed). A long
-  // hold falls through to PTT when connected and never counts as a tap.
+  // Unified screen-button tap gesture (all modes). In connected mode, the
+  // press edge above suspends continuous VAD capture without persisting any
+  // setting; a single-tap-confirmed gesture (tapCount == 1 after the gap
+  // timer expires) persists VAD off as an escape hatch when VAD is on;
+  // a double-tap-confirmed gesture (tapCount == 2) toggles VAD on or off
+  // — the only on-device way to ENABLE VAD without re-provisioning. A long
+  // hold does NOT count as a tap and does NOT persist any VAD setting, so
+  // PTT stays non-destructive. In offline/setup mode, short taps cycle the
+  // expression preview. Three quick taps rotate the face 90° clockwise and
+  // persist it. A long hold falls through to PTT when connected.
   {
     bool down = M5.BtnA.isPressed();
     if (down && !btnDownPrev) {
@@ -356,6 +414,21 @@ void loop() {
       }
     }
     if (tapCount > 0 && nowMs - lastTapMs > kMultiTapGapMs) {
+      if (wifiConnected && !setupMode) {
+        if (tapCount == 1 && settings.data().continuousVadEnabled) {
+          // Short-tap escape hatch: persist VAD off when it is currently on.
+          // A single tap on a device with VAD already off is a no-op so the
+          // gesture cannot accidentally disrupt anything else.
+          setContinuousVadEnabled(false);
+        } else if (tapCount == 2) {
+          // Double-tap: toggle continuous VAD. This is the only on-device
+          // gesture that can ENABLE VAD; otherwise the user must reach the
+          // provisioning script. The toggle direction is determined by the
+          // current persisted setting so off→on enables and on→off mirrors
+          // the single-tap escape hatch.
+          setContinuousVadEnabled(!settings.data().continuousVadEnabled);
+        }
+      }
       tapCount = 0;
     }
     btnDownPrev = down;

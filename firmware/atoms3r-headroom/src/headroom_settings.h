@@ -21,6 +21,7 @@ struct HeadroomSettingsData {
   String displayAgentId;
   String inputTargetAgentId;
   String asrLanguage;
+  bool continuousVadEnabled = false;
   int maxBase64TtsSeconds = 10;
   int maxHttpTtsBytes = 1200000;
   int faceRotationDegrees = 0;

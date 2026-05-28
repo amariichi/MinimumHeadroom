@@ -384,10 +384,16 @@ export async function startFaceWebSocketServer(options = {}) {
   const wsPath = normalizePath(options.path ?? '/ws');
   const onPayload = typeof options.onPayload === 'function' ? options.onPayload : () => {};
   const onHttpRequest = typeof options.onHttpRequest === 'function' ? options.onHttpRequest : null;
+  // Called once per broadcastPayload when a TTS audio payload is about to be
+  // delivered to at least one Arduino/Atom socket. Used by the Atom VAD
+  // bridge to reset any partial buffer from the prior turn before the device
+  // plays out the new audio.
+  const onAtomTtsDispatch = typeof options.onAtomTtsDispatch === 'function' ? options.onAtomTtsDispatch : null;
   const relayPayloads = options.relayPayloads ?? true;
   const staticDir = options.staticDir ?? null;
   const authToken = asNonEmptyString(options.authToken);
   const requireOriginCheck = options.requireOriginCheck === true;
+  const sendAudioToArduino = options.sendAudioToArduino === true;
   const allowedOrigins = new Set(
     (Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [])
       .map((origin) => normalizeOrigin(origin))
@@ -397,6 +403,43 @@ export async function startFaceWebSocketServer(options = {}) {
 
   const sockets = new Set();
   const replayablePayloads = new Map();
+
+  function websocketProtocolSet(header) {
+    const values = Array.isArray(header) ? header : [header];
+    return new Set(
+      values
+        .filter((value) => typeof value === "string")
+        .flatMap((value) => value.split(","))
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean)
+    );
+  }
+
+  function isArduinoUpgrade(request) {
+    return websocketProtocolSet(request.headers["sec-websocket-protocol"]).has("arduino");
+  }
+
+  function isArduinoSocket(socket) {
+    return socket && socket.__mhArduinoClient === true;
+  }
+
+  function shouldSendPayloadToSocket(socket, payload) {
+    if (!isArduinoSocket(socket)) {
+      return true;
+    }
+    switch (payload?.type) {
+      case "operator_state":
+      case "operator_terminal_snapshot":
+      case "operator_prompt":
+      case "operator_ack":
+        return false;
+      case "tts_audio":
+      case "tts_audio_ref":
+        return sendAudioToArduino;
+      default:
+        return true;
+    }
+  }
 
   function replayCacheKey(payload) {
     if (!payload || typeof payload !== 'object') {
@@ -439,7 +482,9 @@ export async function startFaceWebSocketServer(options = {}) {
 
   function replayCachedPayloads(socket) {
     for (const payload of replayablePayloads.values()) {
-      sendPayloadToSocket(socket, payload);
+      if (shouldSendPayloadToSocket(socket, payload)) {
+        sendPayloadToSocket(socket, payload);
+      }
     }
   }
 
@@ -456,8 +501,36 @@ export async function startFaceWebSocketServer(options = {}) {
   function broadcastPayload(payload, excludeSocket = null) {
     try {
       rememberReplayablePayload(payload);
-      const text = JSON.stringify(payload);
-      broadcastText(text, excludeSocket);
+      const frame = encodeServerFrame(0x1, JSON.stringify(payload));
+      for (const peer of sockets) {
+        if (excludeSocket && peer === excludeSocket) {
+          continue;
+        }
+        if (!shouldSendPayloadToSocket(peer, payload)) {
+          continue;
+        }
+        safeSocketWrite(peer, frame);
+      }
+      // Fire the Atom TTS dispatch hook on every tts_audio / tts_audio_ref
+      // broadcast, regardless of which sockets received it. face-app does not
+      // know the downstream Atom topology (could be a direct Arduino WS
+      // client OR the separate atoms3r-http-bridge process, which is a plain
+      // WS subscriber that re-posts audio to the Atom over HTTP), so gating
+      // on the Arduino subprotocol would miss the HTTP-bridge path entirely.
+      // The bridge buffers are empty when the device is not streaming mic
+      // frames, so resetSession is a harmless no-op in that case.
+      if (
+        onAtomTtsDispatch &&
+        payload &&
+        (payload.type === 'tts_audio' || payload.type === 'tts_audio_ref')
+      ) {
+        try {
+          onAtomTtsDispatch(payload);
+        } catch (error) {
+          // Hook failure must never break broadcast.
+          log.warn?.(`onAtomTtsDispatch failed: ${error?.message ?? error}`);
+        }
+      }
       return true;
     } catch {
       return false;
@@ -539,16 +612,20 @@ export async function startFaceWebSocketServer(options = {}) {
     }
 
     const acceptValue = websocketAcceptValue(key);
-    socket.write(
-      [
-        'HTTP/1.1 101 Switching Protocols',
-        'Upgrade: websocket',
-        'Connection: Upgrade',
-        `Sec-WebSocket-Accept: ${acceptValue}`,
-        '\r\n'
-      ].join('\r\n')
-    );
+    const arduinoClient = isArduinoUpgrade(request);
+    const responseHeaders = [
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${acceptValue}`
+    ];
+    if (arduinoClient) {
+      responseHeaders.push('Sec-WebSocket-Protocol: arduino');
+    }
+    responseHeaders.push('\r\n');
+    socket.write(responseHeaders.join('\r\n'));
 
+    socket.__mhArduinoClient = arduinoClient;
     sockets.add(socket);
     replayCachedPayloads(socket);
     const state = { buffer: Buffer.alloc(0) };

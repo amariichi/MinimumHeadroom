@@ -21,6 +21,12 @@ void mergeInt(JsonDocument& doc, const char* key, int& field) {
   }
 }
 
+void mergeBool(JsonDocument& doc, const char* key, bool& field) {
+  if (doc[key].is<bool>()) {
+    field = doc[key].as<bool>();
+  }
+}
+
 }  // namespace
 
 void HeadroomSerialProvision::begin(HeadroomSettings& settings) {
@@ -89,6 +95,7 @@ void HeadroomSerialProvision::handleConfig(const String& json) {
     next.asrLanguage =
         HeadroomSettings::normalizeAsrLanguage(doc["asr_lang"].as<String>(), next.asrLanguage);
   }
+  mergeBool(doc, "vad_on", next.continuousVadEnabled);
   mergeInt(doc, "max_b64_sec", next.maxBase64TtsSeconds);
   mergeInt(doc, "max_http_b", next.maxHttpTtsBytes);
   mergeInt(doc, "rotation", next.faceRotationDegrees);
@@ -128,6 +135,7 @@ void HeadroomSerialProvision::handleQuery() {
   doc["display_id"] = d.displayAgentId;
   doc["input_id"] = d.inputTargetAgentId;
   doc["asr_lang"] = d.asrLanguage;
+  doc["vad_on"] = d.continuousVadEnabled;
   doc["max_b64_sec"] = d.maxBase64TtsSeconds;
   doc["max_http_b"] = d.maxHttpTtsBytes;
   doc["rotation"] = d.faceRotationDegrees;

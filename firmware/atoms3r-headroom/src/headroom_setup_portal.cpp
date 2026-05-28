@@ -34,6 +34,10 @@ String selectedIf(bool selected) {
   return selected ? F(" selected") : String();
 }
 
+String checkedIf(bool checked) {
+  return checked ? F(" checked") : String();
+}
+
 int requestInt(WebServer& server, const char* name, int fallback) {
   if (!server.hasArg(name)) {
     return fallback;
@@ -186,6 +190,9 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += selectedIf(data.asrLanguage == "en");
   html += F(">English</option>");
   html += F("</select>");
+  html += F("<label><input name='vad_on' type='checkbox' value='1'");
+  html += checkedIf(data.continuousVadEnabled);
+  html += F("> Continuous hands-free VAD</label>");
   html += F("<div class='row'><div><label>Max base64 TTS seconds</label><input name='max_b64_sec' type='number' min='1' max='15' value='");
   html += String(data.maxBase64TtsSeconds);
   html += F("'></div><div><label>Max HTTP TTS bytes</label><input name='max_http_b' type='number' min='100000' max='3000000' value='");
@@ -241,6 +248,7 @@ HeadroomSettingsData HeadroomSetupPortal::settingsFromRequest() {
   next.displayAgentId = server_.arg("display_id");
   next.inputTargetAgentId = server_.arg("input_id");
   next.asrLanguage = HeadroomSettings::normalizeAsrLanguage(server_.arg("asr_lang"), next.asrLanguage);
+  next.continuousVadEnabled = server_.hasArg("vad_on");
   next.maxBase64TtsSeconds = requestInt(server_, "max_b64_sec", next.maxBase64TtsSeconds);
   next.maxHttpTtsBytes = requestInt(server_, "max_http_b", next.maxHttpTtsBytes);
   next.faceRotationDegrees = HeadroomSettings::normalizeRotation(requestInt(server_, "rotation", next.faceRotationDegrees));

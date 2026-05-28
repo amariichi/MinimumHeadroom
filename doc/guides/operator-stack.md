@@ -137,6 +137,7 @@ Batch ASR:
 - browser posts to `POST /api/operator/asr?lang=ja|en`
 - `face-app` forwards to `asr-worker`
 - `asr-worker` uses Parakeet for JA/EN batch transcription
+- AtomS3R continuous VAD streams `atom_audio_frame` PCM over WebSocket, segments turns in `face-app`, then reuses the same batch ASR and operator response path
 
 Optional realtime ASR:
 
@@ -144,6 +145,10 @@ Optional realtime ASR:
 - `face-app` relays them to a Voxtral vLLM realtime websocket
 - incremental text appears while you are still speaking
 - batch fallback can still run when realtime output is clearly bad or empty
+
+Voice turn acknowledgement is local and template-based. After batch ASR accepts a non-empty turn, `face-app` speaks and displays a short fixed phrase such as `Checking.`, `One moment.`, `Let me check.`, `確認します。`, `少々お待ちください。`, or `確認しますね。` using the requested or detected ASR language. The phrase rotates per language and source, and the same text appears in the speech bubble so muted operation still has visible feedback. Set `MH_FIXED_ACK_ENABLED=0` to disable this. This path does not ask the coding agent or an LLM to generate acknowledgement text.
+
+AtomS3R continuous VAD is gated solely by the Atom firmware setting (`continuous_vad_enabled`, toggled by device double-tap or `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off`). When the device is off, it does not stream mic frames, so the PC-side bridge has nothing to process; the bridge is always installed and is a no-op in that case. The current bridge uses a deterministic RMS-energy VAD fallback and keeps the boundary ready for a later PC-side Silero backend.
 
 The key batch ASR variables are:
 
@@ -155,6 +160,7 @@ The key batch ASR variables are:
 - `MH_OPERATOR_ASR_TIMEOUT_MS`
 - `MH_OPERATOR_ASR_MODEL_JA`
 - `MH_OPERATOR_ASR_MODEL_EN`
+- `MH_FIXED_ACK_ENABLED=0` disables fixed acknowledgement speech
 
 </details>
 
@@ -455,6 +461,7 @@ batch ASR:
 - `POST /api/operator/asr?lang=ja|en`
 - `face-app` から `asr-worker` へ転送
 - `asr-worker` が Parakeet で変換
+- AtomS3R の連続 VAD は WebSocket で `atom_audio_frame` PCM を送り、`face-app` で発話区間を切ってから同じ batch ASR と operator response 経路を再利用
 
 任意の realtime ASR:
 
@@ -462,6 +469,10 @@ batch ASR:
 - `face-app` が Voxtral の vLLM realtime websocket へ中継
 - 話している途中から増分テキストを表示
 - 空振りや明らかな誤認識時は batch 側へ再確認できる
+
+音声ターンの acknowledgement はローカルな固定テンプレートです。batch ASR が空でないターンを受理すると、`face-app` は要求または検出された ASR 言語に応じて `Checking.`、`One moment.`、`Let me check.`、`確認します。`、`少々お待ちください。`、`確認しますね。` のような短い固定フレーズを話し、同じ文を吹き出しにも表示します。文は言語と入力元ごとにローテーションするため、ミュート運用でも目で受理状態が分かります。無効化するには `MH_FIXED_ACK_ENABLED=0` を設定します。この経路では coding agent や LLM に acknowledgement 文を生成させません。
+
+AtomS3R の連続 VAD は Atom firmware の `continuous_vad_enabled` 設定だけで制御されます（デバイス側のダブルタップ、または `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off` でトグル）。デバイス側 OFF のときマイクフレームは送られないので、PC 側のブリッジは常に install されたまま no-op として動きます。現在のブリッジは決定的な RMS エネルギー VAD フォールバックを使い、後から PC 側 Silero backend に差し替えられる境界を残しています。
 
 主な batch ASR 変数:
 
@@ -473,6 +484,7 @@ batch ASR:
 - `MH_OPERATOR_ASR_TIMEOUT_MS`
 - `MH_OPERATOR_ASR_MODEL_JA`
 - `MH_OPERATOR_ASR_MODEL_EN`
+- `MH_FIXED_ACK_ENABLED=0`: 固定 acknowledgement 音声を無効化
 
 </details>
 

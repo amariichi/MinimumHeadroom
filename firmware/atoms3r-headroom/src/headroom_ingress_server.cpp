@@ -78,6 +78,7 @@ void HeadroomIngressServer::begin(const HeadroomSettingsData& settings, Headroom
   authToken_ = settings.authToken;
   deviceId_ = settings.deviceId;
   asrLanguage_ = settings.asrLanguage;
+  continuousVadEnabled_ = settings.continuousVadEnabled;
   maxPayloadBytes_ = estimatePayloadLimit(settings);
 
   const char* headerKeys[] = {"Authorization", "X-Headroom-Auth"};
@@ -110,6 +111,15 @@ bool HeadroomIngressServer::recentlyActive(uint32_t windowMs) const {
   return lastPayloadMs_ != 0 && millis() - lastPayloadMs_ <= windowMs;
 }
 
+void HeadroomIngressServer::setContinuousVadEnabled(bool enabled) {
+  continuousVadEnabled_ = enabled;
+}
+
+void HeadroomIngressServer::setBeforeAudioPlaybackCallback(void (*callback)(void*), void* context) {
+  beforeAudioPlaybackCallback_ = callback;
+  beforeAudioPlaybackContext_ = context;
+}
+
 void HeadroomIngressServer::handleHealth() {
   String body = F("{\"ok\":true,\"service\":\"atoms3r-headroom\",\"device_id\":\"");
   body += jsonEscape(deviceId_);
@@ -125,7 +135,9 @@ void HeadroomIngressServer::handleHealth() {
   body += authToken_.length() > 0 ? F("true") : F("false");
   body += F(",\"asr_language\":\"");
   body += jsonEscape(asrLanguage_);
-  body += F("\"}");
+  body += F("\",\"continuous_vad_enabled\":");
+  body += continuousVadEnabled_ ? F("true") : F("false");
+  body += F("}");
   sendJson(200, body);
 }
 
@@ -242,6 +254,10 @@ void HeadroomIngressServer::handleAudio() {
   if (!audioRawBuffer_ || audioRawLength_ == 0) {
     sendJson(400, F("{\"ok\":false,\"error\":\"empty_body\"}"));
     return;
+  }
+
+  if (beforeAudioPlaybackCallback_) {
+    beforeAudioPlaybackCallback_(beforeAudioPlaybackContext_);
   }
 
   HeadroomAudioResult result = audio_->playWavBytes(audioRawBuffer_, audioRawLength_);

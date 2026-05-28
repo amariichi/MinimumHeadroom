@@ -1,6 +1,7 @@
 #include "headroom_transport.h"
 
 #include <ArduinoJson.h>
+#include <mbedtls/base64.h>
 
 namespace {
 
@@ -70,6 +71,16 @@ String appendQueryToken(String path, const String& token) {
   return path;
 }
 
+String websocketOrigin(const ParsedWsUrl& url) {
+  String origin = url.scheme == "wss" ? F("https://") : F("http://");
+  origin += url.host;
+  if ((url.scheme == "wss" && url.port != 443) || (url.scheme != "wss" && url.port != 80)) {
+    origin += ':';
+    origin += String(url.port);
+  }
+  return origin;
+}
+
 String stringField(JsonDocument& doc, const char* key) {
   const char* value = doc[key] | "";
   return String(value);
@@ -89,6 +100,9 @@ void HeadroomTransport::begin(const HeadroomSettingsData& settings, HeadroomFace
   Serial.printf("ws connecting host=%s port=%u path=%s\n", url.host.c_str(), url.port, path.c_str());
 
   ws_.onEvent([this](WStype_t type, uint8_t* payload, size_t length) { onWsEvent(type, payload, length); });
+  String originHeader = F("Origin: ");
+  originHeader += websocketOrigin(url);
+  ws_.setExtraHeaders(originHeader.c_str());
   ws_.setReconnectInterval(15000);
   ws_.enableHeartbeat(15000, 3000, 2);
 
@@ -135,6 +149,53 @@ bool HeadroomTransport::sendOperatorText(const String& text) {
   bool ok = ws_.sendTXT(payload);
   Serial.printf("operator_response send %s bytes=%u\n", ok ? "ok" : "failed", static_cast<unsigned>(payload.length()));
   return ok;
+}
+
+bool HeadroomTransport::sendAtomAudioFrame(const int16_t* samples, size_t sampleCount, uint32_t sampleRate, const String& language, uint32_t seq, uint32_t generation) {
+  if (!connected_ || !samples || sampleCount == 0) {
+    return false;
+  }
+  const uint8_t* raw = reinterpret_cast<const uint8_t*>(samples);
+  size_t rawBytes = sampleCount * sizeof(int16_t);
+  size_t b64Capacity = ((rawBytes + 2) / 3) * 4 + 1;
+  char* b64 = static_cast<char*>(malloc(b64Capacity));
+  if (!b64) {
+    return false;
+  }
+  size_t b64Length = 0;
+  int rc = mbedtls_base64_encode(reinterpret_cast<unsigned char*>(b64), b64Capacity, &b64Length, raw, rawBytes);
+  if (rc != 0) {
+    free(b64);
+    return false;
+  }
+  b64[b64Length] = '\0';
+
+  String id = deviceId_.length() > 0 ? deviceId_ : String("atom-headroom");
+  String payload;
+  payload.reserve(b64Length + 220);
+  payload += F("{\"v\":1,\"type\":\"atom_audio_frame\",\"session_id\":\"");
+  payload += id;
+  payload += F("\",\"device_id\":\"");
+  payload += id;
+  payload += F("\",\"language\":\"");
+  payload += language == "en" ? "en" : "ja";
+  payload += F("\",\"sample_rate\":");
+  payload += String(sampleRate);
+  payload += F(",\"seq\":");
+  payload += String(seq);
+  payload += F(",\"generation\":");
+  payload += String(generation);
+  payload += F(",\"audio_base64\":\"");
+  payload += b64;
+  payload += F("\"}");
+  free(b64);
+
+  return ws_.sendTXT(payload);
+}
+
+void HeadroomTransport::setBeforeAudioPlaybackCallback(void (*callback)(void*), void* context) {
+  beforeAudioPlaybackCallback_ = callback;
+  beforeAudioPlaybackContext_ = context;
 }
 
 void HeadroomTransport::onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
@@ -202,6 +263,10 @@ bool HeadroomTransport::handleJsonPayload(const uint8_t* payload, size_t length)
 void HeadroomTransport::handleAudioPayload(JsonDocument& doc, const String& type) {
   if (!audio_) {
     return;
+  }
+
+  if (beforeAudioPlaybackCallback_) {
+    beforeAudioPlaybackCallback_(beforeAudioPlaybackContext_);
   }
 
   HeadroomAudioResult result = HeadroomAudioResult::Ignored;

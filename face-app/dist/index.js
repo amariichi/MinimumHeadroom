@@ -9,6 +9,8 @@ import { loadFaceAppConfig } from './config_loader.js';
 import { resolveBrowserAudioMaxChannels } from './browser_audio_config.js';
 import { createOperatorAsrProxy } from './operator_asr_proxy.js';
 import { createOperatorRealtimeAsrProxy } from './operator_realtime_asr_proxy.js';
+import { chooseFixedAck } from './fixed_ack.js';
+import { createAtomAudioVadBridge } from './atom_audio_vad_bridge.js';
 import { createAgentRuntimeStateStore } from './agent_runtime_state.js';
 import { createAgentLifecycleApi, createAgentLifecycleRuntime } from './agent_lifecycle.js';
 import { createAgentAssignmentStateStore } from './agent_assignment_state.js';
@@ -164,6 +166,7 @@ const currentDir = path.dirname(currentFile);
 const staticDir = path.resolve(currentDir, '../public');
 const repoRoot = path.resolve(currentDir, '../..');
 const ttsEnabled = (process.env.FACE_TTS_ENABLED ?? '1') !== '0';
+const fixedAckEnabled = (process.env.MH_FIXED_ACK_ENABLED ?? '1') !== '0';
 const operatorAsrBaseUrl = process.env.MH_OPERATOR_ASR_BASE_URL ?? 'http://127.0.0.1:8091';
 const operatorAsrEndpointUrl = process.env.MH_OPERATOR_ASR_ENDPOINT_URL ?? '';
 const operatorAsrTimeoutMs = Number.parseInt(process.env.MH_OPERATOR_ASR_TIMEOUT_MS ?? '20000', 10);
@@ -280,6 +283,75 @@ const ownerInboxApi = createOwnerInboxApi({
   }
 });
 const hookBridge = createHookBridge({ log: console });
+const fixedAckCounters = new Map();
+
+function nextFixedAckIndex(language, source) {
+  const normalizedLanguage = typeof language === 'string' && language.trim().toLowerCase().startsWith('ja') ? 'ja' : 'en';
+  const normalizedSource = typeof source === 'string' && source.trim() !== '' ? source.trim() : 'operator_asr_proxy';
+  const key = normalizedSource + ':' + normalizedLanguage;
+  const index = fixedAckCounters.get(key) ?? 0;
+  fixedAckCounters.set(key, index + 1);
+  return index;
+}
+
+async function handleAcceptedSpeechAck({ language, source = 'operator_asr_proxy' } = {}) {
+  if (!fixedAckEnabled) {
+    return;
+  }
+  const ackIndex = nextFixedAckIndex(language, source);
+  const ack = chooseFixedAck({ language, kind: 'accepted', index: ackIndex });
+  const now = Date.now();
+  await handleInternalSay({
+    v: 1,
+    type: 'say',
+    session_id: source + '_ack',
+    ...(process.env.MH_FACE_AGENT_ID ? { agent_id: process.env.MH_FACE_AGENT_ID } : {}),
+    ...(process.env.MH_FACE_AGENT_LABEL ? { agent_label: process.env.MH_FACE_AGENT_LABEL } : {}),
+    text: ack.text,
+    priority: 1,
+    policy: 'replace',
+    ttl_ms: 4000,
+    dedupe_key: source + '_ack:' + ack.language + ':' + ackIndex,
+    message_id: source + '-ack-' + now,
+    revision: now
+  }, { broadcastSay: true });
+}
+
+function emitAcceptedSpeechAck(args) {
+  handleAcceptedSpeechAck(args).catch((error) => {
+    console.error('[face-app] fixed ack failed: ' + error.message);
+  });
+}
+
+async function handleInternalSay(payload, options = {}) {
+  const broadcastSay = options.broadcastSay === true;
+  const sayPayload = normalizeSayPayload(payload);
+  if (broadcastSay) {
+    server.broadcast(sayPayload);
+  }
+  if (!ttsController) {
+    server.broadcast(toSayResultPayload(sayPayload, { accepted: false, spoken: false, reason: 'tts_disabled' }));
+    return;
+  }
+  try {
+    const result = await ttsController.handleSayPayload(sayPayload);
+    server.broadcast(toSayResultPayload(sayPayload, result));
+  } catch (error) {
+    console.error('[face-app] internal say failed: ' + error.message);
+    server.broadcast(toSayResultPayload(sayPayload, { accepted: false, spoken: false }, 'controller_error'));
+  }
+}
+
+const atomAudioVadBridge = createAtomAudioVadBridge({
+  asrBaseUrl: operatorAsrBaseUrl,
+  asrEndpointUrl: operatorAsrEndpointUrl,
+  onAcceptedSpeech: ({ language }) => emitAcceptedSpeechAck({ language, source: 'atom_vad' }),
+  onOperatorResponse: (payload) => {
+    server.broadcast(payload);
+  },
+  log: console
+});
+
 const operatorAsrProxy = createOperatorAsrProxy({
   baseUrl: operatorAsrBaseUrl,
   endpointUrl: operatorAsrEndpointUrl,
@@ -294,6 +366,7 @@ const operatorAsrProxy = createOperatorAsrProxy({
       });
     }
   },
+  onAcceptedSpeech: ({ language }) => emitAcceptedSpeechAck({ language, source: 'operator_asr' }),
   log: console
 });
 let operatorRealtimeAsrProxy = null;
@@ -380,7 +453,24 @@ const server = await startFaceWebSocketServer({
   allowedOrigins,
   requireOriginCheck: true,
   relayPayloads: true,
+  onAtomTtsDispatch: (payload) => {
+    // Drop any partial Atom-VAD utterance before the device plays the
+    // TTS audio. Without this, microphone bleed buffered before the
+    // dispatch could still finalize into ASR once the silence threshold
+    // fires post-playback. Always-on: when the device is not streaming
+    // mic frames (its persisted continuous_vad_enabled is off), the
+    // bridge buffers are empty and resetSession is a no-op.
+    const sessionId = typeof payload?.session_id === 'string' && payload.session_id.trim() !== ''
+      ? payload.session_id.trim()
+      : 'atom-headroom';
+    atomAudioVadBridge.resetSession(sessionId, { reason: 'tts_dispatch' });
+  },
   onPayload(payload) {
+    const atomVadDirective = atomAudioVadBridge.handlePayload(payload);
+    if (atomVadDirective) {
+      return atomVadDirective;
+    }
+
     const realtimeDirective = operatorRealtimeAsrProxy?.handlePayload(payload);
     if (realtimeDirective) {
       return realtimeDirective;
