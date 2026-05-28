@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAtomAudioVadBridge, pcm16Rms, pcm16ToWavBuffer } from '../../face-app/dist/atom_audio_vad_bridge.js';
+import {
+  createAtomAudioVadBridge,
+  createRmsVadBackend,
+  createSileroVadBackend,
+  pcm16Rms,
+  pcm16ToWavBuffer
+} from '../../face-app/dist/atom_audio_vad_bridge.js';
 
 function pcmFrame({ samples = 1600, amplitude = 0 } = {}) {
   const buffer = Buffer.alloc(samples * 2);
@@ -227,6 +233,149 @@ test('Atom audio VAD bridge drops filler-only ASR transcripts before calling onO
   // also must not fire.
   assert.equal(operatorResponses.length, 0);
   assert.equal(accepted.length, 0);
+});
+
+test('createRmsVadBackend honors thresholdRms option', () => {
+  const backend = createRmsVadBackend({ thresholdRms: 0.05 });
+  const loud = pcmFrame({ samples: 800, amplitude: 4000 });
+  const quiet = pcmFrame({ samples: 800, amplitude: 200 });
+  assert.equal(backend.decide(loud, 16000).isSpeech, true);
+  assert.equal(backend.decide(quiet, 16000).isSpeech, false);
+});
+
+test('createSileroVadBackend posts to the worker and returns its decision', async () => {
+  const calls = [];
+  const backend = createSileroVadBackend({
+    baseUrl: 'http://127.0.0.1:8092',
+    threshold: 0.3,
+    fetchImpl: async (url, options) => {
+      calls.push({ url: String(url), body: JSON.parse(options.body) });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { is_speech: true, speech_prob: 0.91, chunks: 2, durationMs: 64, device: 'cpu' };
+        }
+      };
+    }
+  });
+  const decision = await backend.decide(pcmFrame({ samples: 1024, amplitude: 3000 }), 16000);
+  assert.equal(decision.isSpeech, true);
+  assert.equal(decision.confidence, 0.91);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/v1\/vad$/);
+  assert.equal(calls[0].body.sampleRate, 16000);
+  assert.equal(calls[0].body.threshold, 0.3);
+  assert.ok(typeof calls[0].body.audioBase64 === 'string');
+});
+
+test('createSileroVadBackend throws on non-OK status so the bridge logs and skips', async () => {
+  const backend = createSileroVadBackend({
+    baseUrl: 'http://127.0.0.1:8092',
+    fetchImpl: async () => ({
+      ok: false,
+      status: 503,
+      async json() {
+        return {};
+      }
+    })
+  });
+  await assert.rejects(
+    () => backend.decide(pcmFrame({ samples: 1024, amplitude: 3000 }), 16000),
+    /status=503/
+  );
+});
+
+test('Atom audio VAD bridge feeds frames through an async backend in arrival order', async () => {
+  const fetches = [];
+  const operatorResponses = [];
+  // Async backend with controllable resolution order. Returns isSpeech=true
+  // for amplitude > 0 frames and false for silence frames.
+  let calls = 0;
+  const vadBackend = {
+    name: 'mock-async',
+    async decide(frame) {
+      calls += 1;
+      // Insert a microtask boundary so we exercise the per-session FIFO.
+      await Promise.resolve();
+      const energy = pcm16Rms(frame);
+      return { isSpeech: energy >= 0.01 };
+    }
+  };
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    endSilenceMs: 200,
+    minSpeechMs: 50,
+    vadBackend,
+    onOperatorResponse: (payload) => operatorResponses.push(payload),
+    fetchImpl: async (url) => {
+      fetches.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: 'こんにちは', language: 'ja' });
+        }
+      };
+    }
+  });
+
+  // Speech, speech, silence, silence — sync return is { relay:false, accepted:true }
+  // without the speech field (async path does not predict in handlePayload).
+  const r1 = bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1, generation: 1 }));
+  const r2 = bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 2, generation: 1 }));
+  const r3 = bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 3, generation: 1 }));
+  const r4 = bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 4, generation: 1 }));
+  assert.deepEqual(r1, { relay: false, accepted: true });
+  assert.deepEqual(r2, { relay: false, accepted: true });
+  assert.deepEqual(r3, { relay: false, accepted: true });
+  assert.deepEqual(r4, { relay: false, accepted: true });
+
+  await bridge.drain();
+
+  // Each frame went through the backend exactly once, in order, and the
+  // resulting utterance was submitted once.
+  assert.equal(calls, 4);
+  assert.equal(fetches.length, 1);
+  assert.equal(operatorResponses.length, 1);
+  assert.equal(operatorResponses[0].value, 'こんにちは');
+});
+
+test('Atom audio VAD bridge async backend respects resetSession epoch', async () => {
+  const operatorResponses = [];
+  const vadBackend = {
+    name: 'mock-async-slow',
+    decide() {
+      // Never resolves until we explicitly let it; the test does not await
+      // any decisions before resetSession runs.
+      return new Promise((resolve) => setTimeout(() => resolve({ isSpeech: true }), 5));
+    }
+  };
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    endSilenceMs: 100,
+    minSpeechMs: 0,
+    vadBackend,
+    onOperatorResponse: (payload) => operatorResponses.push(payload),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({ text: 'should not submit', language: 'ja' });
+      }
+    })
+  });
+
+  // Two speech frames whose decisions are still pending.
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1, generation: 1 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 2, generation: 1 }));
+
+  // External reset before any decision applies. Async results that captured
+  // the old epoch must be ignored.
+  bridge.resetSession('atom-test', { reason: 'tts_dispatch' });
+
+  await bridge.drain();
+  assert.equal(operatorResponses.length, 0);
 });
 
 test('Atom audio VAD bridge drops frames when no ASR upstream is configured', () => {

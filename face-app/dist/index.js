@@ -10,7 +10,11 @@ import { resolveBrowserAudioMaxChannels } from './browser_audio_config.js';
 import { createOperatorAsrProxy } from './operator_asr_proxy.js';
 import { createOperatorRealtimeAsrProxy } from './operator_realtime_asr_proxy.js';
 import { chooseFixedAck } from './fixed_ack.js';
-import { createAtomAudioVadBridge } from './atom_audio_vad_bridge.js';
+import {
+  createAtomAudioVadBridge,
+  createRmsVadBackend,
+  createSileroVadBackend
+} from './atom_audio_vad_bridge.js';
 import { createAgentRuntimeStateStore } from './agent_runtime_state.js';
 import { createAgentLifecycleApi, createAgentLifecycleRuntime } from './agent_lifecycle.js';
 import { createAgentAssignmentStateStore } from './agent_assignment_state.js';
@@ -342,9 +346,26 @@ async function handleInternalSay(payload, options = {}) {
   }
 }
 
+// Atom VAD backend selection. Default 'rms' keeps the historical
+// deterministic RMS-energy gate. 'silero' routes every frame through the
+// silero-vad-worker HTTP service for ML-based speech/non-speech
+// classification — pick this in noisy environments where ambient sound
+// would otherwise sit above the RMS threshold.
+const atomVadBackendKind = (process.env.MH_ATOM_VAD_BACKEND ?? 'rms').trim().toLowerCase();
+const sileroBaseUrl = (process.env.MH_SILERO_VAD_BASE_URL ?? 'http://127.0.0.1:8092').trim();
+const sileroThresholdEnv = Number.parseFloat(process.env.MH_SILERO_VAD_THRESHOLD ?? '');
+const atomVadBackend = atomVadBackendKind === 'silero'
+  ? createSileroVadBackend({
+      baseUrl: sileroBaseUrl,
+      threshold: Number.isFinite(sileroThresholdEnv) ? sileroThresholdEnv : 0.5
+    })
+  : createRmsVadBackend({});
+console.info(`[face-app] Atom VAD backend=${atomVadBackend.name}`);
+
 const atomAudioVadBridge = createAtomAudioVadBridge({
   asrBaseUrl: operatorAsrBaseUrl,
   asrEndpointUrl: operatorAsrEndpointUrl,
+  vadBackend: atomVadBackend,
   onAcceptedSpeech: ({ language }) => emitAcceptedSpeechAck({ language, source: 'atom_vad' }),
   onOperatorResponse: (payload) => {
     server.broadcast(payload);

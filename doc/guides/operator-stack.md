@@ -148,7 +148,14 @@ Optional realtime ASR:
 
 Voice turn acknowledgement is local and template-based. After batch ASR accepts a non-empty turn, `face-app` speaks and displays a short fixed phrase such as `Checking.`, `One moment.`, `Let me check.`, `確認します。`, `少々お待ちください。`, or `確認しますね。` using the requested or detected ASR language. The phrase rotates per language and source, and the same text appears in the speech bubble so muted operation still has visible feedback. Set `MH_FIXED_ACK_ENABLED=0` to disable this. This path does not ask the coding agent or an LLM to generate acknowledgement text.
 
-AtomS3R continuous VAD is gated solely by the Atom firmware setting (`continuous_vad_enabled`, toggled by device double-tap or `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off`). When the device is off, it does not stream mic frames, so the PC-side bridge has nothing to process; the bridge is always installed and is a no-op in that case. The current bridge uses a deterministic RMS-energy VAD fallback and keeps the boundary ready for a later PC-side Silero backend.
+AtomS3R continuous VAD is gated solely by the Atom firmware setting (`continuous_vad_enabled`, toggled by device double-tap or `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off`). When the device is off, it does not stream mic frames, so the PC-side bridge has nothing to process; the bridge is always installed and is a no-op in that case.
+
+The PC-side bridge supports two interchangeable VAD backends, selected by `MH_ATOM_VAD_BACKEND`:
+
+- `rms` (default): the built-in deterministic RMS-energy gate. Lightweight, no extra worker required, but ambient noise above the threshold registers as speech. Good for quiet rooms.
+- `silero`: forwards every frame to the `silero-vad-worker` HTTP service for ML-based classification. Robust against street / station / cafe noise, ~1–3 ms CPU per frame. Start the worker with `scripts/run-silero-vad-worker.sh` (run-operator-stack.sh launches it automatically when this backend is selected). Configure via `MH_SILERO_VAD_BASE_URL` (default `http://127.0.0.1:8092`) and `MH_SILERO_VAD_THRESHOLD` (default 0.5).
+
+Note that the AtomS3R firmware applies its own RMS energy gate (`kFrameSpeechRms = 0.025`) to suppress sending silent frames over mobile-tethered links. When `MH_ATOM_VAD_BACKEND=silero` is used in a noisy environment, lower the firmware gate (planned: `vad_firmware_rms` NVS setting) so Silero can see the marginal-energy frames where its discriminative advantage matters.
 
 The key batch ASR variables are:
 
@@ -161,6 +168,10 @@ The key batch ASR variables are:
 - `MH_OPERATOR_ASR_MODEL_JA`
 - `MH_OPERATOR_ASR_MODEL_EN`
 - `MH_FIXED_ACK_ENABLED=0` disables fixed acknowledgement speech
+- `MH_ATOM_VAD_BACKEND=rms|silero` (default `rms`) — selects the PC-side VAD backend
+- `MH_SILERO_VAD_BASE_URL` — silero-vad-worker URL (default `http://127.0.0.1:8092`)
+- `MH_SILERO_VAD_THRESHOLD` — Silero speech-probability threshold (default `0.5`)
+- `MH_STACK_START_SILERO_VAD=0` — skip auto-starting silero-vad-worker (use when running it elsewhere)
 
 </details>
 
@@ -472,7 +483,14 @@ batch ASR:
 
 音声ターンの acknowledgement はローカルな固定テンプレートです。batch ASR が空でないターンを受理すると、`face-app` は要求または検出された ASR 言語に応じて `Checking.`、`One moment.`、`Let me check.`、`確認します。`、`少々お待ちください。`、`確認しますね。` のような短い固定フレーズを話し、同じ文を吹き出しにも表示します。文は言語と入力元ごとにローテーションするため、ミュート運用でも目で受理状態が分かります。無効化するには `MH_FIXED_ACK_ENABLED=0` を設定します。この経路では coding agent や LLM に acknowledgement 文を生成させません。
 
-AtomS3R の連続 VAD は Atom firmware の `continuous_vad_enabled` 設定だけで制御されます（デバイス側のダブルタップ、または `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off` でトグル）。デバイス側 OFF のときマイクフレームは送られないので、PC 側のブリッジは常に install されたまま no-op として動きます。現在のブリッジは決定的な RMS エネルギー VAD フォールバックを使い、後から PC 側 Silero backend に差し替えられる境界を残しています。
+AtomS3R の連続 VAD は Atom firmware の `continuous_vad_enabled` 設定だけで制御されます（デバイス側のダブルタップ、または `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off` でトグル）。デバイス側 OFF のときマイクフレームは送られないので、PC 側のブリッジは常に install されたまま no-op として動きます。
+
+PC 側 bridge には差し替え可能な VAD バックエンドが 2 つあります。`MH_ATOM_VAD_BACKEND` で選択:
+
+- `rms` (デフォルト): 組み込みの決定的 RMS エネルギーゲート。軽量で別ワーカー不要、静かな部屋向け。
+- `silero`: 各フレームを `silero-vad-worker` HTTP サービスに転送し、ML ベースで speech/非 speech を判定。駅・路上・カフェなど環境音がある場所で有効。CPU 1〜3 ms/フレーム。`scripts/run-silero-vad-worker.sh` で起動（このバックエンドを選ぶと `run-operator-stack.sh` が自動で立ち上げます）。`MH_SILERO_VAD_BASE_URL` (デフォルト `http://127.0.0.1:8092`) と `MH_SILERO_VAD_THRESHOLD` (デフォルト 0.5) で調整。
+
+AtomS3R firmware にも独自の RMS ゲート (`kFrameSpeechRms = 0.025`) が入っており、モバイル回線経由の帯域節約のため弱いフレームをそもそも送りません。`MH_ATOM_VAD_BACKEND=silero` を騒がしい場所で使う場合は、Silero の判別力を活かすため firmware 側ゲートを下げる必要があります（予定: `vad_firmware_rms` の NVS 設定化）。
 
 主な batch ASR 変数:
 
@@ -485,6 +503,10 @@ AtomS3R の連続 VAD は Atom firmware の `continuous_vad_enabled` 設定だ�
 - `MH_OPERATOR_ASR_MODEL_JA`
 - `MH_OPERATOR_ASR_MODEL_EN`
 - `MH_FIXED_ACK_ENABLED=0`: 固定 acknowledgement 音声を無効化
+- `MH_ATOM_VAD_BACKEND=rms|silero` (デフォルト `rms`): PC 側 VAD バックエンド選択
+- `MH_SILERO_VAD_BASE_URL`: silero-vad-worker URL (デフォルト `http://127.0.0.1:8092`)
+- `MH_SILERO_VAD_THRESHOLD`: Silero の speech 確率しきい値 (デフォルト `0.5`)
+- `MH_STACK_START_SILERO_VAD=0`: silero-vad-worker の自動起動をスキップ (外部で起動済みのとき)
 
 </details>
 

@@ -112,6 +112,64 @@ function stripFillerPunctuation(text) {
   return text.replace(/^[\s「『（(]+/u, '').replace(/[\s。、,，.!?！？」』）)]+$/u, '');
 }
 
+// VAD backend interface
+// ---------------------
+// A backend exposes one method: `decide(frame, sampleRate)`. It may return
+// either a plain object `{ isSpeech: boolean }` (sync) or a Promise that
+// resolves to one (async). The bridge tolerates both. A sync RMS backend
+// is the default; the Silero adapter below calls an external worker.
+
+// Built-in RMS-energy backend. Mirrors the historical pcm16Rms gate so the
+// default behavior is unchanged when no backend override is supplied.
+export function createRmsVadBackend(options = {}) {
+  const threshold = Number.isFinite(options.thresholdRms) ? options.thresholdRms : 0.025;
+  return {
+    name: 'rms',
+    decide(frame /* , sampleRate */) {
+      return { isSpeech: pcm16Rms(frame) >= threshold };
+    }
+  };
+}
+
+// Silero backend: forwards each frame to the silero-vad-worker HTTP API
+// and uses the boolean it returns. Use this when ambient noise (street,
+// station, cafe) makes the RMS threshold unreliable.
+export function createSileroVadBackend(options = {}) {
+  const fetchImpl = typeof options.fetchImpl === 'function' ? options.fetchImpl : globalThis.fetch;
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('fetch API is unavailable for Silero VAD backend');
+  }
+  const baseUrl = typeof options.baseUrl === 'string' && options.baseUrl.trim() !== ''
+    ? options.baseUrl.trim()
+    : 'http://127.0.0.1:8092';
+  const endpointUrl = typeof options.endpointUrl === 'string' && options.endpointUrl.trim() !== ''
+    ? options.endpointUrl.trim()
+    : `${baseUrl.replace(/\/+$/, '')}/v1/vad`;
+  const threshold = Number.isFinite(options.threshold) ? options.threshold : 0.5;
+  return {
+    name: 'silero',
+    async decide(frame, sampleRate) {
+      const response = await fetchImpl(endpointUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          audioBase64: frame.toString('base64'),
+          sampleRate,
+          threshold
+        })
+      });
+      if (!response.ok) {
+        throw new Error(`silero-vad-worker returned status=${response.status}`);
+      }
+      const body = await response.json();
+      return {
+        isSpeech: Boolean(body?.is_speech),
+        confidence: Number.isFinite(body?.speech_prob) ? Number(body.speech_prob) : null
+      };
+    }
+  };
+}
+
 export function createAtomAudioVadBridge(options = {}) {
   const log = toLogger(options.log ?? console);
   const fetchImpl = typeof options.fetchImpl === 'function' ? options.fetchImpl : globalThis.fetch;
@@ -137,6 +195,12 @@ export function createAtomAudioVadBridge(options = {}) {
   const ignoredFillerTexts = options.ignoredFillerTexts instanceof Set
     ? options.ignoredFillerTexts
     : DEFAULT_IGNORED_FILLER_TEXTS;
+  // VAD backend: defaults to the historical RMS-energy gate so existing
+  // callers and tests behave identically. Inject a Silero backend (or any
+  // other shape implementing `decide(frame, sampleRate)`) via the option.
+  const vadBackend = options.vadBackend && typeof options.vadBackend.decide === 'function'
+    ? options.vadBackend
+    : createRmsVadBackend({ thresholdRms });
   const sessions = new Map();
   const pending = new Set();
 
@@ -161,7 +225,17 @@ export function createAtomAudioVadBridge(options = {}) {
         // Highest generation seen so far. Frames with a lower generation are
         // stale (from a capture session the device has already retired) and
         // must be dropped. A higher generation resets in-flight state.
-        generation: 0
+        generation: 0,
+        // Epoch is bumped on every external reset (explicit resetSession,
+        // higher-generation frame). Async backend results that captured an
+        // older epoch are discarded on apply, so an in-flight Silero call
+        // for a frame that has since been invalidated cannot resurrect a
+        // cleared session.
+        epoch: 0,
+        // FIFO chain of async per-frame work. Each enqueued frame's
+        // backend.decide() result is applied only after the previous one,
+        // preserving arrival order under async backends.
+        pendingProcessing: Promise.resolve()
       };
       sessions.set(key, session);
     }
@@ -239,6 +313,50 @@ export function createAtomAudioVadBridge(options = {}) {
     session.utteranceMs = 0;
   }
 
+  function applyFrameDecision(session, frame, frameMs, decision) {
+    const isSpeech = Boolean(decision && decision.isSpeech);
+    if (isSpeech) {
+      session.active = true;
+      session.speechMs += frameMs;
+      session.silenceMs = 0;
+    } else if (session.active) {
+      session.silenceMs += frameMs;
+    }
+    if (session.active) {
+      session.buffers.push(frame);
+      session.utteranceMs += frameMs;
+      if (
+        (session.silenceMs >= endSilenceMs && session.speechMs >= minSpeechMs) ||
+        session.utteranceMs >= maxUtteranceMs
+      ) {
+        finalize(session);
+      }
+    }
+  }
+
+  // Async backend path: queue the work behind any prior in-flight frame
+  // for the same session so decisions are applied in arrival order. An
+  // epoch captured at enqueue time gates the apply step against external
+  // resets (resetSession, higher-generation frame) that happened while
+  // the backend call was outstanding.
+  function enqueueAsyncFrame(session, frame, frameMs, decisionPromise) {
+    const epochAtEnqueue = session.epoch;
+    const work = session.pendingProcessing
+      .then(async () => {
+        const decision = await decisionPromise;
+        if (session.epoch !== epochAtEnqueue) {
+          return;
+        }
+        applyFrameDecision(session, frame, frameMs, decision);
+      })
+      .catch((error) => {
+        log.warn(`[face-app] Atom VAD backend.decide failed: ${error?.message ?? error}`);
+      });
+    session.pendingProcessing = work;
+    pending.add(work);
+    work.finally(() => pending.delete(work));
+  }
+
   function finalize(session) {
     const pcm = Buffer.concat(session.buffers);
     clearSessionBuffers(session);
@@ -303,6 +421,9 @@ export function createAtomAudioVadBridge(options = {}) {
       if (frameGeneration > session.generation) {
         clearSessionBuffers(session);
         session.generation = frameGeneration;
+        // Higher generation is an external reset: any in-flight async
+        // backend work for the older generation must be discarded on apply.
+        session.epoch += 1;
       }
     }
 
@@ -311,26 +432,20 @@ export function createAtomAudioVadBridge(options = {}) {
     session.seq = Number.isFinite(payload.seq) ? Math.floor(payload.seq) : session.seq + 1;
 
     const frameMs = Math.max(1, Math.round((Math.floor(frame.length / 2) / session.sampleRate) * 1000));
-    const speech = pcm16Rms(frame) >= thresholdRms;
-    if (speech) {
-      session.active = true;
-      session.speechMs += frameMs;
-      session.silenceMs = 0;
-    } else if (session.active) {
-      session.silenceMs += frameMs;
-    }
 
-    if (session.active) {
-      session.buffers.push(frame);
-      session.utteranceMs += frameMs;
-      if (
-        (session.silenceMs >= endSilenceMs && session.speechMs >= minSpeechMs) ||
-        session.utteranceMs >= maxUtteranceMs
-      ) {
-        finalize(session);
-      }
+    const decisionOrPromise = vadBackend.decide(frame, session.sampleRate);
+    if (decisionOrPromise && typeof decisionOrPromise.then === 'function') {
+      // Async backend (e.g., Silero HTTP): apply via FIFO queue.
+      enqueueAsyncFrame(session, frame, frameMs, decisionOrPromise);
+      return { relay: false, accepted: true };
     }
-    return { relay: false, accepted: true, speech, active: session.active };
+    applyFrameDecision(session, frame, frameMs, decisionOrPromise);
+    return {
+      relay: false,
+      accepted: true,
+      speech: Boolean(decisionOrPromise && decisionOrPromise.isSpeech),
+      active: session.active
+    };
   }
 
   // Discard any partial utterance for a session without submitting it.
@@ -342,6 +457,10 @@ export function createAtomAudioVadBridge(options = {}) {
   function resetSession(sessionId = 'atom-headroom', options = {}) {
     const session = sessionFor(sessionId);
     clearSessionBuffers(session);
+    // External reset: invalidate any in-flight async backend decisions
+    // captured under the previous epoch so they cannot resurrect this
+    // session after the caller has explicitly cleared it.
+    session.epoch += 1;
     if (Number.isFinite(options?.generation)) {
       const floor = Math.floor(options.generation);
       if (floor > session.generation) {
