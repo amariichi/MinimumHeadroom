@@ -43,6 +43,19 @@ public:
   // produced rapid codec begin/end cycling.
   static constexpr uint32_t kCooldownMinDwellMs = 200;
 
+  // Firmware-side speech gating. When captureAndSend() reads a frame whose
+  // RMS amplitude (normalized to 0..1) is below kFrameSpeechRms AND the
+  // post-speech tail counter has expired, the frame is dropped instead of
+  // base64-encoded and sent over the WebSocket. This is the primary
+  // bandwidth reduction for mobile-tethered operation — a quiet room
+  // produces almost no traffic. Speech onset is preserved by sending the
+  // first frame above the threshold (no pre-roll buffer yet); tail context
+  // is preserved by sending kSpeechTailFrames silent frames after the last
+  // speech frame, which also gives the PC-side bridge enough trailing
+  // silenceMs to finalize the utterance through its existing logic.
+  static constexpr float kFrameSpeechRms = 0.025f;
+  static constexpr uint32_t kSpeechTailFrames = 8;  // ~512 ms at 1024 samples / 16 kHz
+
   void begin(const HeadroomSettingsData& settings, HeadroomAudio& audio, HeadroomTransport& transport, HeadroomFaceState& faceState);
   void update();
 
@@ -87,11 +100,13 @@ private:
   uint32_t suspendUntilMs_ = 0;
   uint32_t cooldownEnteredMs_ = 0;
   uint32_t seq_ = 0;
+  uint32_t tailFramesRemaining_ = 0;
   int16_t frame_[kChunkSamples] = {};
 
   bool startMic();
   void stopMic();
   void captureAndSend();
+  float frameRmsAmplitude() const;
   void enterCooldownIfCapturing(uint32_t cooldownMs, HeadroomContinuousVadState via, uint32_t nowMs);
   static void playbackCallback(void* context);
 };

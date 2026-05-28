@@ -1,6 +1,7 @@
 #include "headroom_continuous_vad.h"
 
 #include <M5Unified.h>
+#include <math.h>
 
 namespace {
 
@@ -210,6 +211,9 @@ void HeadroomContinuousVad::stopMic() {
   if (faceState_) {
     faceState_->mouthOpen = 0.0f;
   }
+  // Reset the speech-tail counter so a fresh Capturing session does not
+  // inherit a stale tail decision from before the suspension.
+  tailFramesRemaining_ = 0;
   Serial.println("continuous VAD mic stopped");
   // Caller is responsible for the next state_; default to Idle so a plain
   // stopMic() does not lose the persisted enablement.
@@ -233,11 +237,41 @@ void HeadroomContinuousVad::captureAndSend() {
     delay(1);
     M5.update();
   }
+
+  // Bandwidth gate: skip frames whose RMS energy is below the speech
+  // threshold AND are past the speech tail window. A speech frame resets
+  // the tail counter so the next kSpeechTailFrames silent frames are
+  // still forwarded; the PC-side bridge needs those to advance its
+  // silenceMs counter past endSilenceMs and finalize the utterance.
+  const float rms = frameRmsAmplitude();
+  const bool isSpeechFrame = rms >= kFrameSpeechRms;
+  if (isSpeechFrame) {
+    tailFramesRemaining_ = kSpeechTailFrames;
+  } else if (tailFramesRemaining_ > 0) {
+    --tailFramesRemaining_;
+  } else {
+    // Pure silence outside the speech tail: do not consume bandwidth or
+    // advance seq_. seq_ continuity gaps are fine — the bridge tolerates
+    // them.
+    return;
+  }
+
   ++seq_;
   bool ok = transport_->sendAtomAudioFrame(frame_, kChunkSamples, kSampleRate, asrLanguage_, seq_, generation_);
   if (!ok) {
     Serial.println("continuous VAD audio frame send failed");
   }
+}
+
+float HeadroomContinuousVad::frameRmsAmplitude() const {
+  // sum(sample^2) over the int16 buffer, normalized to [0, 1] amplitude.
+  // ESP32-S3 has hardware float; this is well under 1 ms for 1024 samples.
+  double sumSquares = 0.0;
+  for (size_t i = 0; i < kChunkSamples; ++i) {
+    const float sample = static_cast<float>(frame_[i]) / 32768.0f;
+    sumSquares += static_cast<double>(sample) * sample;
+  }
+  return static_cast<float>(sqrt(sumSquares / static_cast<double>(kChunkSamples)));
 }
 
 void HeadroomContinuousVad::enterCooldownIfCapturing(uint32_t cooldownMs, HeadroomContinuousVadState via, uint32_t now) {
