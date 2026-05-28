@@ -14,6 +14,17 @@
 #define HEADROOM_CONTINUOUS_VAD_ENABLED 0
 #endif
 
+// Firmware-side RMS amplitude threshold used by HeadroomContinuousVad to
+// skip silent frames before WebSocket send. 0.025 is tuned for a quiet
+// indoor room with the PC-side RMS backend. When the PC bridge is
+// configured for Silero (MH_ATOM_VAD_BACKEND=silero), drop this to
+// ~0.005 so marginal-energy frames still reach the Silero worker — that
+// is where Silero's discriminative advantage matters. Floating-point
+// literal so the device persists it to NVS as the same value.
+#ifndef HEADROOM_VAD_FIRMWARE_RMS
+#define HEADROOM_VAD_FIRMWARE_RMS 0.025f
+#endif
+
 // Wi-Fi slots 2/3 are optional. Guard them so a pre-existing
 // headroom_config.local.h that predates multi-AP support still compiles.
 #ifndef HEADROOM_WIFI_SSID2

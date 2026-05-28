@@ -33,6 +33,13 @@ bool readBool(Preferences& prefs, const char* key, bool fallback) {
   return prefs.getBool(key, fallback);
 }
 
+float readFloat(Preferences& prefs, const char* key, float fallback) {
+  if (!prefs.isKey(key)) {
+    return fallback;
+  }
+  return prefs.getFloat(key, fallback);
+}
+
 }  // namespace
 
 void HeadroomSettings::begin() {
@@ -73,6 +80,7 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   prefs.putString("input_id", normalized.inputTargetAgentId);
   prefs.putString("asr_lang", normalized.asrLanguage);
   prefs.putBool("vad_on", normalized.continuousVadEnabled);
+  prefs.putFloat("vad_rms", normalized.vadFirmwareRms);
   prefs.putInt("max_b64_sec", normalized.maxBase64TtsSeconds);
   prefs.putInt("max_http_b", normalized.maxHttpTtsBytes);
   prefs.putInt("rotation", normalized.faceRotationDegrees);
@@ -194,6 +202,7 @@ void HeadroomSettings::loadCompileDefaults() {
   data_.inputTargetAgentId = HEADROOM_INPUT_TARGET_AGENT_ID;
   data_.asrLanguage = normalizeAsrLanguage(HEADROOM_ASR_LANGUAGE);
   data_.continuousVadEnabled = HEADROOM_CONTINUOUS_VAD_ENABLED != 0;
+  data_.vadFirmwareRms = HEADROOM_VAD_FIRMWARE_RMS;
   data_.maxBase64TtsSeconds = HEADROOM_MAX_BASE64_TTS_SECONDS;
   data_.maxHttpTtsBytes = HEADROOM_MAX_HTTP_TTS_BYTES;
   data_.faceRotationDegrees = normalizeRotation(HEADROOM_FACE_ROTATION_DEGREES);
@@ -238,6 +247,10 @@ void HeadroomSettings::loadNvsOverrides() {
   data_.inputTargetAgentId = readString(prefs, "input_id", data_.inputTargetAgentId);
   data_.asrLanguage = normalizeAsrLanguage(readString(prefs, "asr_lang", data_.asrLanguage));
   data_.continuousVadEnabled = readBool(prefs, "vad_on", data_.continuousVadEnabled);
+  {
+    const float rawRms = readFloat(prefs, "vad_rms", data_.vadFirmwareRms);
+    data_.vadFirmwareRms = rawRms < 0.0f ? 0.0f : (rawRms > 1.0f ? 1.0f : rawRms);
+  }
   data_.maxBase64TtsSeconds = readInt(prefs, "max_b64_sec", data_.maxBase64TtsSeconds);
   data_.maxHttpTtsBytes = readInt(prefs, "max_http_b", data_.maxHttpTtsBytes);
   data_.faceRotationDegrees = normalizeRotation(readInt(prefs, "rotation", data_.faceRotationDegrees));

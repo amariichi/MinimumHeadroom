@@ -43,17 +43,20 @@ public:
   // produced rapid codec begin/end cycling.
   static constexpr uint32_t kCooldownMinDwellMs = 200;
 
-  // Firmware-side speech gating. When captureAndSend() reads a frame whose
-  // RMS amplitude (normalized to 0..1) is below kFrameSpeechRms AND the
-  // post-speech tail counter has expired, the frame is dropped instead of
-  // base64-encoded and sent over the WebSocket. This is the primary
-  // bandwidth reduction for mobile-tethered operation — a quiet room
-  // produces almost no traffic. Speech onset is preserved by sending the
-  // first frame above the threshold (no pre-roll buffer yet); tail context
-  // is preserved by sending kSpeechTailFrames silent frames after the last
-  // speech frame, which also gives the PC-side bridge enough trailing
-  // silenceMs to finalize the utterance through its existing logic.
-  static constexpr float kFrameSpeechRms = 0.025f;
+  // Firmware-side speech gating. captureAndSend() drops frames whose RMS
+  // amplitude (normalized to 0..1) is below the runtime-configurable
+  // speech threshold AND the post-speech tail counter has expired,
+  // before base64-encoding and the WebSocket send. This is the primary
+  // bandwidth reduction for mobile-tethered operation. Speech onset is
+  // preserved by sending the first frame above threshold (no pre-roll
+  // buffer yet); tail context is preserved by sending kSpeechTailFrames
+  // silent frames after the last speech frame so the PC-side bridge gets
+  // enough trailing silence to finalize the utterance.
+  //
+  // The runtime threshold comes from HeadroomSettingsData::vadFirmwareRms
+  // (NVS-persisted). For PC-side RMS backend the default 0.025 works in
+  // a quiet room; for the Silero backend, set it to ~0.005 via the
+  // provisioning script so Silero can see marginal-energy frames.
   static constexpr uint32_t kSpeechTailFrames = 8;  // ~512 ms at 1024 samples / 16 kHz
 
   void begin(const HeadroomSettingsData& settings, HeadroomAudio& audio, HeadroomTransport& transport, HeadroomFaceState& faceState);
@@ -95,6 +98,7 @@ private:
   HeadroomTransport* transport_ = nullptr;
   HeadroomFaceState* faceState_ = nullptr;
   String asrLanguage_ = "ja";
+  float speechRms_ = 0.025f;
   HeadroomContinuousVadState state_ = HeadroomContinuousVadState::Disabled;
   uint32_t generation_ = 0;
   uint32_t suspendUntilMs_ = 0;

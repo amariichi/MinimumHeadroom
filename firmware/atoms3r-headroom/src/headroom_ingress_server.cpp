@@ -79,6 +79,7 @@ void HeadroomIngressServer::begin(const HeadroomSettingsData& settings, Headroom
   deviceId_ = settings.deviceId;
   asrLanguage_ = settings.asrLanguage;
   continuousVadEnabled_ = settings.continuousVadEnabled;
+  vadFirmwareRms_ = settings.vadFirmwareRms;
   maxPayloadBytes_ = estimatePayloadLimit(settings);
 
   const char* headerKeys[] = {"Authorization", "X-Headroom-Auth"};
@@ -137,6 +138,8 @@ void HeadroomIngressServer::handleHealth() {
   body += jsonEscape(asrLanguage_);
   body += F("\",\"continuous_vad_enabled\":");
   body += continuousVadEnabled_ ? F("true") : F("false");
+  body += F(",\"vad_firmware_rms\":");
+  body += String(vadFirmwareRms_, 4);
   body += F("}");
   sendJson(200, body);
 }

@@ -22,6 +22,11 @@ struct HeadroomSettingsData {
   String inputTargetAgentId;
   String asrLanguage;
   bool continuousVadEnabled = false;
+  // RMS amplitude floor used by HeadroomContinuousVad::captureAndSend to
+  // skip silent frames before WebSocket send. 0 disables the gate (all
+  // frames are forwarded — Silero mode); values up to about 0.1 are
+  // sensible. Persisted to NVS as a float.
+  float vadFirmwareRms = 0.025f;
   int maxBase64TtsSeconds = 10;
   int maxHttpTtsBytes = 1200000;
   int faceRotationDegrees = 0;

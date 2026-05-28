@@ -41,6 +41,8 @@ Options:
   --asr-lang <ja|en>    ASR language used by Atom-originated capture
   --vad-on              enable continuous VAD mode
   --vad-off             disable continuous VAD mode
+  --vad-rms <f>         firmware speech threshold (0..1; 0 = send every frame, ~0.025 default,
+                        lower for Silero PC backend)
   --token <t>           auth token (else env MH_FACE_AUTH_TOKEN, else shared env file)
   --reboot              tell the Atom to reboot after saving
   --dry-run             print the redacted RMHCFG payload and exit (no port access)
@@ -63,6 +65,7 @@ function parseArgs(argv) {
     else if (a === '--asr-lang') out.asrLang = next();
     else if (a === '--vad-on') out.vadOn = true;
     else if (a === '--vad-off') out.vadOn = false;
+    else if (a === '--vad-rms') out.vadRms = next();
     else if (a === '--token') out.token = next();
     else if (a === '--reboot') out.reboot = true;
     else if (a === '--dry-run') out.dryRun = true;
@@ -123,6 +126,14 @@ function buildPayload(opts, token) {
     cfg.asr_lang = opts.asrLang;
   }
   if (opts.vadOn !== undefined) cfg.vad_on = opts.vadOn;
+  if (opts.vadRms !== undefined) {
+    const numeric = Number(opts.vadRms);
+    if (!Number.isFinite(numeric) || numeric < 0 || numeric > 1) {
+      console.error('--vad-rms must be a float between 0 and 1 (got: ' + opts.vadRms + ')');
+      process.exit(2);
+    }
+    cfg.vad_rms = numeric;
+  }
   if (token) cfg.auth = token;
   if (opts.reboot) cfg.reboot = true;
   return cfg;

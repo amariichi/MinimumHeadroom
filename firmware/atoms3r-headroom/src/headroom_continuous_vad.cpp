@@ -17,14 +17,23 @@ void HeadroomContinuousVad::begin(const HeadroomSettingsData& settings, Headroom
   transport_ = &transport;
   faceState_ = &faceState;
   asrLanguage_ = HeadroomSettings::normalizeAsrLanguage(settings.asrLanguage);
+  // Clamp the persisted threshold to a safe range. 0 means "send every
+  // frame" (Silero mode); the upper bound stops a typo from silencing
+  // the device forever.
+  speechRms_ = settings.vadFirmwareRms;
+  if (speechRms_ < 0.0f) {
+    speechRms_ = 0.0f;
+  } else if (speechRms_ > 1.0f) {
+    speechRms_ = 1.0f;
+  }
   state_ = settings.continuousVadEnabled ? HeadroomContinuousVadState::Idle : HeadroomContinuousVadState::Disabled;
   // Transport's before-playback callback feeds the state machine, not stop()
   // directly. This keeps the cooldown hysteresis honest across both the WS
   // and HTTP playback paths.
   transport_->setBeforeAudioPlaybackCallback(&HeadroomContinuousVad::playbackCallback, this);
-  Serial.printf("continuous VAD ready enabled=%s state=%s asr_lang=%s gen=%u\n",
+  Serial.printf("continuous VAD ready enabled=%s state=%s asr_lang=%s gen=%u speech_rms=%.4f\n",
                 enabled() ? "yes" : "no", stateName(), asrLanguage_.c_str(),
-                static_cast<unsigned>(generation_));
+                static_cast<unsigned>(generation_), speechRms_);
 }
 
 void HeadroomContinuousVad::update() {
@@ -244,7 +253,7 @@ void HeadroomContinuousVad::captureAndSend() {
   // still forwarded; the PC-side bridge needs those to advance its
   // silenceMs counter past endSilenceMs and finalize the utterance.
   const float rms = frameRmsAmplitude();
-  const bool isSpeechFrame = rms >= kFrameSpeechRms;
+  const bool isSpeechFrame = rms >= speechRms_;
   if (isSpeechFrame) {
     tailFramesRemaining_ = kSpeechTailFrames;
   } else if (tailFramesRemaining_ > 0) {

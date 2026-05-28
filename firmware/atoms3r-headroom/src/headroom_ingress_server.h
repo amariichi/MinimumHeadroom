@@ -28,6 +28,7 @@ private:
   String deviceId_;
   String asrLanguage_;
   bool continuousVadEnabled_ = false;
+  float vadFirmwareRms_ = 0.025f;
   bool active_ = false;
   size_t maxPayloadBytes_ = 720000;
   uint32_t lastPayloadMs_ = 0;

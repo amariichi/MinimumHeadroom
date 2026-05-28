@@ -17,6 +17,11 @@
 #define HEADROOM_INPUT_TARGET_AGENT_ID "__operator__"
 #define HEADROOM_ASR_LANGUAGE "ja"
 #define HEADROOM_CONTINUOUS_VAD_ENABLED 0
+// Firmware-side speech threshold used by continuous VAD to drop silent
+// frames before sending. 0.025 fits the PC-side RMS backend on a quiet
+// room. Set to ~0.005 if the PC bridge uses Silero so Silero can see
+// marginal-energy frames.
+#define HEADROOM_VAD_FIRMWARE_RMS 0.025f
 #define HEADROOM_MAX_BASE64_TTS_SECONDS 15
 #define HEADROOM_MAX_HTTP_TTS_BYTES 1200000
 
