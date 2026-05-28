@@ -728,6 +728,13 @@ test('tts controller drops punctuation-only utterance after normalization', asyn
   assert.equal(result.accepted, false);
   assert.equal(result.reason, 'invalid_payload');
   assert.equal(speaks(worker).length, 0);
+
+  const middleDotQuestion = await speakOnce({
+    text: '・？'
+  });
+  assert.equal(middleDotQuestion.result.accepted, false);
+  assert.equal(middleDotQuestion.result.reason, 'invalid_payload');
+  assert.equal(speaks(middleDotQuestion.worker).length, 0);
 });
 
 // --- Step 1: long-utterance sentence chunking + sequential FIFO ---

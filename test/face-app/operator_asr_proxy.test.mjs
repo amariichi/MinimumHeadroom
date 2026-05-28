@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createOperatorAsrProxy } from '../../face-app/dist/operator_asr_proxy.js';
+import { chooseFixedAck } from '../../face-app/dist/fixed_ack.js';
 
 function createMockRequest({ method = 'POST', url = '/', headers = {}, body = '' } = {}) {
   const payload = Buffer.isBuffer(body) ? body : Buffer.from(body);
@@ -176,4 +177,92 @@ test('operator ASR proxy still responds if onBargeIn throws', async () => {
   const handled = await proxy.handleHttpRequest(request, response);
   assert.equal(handled, true);
   assert.equal(response.result().statusCode, 200);
+});
+
+
+test('fixed ack chooses Japanese and English accepted phrases and variants', () => {
+  assert.deepEqual(chooseFixedAck({ language: 'ja', kind: 'accepted' }), {
+    language: 'ja',
+    kind: 'accepted',
+    text: '確認します。'
+  });
+  assert.deepEqual(chooseFixedAck({ language: 'ja', kind: 'accepted', index: 1 }), {
+    language: 'ja',
+    kind: 'accepted',
+    text: '少々お待ちください。'
+  });
+  assert.deepEqual(chooseFixedAck({ language: 'en-US', kind: 'accepted' }), {
+    language: 'en',
+    kind: 'accepted',
+    text: 'Checking.'
+  });
+  assert.deepEqual(chooseFixedAck({ language: 'en-US', kind: 'accepted', index: 1 }), {
+    language: 'en',
+    kind: 'accepted',
+    text: 'One moment.'
+  });
+  assert.equal(chooseFixedAck({ language: 'ja', kind: 'accepted', index: 2 }).text, '確認しますね。');
+  assert.equal(chooseFixedAck({ language: 'ja', kind: 'accepted', index: 9 }).text, '受け取りました。');
+  assert.equal(chooseFixedAck({ language: 'ja', kind: 'accepted', index: 10 }).text, '確認します。');
+  assert.equal(chooseFixedAck({ language: 'en', kind: 'accepted', index: 2 }).text, 'Let me check.');
+  assert.equal(chooseFixedAck({ language: 'en', kind: 'accepted', index: 9 }).text, 'Received.');
+  assert.equal(chooseFixedAck({ language: 'en', kind: 'accepted', index: 10 }).text, 'Checking.');
+});
+
+test('operator ASR proxy invokes onAcceptedSpeech after successful ASR', async () => {
+  const accepted = [];
+  const proxy = createOperatorAsrProxy({
+    baseUrl: 'http://127.0.0.1:8091',
+    onAcceptedSpeech: (payload) => accepted.push(payload),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({ text: '了解', language: 'ja', confidence: 0.88 });
+      }
+    })
+  });
+
+  const request = createMockRequest({
+    method: 'POST',
+    url: '/api/operator/asr?lang=ja',
+    headers: { 'content-type': 'audio/wav' },
+    body: Buffer.from('audio')
+  });
+  const response = createMockResponse();
+
+  await proxy.handleHttpRequest(request, response);
+  assert.equal(response.result().statusCode, 200);
+  assert.equal(accepted.length, 1);
+  assert.equal(accepted[0].text, '了解');
+  assert.equal(accepted[0].language, 'ja');
+  assert.equal(accepted[0].requestedLanguage, 'ja');
+  assert.equal(accepted[0].source, 'operator_asr_proxy');
+});
+
+test('operator ASR proxy does not invoke onAcceptedSpeech on invalid ASR response', async () => {
+  const accepted = [];
+  const proxy = createOperatorAsrProxy({
+    baseUrl: 'http://127.0.0.1:8091',
+    onAcceptedSpeech: (payload) => accepted.push(payload),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({ text: '', language: 'en' });
+      }
+    })
+  });
+
+  const request = createMockRequest({
+    method: 'POST',
+    url: '/api/operator/asr?lang=en',
+    headers: { 'content-type': 'audio/wav' },
+    body: Buffer.from('audio')
+  });
+  const response = createMockResponse();
+
+  await proxy.handleHttpRequest(request, response);
+  assert.equal(response.result().statusCode, 502);
+  assert.deepEqual(accepted, []);
 });

@@ -22,23 +22,28 @@ class StripJapaneseSilentPunctuationTests(unittest.TestCase):
 
   def test_drops_internal_and_trailing_full_stops(self) -> None:
     self.assertEqual(
-      strip_japanese_silent_punctuation('あ。い。う。'), 'あいう'
+      strip_japanese_silent_punctuation('あ。い。う。'), 'あ い う'
     )
 
   def test_drops_fullwidth_period(self) -> None:
     self.assertEqual(strip_japanese_silent_punctuation('あ．'), 'あ')
 
-  def test_preserves_other_japanese_punctuation(self) -> None:
-    # Comma, exclamation, question mark, middle dot, and ellipsis are
-    # kept because they either drive prosody or have not been observed
-    # to produce an artifact.
+  def test_drops_japanese_punctuation_inside_speech(self) -> None:
     self.assertEqual(
       strip_japanese_silent_punctuation('あ、い！う？え・お…'),
-      'あ、い！う？え・お…',
+      'あ い う え お',
+    )
+
+  def test_drops_story_sentence_punctuation_without_dropping_words(self) -> None:
+    self.assertEqual(
+      strip_japanese_silent_punctuation('むかしむかしあるところに、おじいさんが？'),
+      'むかしむかしあるところに おじいさんが',
     )
 
   def test_returns_empty_for_punctuation_only_input(self) -> None:
     self.assertEqual(strip_japanese_silent_punctuation('。。。'), '')
+    self.assertEqual(strip_japanese_silent_punctuation('・？'), '')
+    self.assertEqual(strip_japanese_silent_punctuation('!?…'), '')
 
   def test_passes_through_empty_string(self) -> None:
     self.assertEqual(strip_japanese_silent_punctuation(''), '')
