@@ -3,6 +3,8 @@
 #include <ArduinoJson.h>
 #include <mbedtls/base64.h>
 
+#include "ima_adpcm.h"
+
 namespace {
 
 struct ParsedWsUrl {
@@ -151,28 +153,50 @@ bool HeadroomTransport::sendOperatorText(const String& text) {
   return ok;
 }
 
-bool HeadroomTransport::sendAtomAudioFrame(const int16_t* samples, size_t sampleCount, uint32_t sampleRate, const String& language, uint32_t seq, uint32_t generation) {
+bool HeadroomTransport::sendAtomAudioFrame(const int16_t* samples, size_t sampleCount, uint32_t sampleRate, const String& language, uint32_t seq, uint32_t generation, const String& encoding) {
   if (!connected_ || !samples || sampleCount == 0) {
     return false;
   }
-  const uint8_t* raw = reinterpret_cast<const uint8_t*>(samples);
-  size_t rawBytes = sampleCount * sizeof(int16_t);
-  size_t b64Capacity = ((rawBytes + 2) / 3) * 4 + 1;
+
+  // Optionally encode to IMA ADPCM. The compressed buffer is allocated
+  // on the stack-friendly fast heap; for our 1024-sample frames it is
+  // at most 4 + 512 = 516 bytes.
+  const bool useAdpcm = encoding == "ima_adpcm";
+  uint8_t* adpcmBuf = nullptr;
+  size_t encodedBytes = 0;
+  const uint8_t* rawBytes = nullptr;
+
+  if (useAdpcm) {
+    encodedBytes = ima_adpcm_encoded_size(sampleCount);
+    adpcmBuf = static_cast<uint8_t*>(malloc(encodedBytes));
+    if (!adpcmBuf) {
+      return false;
+    }
+    encodedBytes = ima_adpcm_encode(samples, sampleCount, adpcmBuf);
+    rawBytes = adpcmBuf;
+  } else {
+    rawBytes = reinterpret_cast<const uint8_t*>(samples);
+    encodedBytes = sampleCount * sizeof(int16_t);
+  }
+
+  size_t b64Capacity = ((encodedBytes + 2) / 3) * 4 + 1;
   char* b64 = static_cast<char*>(malloc(b64Capacity));
   if (!b64) {
+    if (adpcmBuf) free(adpcmBuf);
     return false;
   }
   size_t b64Length = 0;
-  int rc = mbedtls_base64_encode(reinterpret_cast<unsigned char*>(b64), b64Capacity, &b64Length, raw, rawBytes);
+  int rc = mbedtls_base64_encode(reinterpret_cast<unsigned char*>(b64), b64Capacity, &b64Length, rawBytes, encodedBytes);
   if (rc != 0) {
     free(b64);
+    if (adpcmBuf) free(adpcmBuf);
     return false;
   }
   b64[b64Length] = '\0';
 
   String id = deviceId_.length() > 0 ? deviceId_ : String("atom-headroom");
   String payload;
-  payload.reserve(b64Length + 220);
+  payload.reserve(b64Length + 240);
   payload += F("{\"v\":1,\"type\":\"atom_audio_frame\",\"session_id\":\"");
   payload += id;
   payload += F("\",\"device_id\":\"");
@@ -185,10 +209,15 @@ bool HeadroomTransport::sendAtomAudioFrame(const int16_t* samples, size_t sample
   payload += String(seq);
   payload += F(",\"generation\":");
   payload += String(generation);
+  payload += F(",\"encoding\":\"");
+  payload += useAdpcm ? F("ima_adpcm") : F("pcm16");
+  payload += F("\",\"sample_count\":");
+  payload += String(static_cast<unsigned int>(sampleCount));
   payload += F(",\"audio_base64\":\"");
   payload += b64;
   payload += F("\"}");
   free(b64);
+  if (adpcmBuf) free(adpcmBuf);
 
   return ws_.sendTXT(payload);
 }

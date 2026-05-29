@@ -4,9 +4,99 @@ import {
   createAtomAudioVadBridge,
   createRmsVadBackend,
   createSileroVadBackend,
+  imaAdpcmDecode,
   pcm16Rms,
   pcm16ToWavBuffer
 } from '../../face-app/dist/atom_audio_vad_bridge.js';
+
+// IMA ADPCM step / index tables (must match the encoder in
+// firmware/atoms3r-headroom/src/ima_adpcm.cpp).
+const IMA_STEP_TABLE = [
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
+  19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+  50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+  130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+  337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+  876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+  2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
+  5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+  15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+];
+const IMA_INDEX_TABLE = [
+  -1, -1, -1, -1, 2, 4, 6, 8,
+  -1, -1, -1, -1, 2, 4, 6, 8
+];
+
+// Mirror of ima_adpcm_encode() in C++ — used here only to feed the
+// decoder a stream identical in byte layout to what the firmware emits.
+function imaAdpcmEncode(pcm16Buffer) {
+  const samples = Math.floor(pcm16Buffer.length / 2);
+  if (samples === 0) {
+    return Buffer.alloc(0);
+  }
+  const out = Buffer.alloc(4 + Math.ceil((samples - 1) / 2));
+  let predictor = pcm16Buffer.readInt16LE(0);
+  let stepIndex = 0;
+  out.writeInt16LE(predictor, 0);
+  out.writeInt8(stepIndex, 2);
+  out[3] = 0;
+  let byteIndex = 4;
+  let pending = 0;
+  let hasPending = false;
+  for (let i = 1; i < samples; i += 1) {
+    const sample = pcm16Buffer.readInt16LE(i * 2);
+    let diff = sample - predictor;
+    let code = 0;
+    if (diff < 0) {
+      code = 0x8;
+      diff = -diff;
+    }
+    const step = IMA_STEP_TABLE[stepIndex];
+    if (diff >= step) { code |= 0x4; diff -= step; }
+    const halfStep = step >> 1;
+    if (diff >= halfStep) { code |= 0x2; diff -= halfStep; }
+    const quarterStep = halfStep >> 1;
+    if (diff >= quarterStep) { code |= 0x1; }
+
+    let delta = step >> 3;
+    if (code & 0x1) delta += step >> 2;
+    if (code & 0x2) delta += step >> 1;
+    if (code & 0x4) delta += step;
+    if (code & 0x8) {
+      predictor -= delta;
+    } else {
+      predictor += delta;
+    }
+    if (predictor > 32767) predictor = 32767;
+    if (predictor < -32768) predictor = -32768;
+    stepIndex += IMA_INDEX_TABLE[code & 0x0f];
+    if (stepIndex < 0) stepIndex = 0;
+    if (stepIndex > 88) stepIndex = 88;
+
+    const nibble = code & 0x0f;
+    if (!hasPending) {
+      pending = nibble;
+      hasPending = true;
+    } else {
+      pending |= (nibble << 4) & 0xff;
+      out[byteIndex++] = pending;
+      hasPending = false;
+    }
+  }
+  if (hasPending) {
+    out[byteIndex++] = pending;
+  }
+  return out.subarray(0, byteIndex);
+}
+
+function pcm16Sine({ samples = 1024, freqHz = 300, amplitude = 6000, sampleRate = 16000 } = {}) {
+  const buffer = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i += 1) {
+    const value = Math.round(amplitude * Math.sin(2 * Math.PI * freqHz * i / sampleRate));
+    buffer.writeInt16LE(value, i * 2);
+  }
+  return buffer;
+}
 
 function pcmFrame({ samples = 1600, amplitude = 0 } = {}) {
   const buffer = Buffer.alloc(samples * 2);
@@ -376,6 +466,110 @@ test('Atom audio VAD bridge async backend respects resetSession epoch', async ()
 
   await bridge.drain();
   assert.equal(operatorResponses.length, 0);
+});
+
+test('imaAdpcmDecode round-trips a sine within ADPCM quantization noise', () => {
+  const sine = pcm16Sine({ samples: 1024, freqHz: 440, amplitude: 8000 });
+  const encoded = imaAdpcmEncode(sine);
+  // 4-byte header + ceil((1024-1)/2) = 512 nibble bytes => 516 bytes total.
+  // Raw PCM16 1024 samples = 2048 bytes. Compression factor ~4x as expected.
+  assert.equal(encoded.length, 4 + Math.ceil(1023 / 2));
+  assert.ok(encoded.length * 4 < sine.length * 5, 'expected >= 4x compression');
+
+  const decoded = imaAdpcmDecode(encoded, 1024);
+  assert.equal(decoded.length, sine.length);
+
+  // First sample is in the header and reconstructs exactly.
+  assert.equal(decoded.readInt16LE(0), sine.readInt16LE(0));
+
+  // RMS error vs original should be small for a periodic signal.
+  let sumSquares = 0;
+  for (let i = 0; i < 1024; i += 1) {
+    const orig = sine.readInt16LE(i * 2);
+    const got = decoded.readInt16LE(i * 2);
+    const err = (orig - got) / 32768;
+    sumSquares += err * err;
+  }
+  const rmsError = Math.sqrt(sumSquares / 1024);
+  assert.ok(rmsError < 0.02, `expected ADPCM RMS error < 0.02, got ${rmsError}`);
+});
+
+test('Atom audio VAD bridge decodes ima_adpcm frames before VAD/ASR submit', async () => {
+  const fetches = [];
+  const operatorResponses = [];
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    thresholdRms: 0.01,
+    // 1024-sample ADPCM frames are 64 ms each; two trailing silence frames
+    // give 128 ms, so endSilence must sit below that to finalize on drain.
+    endSilenceMs: 100,
+    minSpeechMs: 50,
+    onOperatorResponse: (payload) => operatorResponses.push(payload),
+    fetchImpl: async (url, options) => {
+      fetches.push({ url: String(url), body: options.body });
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: '圧縮も通る', language: 'ja' });
+        }
+      };
+    }
+  });
+
+  // Speech frames as ADPCM.
+  const speech = pcm16Sine({ samples: 1024, freqHz: 220, amplitude: 6000 });
+  const silence = pcm16Sine({ samples: 1024, amplitude: 0 });
+  function adpcmPayload(pcm, overrides) {
+    const encoded = imaAdpcmEncode(pcm);
+    return {
+      v: 1,
+      type: 'atom_audio_frame',
+      session_id: 'atom-test',
+      device_id: 'atom-test',
+      language: 'ja',
+      sample_rate: 16000,
+      encoding: 'ima_adpcm',
+      sample_count: 1024,
+      audio_base64: encoded.toString('base64'),
+      ...overrides
+    };
+  }
+
+  bridge.handlePayload(adpcmPayload(speech, { seq: 1, generation: 1 }));
+  bridge.handlePayload(adpcmPayload(speech, { seq: 2, generation: 1 }));
+  bridge.handlePayload(adpcmPayload(silence, { seq: 3, generation: 1 }));
+  bridge.handlePayload(adpcmPayload(silence, { seq: 4, generation: 1 }));
+  await bridge.drain();
+
+  assert.equal(fetches.length, 1);
+  assert.equal(operatorResponses.length, 1);
+  // The submitted WAV body must contain PCM16 (post-decode), not the
+  // compressed bytes. Sanity-check by decoding the base64 wrapper.
+  const submitted = JSON.parse(fetches[0].body);
+  const wav = Buffer.from(submitted.audioBase64, 'base64');
+  assert.equal(wav.subarray(0, 4).toString('ascii'), 'RIFF');
+});
+
+test('Atom audio VAD bridge rejects unknown frame encodings', () => {
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    fetchImpl: async () => {
+      throw new Error('fetch must not be called');
+    }
+  });
+  const payload = {
+    v: 1,
+    type: 'atom_audio_frame',
+    session_id: 'atom-test',
+    device_id: 'atom-test',
+    sample_rate: 16000,
+    encoding: 'opus',
+    audio_base64: Buffer.from([0, 0, 0, 0, 0, 0]).toString('base64')
+  };
+  const directive = bridge.handlePayload(payload);
+  assert.equal(directive.accepted, false);
+  assert.equal(directive.reason, 'unsupported_encoding');
 });
 
 test('Atom audio VAD bridge drops frames when no ASR upstream is configured', () => {

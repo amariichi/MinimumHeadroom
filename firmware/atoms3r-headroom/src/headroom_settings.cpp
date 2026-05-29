@@ -60,6 +60,7 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   normalized.faceRotationDegrees = normalizeRotation(normalized.faceRotationDegrees);
   normalized.upSideDegrees = normalizeRotation(normalized.upSideDegrees);
   normalized.asrLanguage = normalizeAsrLanguage(normalized.asrLanguage);
+  normalized.vadEncoding = normalizeVadEncoding(normalized.vadEncoding);
 
   Preferences prefs;
   if (!prefs.begin(kNamespace, false)) {
@@ -81,6 +82,7 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   prefs.putString("asr_lang", normalized.asrLanguage);
   prefs.putBool("vad_on", normalized.continuousVadEnabled);
   prefs.putFloat("vad_rms", normalized.vadFirmwareRms);
+  prefs.putString("vad_enc", normalized.vadEncoding);
   prefs.putInt("max_b64_sec", normalized.maxBase64TtsSeconds);
   prefs.putInt("max_http_b", normalized.maxHttpTtsBytes);
   prefs.putInt("rotation", normalized.faceRotationDegrees);
@@ -161,6 +163,22 @@ HeadroomPlacementPose HeadroomSettings::parsePlacementPose(const String& value) 
   return HeadroomPlacementPose::ScreenUp;
 }
 
+String HeadroomSettings::normalizeVadEncoding(const String& value, const String& fallback) {
+  String normalized = value;
+  normalized.trim();
+  normalized.toLowerCase();
+  if (normalized == "ima_adpcm" || normalized == "adpcm") {
+    return "ima_adpcm";
+  }
+  if (normalized == "pcm16" || normalized == "pcm") {
+    return "pcm16";
+  }
+  String normalizedFallback = fallback;
+  normalizedFallback.trim();
+  normalizedFallback.toLowerCase();
+  return normalizedFallback == "ima_adpcm" ? "ima_adpcm" : "pcm16";
+}
+
 String HeadroomSettings::normalizeAsrLanguage(const String& value, const String& fallback) {
   String normalized = value;
   normalized.trim();
@@ -203,6 +221,7 @@ void HeadroomSettings::loadCompileDefaults() {
   data_.asrLanguage = normalizeAsrLanguage(HEADROOM_ASR_LANGUAGE);
   data_.continuousVadEnabled = HEADROOM_CONTINUOUS_VAD_ENABLED != 0;
   data_.vadFirmwareRms = HEADROOM_VAD_FIRMWARE_RMS;
+  data_.vadEncoding = normalizeVadEncoding(HEADROOM_VAD_ENCODING);
   data_.maxBase64TtsSeconds = HEADROOM_MAX_BASE64_TTS_SECONDS;
   data_.maxHttpTtsBytes = HEADROOM_MAX_HTTP_TTS_BYTES;
   data_.faceRotationDegrees = normalizeRotation(HEADROOM_FACE_ROTATION_DEGREES);
@@ -251,6 +270,7 @@ void HeadroomSettings::loadNvsOverrides() {
     const float rawRms = readFloat(prefs, "vad_rms", data_.vadFirmwareRms);
     data_.vadFirmwareRms = rawRms < 0.0f ? 0.0f : (rawRms > 1.0f ? 1.0f : rawRms);
   }
+  data_.vadEncoding = normalizeVadEncoding(readString(prefs, "vad_enc", data_.vadEncoding));
   data_.maxBase64TtsSeconds = readInt(prefs, "max_b64_sec", data_.maxBase64TtsSeconds);
   data_.maxHttpTtsBytes = readInt(prefs, "max_http_b", data_.maxHttpTtsBytes);
   data_.faceRotationDegrees = normalizeRotation(readInt(prefs, "rotation", data_.faceRotationDegrees));

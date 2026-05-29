@@ -25,6 +25,15 @@
 #define HEADROOM_VAD_FIRMWARE_RMS 0.025f
 #endif
 
+// Audio encoding for continuous VAD audio frames sent over the Atom→PC
+// WebSocket. "pcm16" (default, raw 16-bit little-endian) preserves full
+// fidelity; "ima_adpcm" applies a 4:1 lossy compression that drops
+// mobile-tethered bandwidth from ~160 MB/h to ~40 MB/h. Use ADPCM with
+// the Silero backend outdoors.
+#ifndef HEADROOM_VAD_ENCODING
+#define HEADROOM_VAD_ENCODING "pcm16"
+#endif
+
 // Wi-Fi slots 2/3 are optional. Guard them so a pre-existing
 // headroom_config.local.h that predates multi-AP support still compiles.
 #ifndef HEADROOM_WIFI_SSID2

@@ -204,6 +204,14 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += F("<input name='vad_rms' type='number' min='0' max='1' step='0.001' value='");
   html += String(data.vadFirmwareRms, 4);
   html += F("'>");
+  html += F("<label>VAD audio encoding</label><select name='vad_enc'>");
+  html += F("<option value='pcm16'");
+  html += selectedIf(data.vadEncoding == "pcm16");
+  html += F(">pcm16 (raw 16-bit, ~160 MB/h)</option>");
+  html += F("<option value='ima_adpcm'");
+  html += selectedIf(data.vadEncoding == "ima_adpcm");
+  html += F(">ima_adpcm (4:1 lossy, ~40 MB/h)</option>");
+  html += F("</select>");
   html += F("<div class='row'><div><label>Max base64 TTS seconds</label><input name='max_b64_sec' type='number' min='1' max='15' value='");
   html += String(data.maxBase64TtsSeconds);
   html += F("'></div><div><label>Max HTTP TTS bytes</label><input name='max_http_b' type='number' min='100000' max='3000000' value='");
@@ -266,6 +274,7 @@ HeadroomSettingsData HeadroomSetupPortal::settingsFromRequest() {
   } else if (next.vadFirmwareRms > 1.0f) {
     next.vadFirmwareRms = 1.0f;
   }
+  next.vadEncoding = HeadroomSettings::normalizeVadEncoding(server_.arg("vad_enc"), next.vadEncoding);
   next.maxBase64TtsSeconds = requestInt(server_, "max_b64_sec", next.maxBase64TtsSeconds);
   next.maxHttpTtsBytes = requestInt(server_, "max_http_b", next.maxHttpTtsBytes);
   next.faceRotationDegrees = HeadroomSettings::normalizeRotation(requestInt(server_, "rotation", next.faceRotationDegrees));

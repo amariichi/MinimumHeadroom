@@ -43,6 +43,7 @@ Options:
   --vad-off             disable continuous VAD mode
   --vad-rms <f>         firmware speech threshold (0..1; 0 = send every frame, ~0.025 default,
                         lower for Silero PC backend)
+  --vad-encoding <enc>  pcm16 (default, raw 16-bit) or ima_adpcm (4:1 lossy for mobile use)
   --token <t>           auth token (else env MH_FACE_AUTH_TOKEN, else shared env file)
   --reboot              tell the Atom to reboot after saving
   --dry-run             print the redacted RMHCFG payload and exit (no port access)
@@ -66,6 +67,7 @@ function parseArgs(argv) {
     else if (a === '--vad-on') out.vadOn = true;
     else if (a === '--vad-off') out.vadOn = false;
     else if (a === '--vad-rms') out.vadRms = next();
+    else if (a === '--vad-encoding') out.vadEncoding = next();
     else if (a === '--token') out.token = next();
     else if (a === '--reboot') out.reboot = true;
     else if (a === '--dry-run') out.dryRun = true;
@@ -133,6 +135,14 @@ function buildPayload(opts, token) {
       process.exit(2);
     }
     cfg.vad_rms = numeric;
+  }
+  if (opts.vadEncoding !== undefined) {
+    const enc = String(opts.vadEncoding).trim().toLowerCase();
+    if (!['pcm16', 'pcm', 'ima_adpcm', 'adpcm'].includes(enc)) {
+      console.error('--vad-encoding must be "pcm16" or "ima_adpcm" (got: ' + opts.vadEncoding + ')');
+      process.exit(2);
+    }
+    cfg.vad_enc = enc === 'pcm' ? 'pcm16' : (enc === 'adpcm' ? 'ima_adpcm' : enc);
   }
   if (token) cfg.auth = token;
   if (opts.reboot) cfg.reboot = true;

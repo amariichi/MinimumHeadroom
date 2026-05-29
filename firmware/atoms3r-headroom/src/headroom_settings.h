@@ -27,6 +27,11 @@ struct HeadroomSettingsData {
   // frames are forwarded — Silero mode); values up to about 0.1 are
   // sensible. Persisted to NVS as a float.
   float vadFirmwareRms = 0.025f;
+  // Audio encoding for AtomS3R-to-PC VAD frames. "pcm16" (default, raw
+  // little-endian 16-bit) or "ima_adpcm" (4:1 lossy, integer codec).
+  // ADPCM cuts mobile-tethered bandwidth roughly 4x and is what to
+  // enable for outdoor / Silero usage. Persisted to NVS.
+  String vadEncoding = "pcm16";
   int maxBase64TtsSeconds = 10;
   int maxHttpTtsBytes = 1200000;
   int faceRotationDegrees = 0;
@@ -51,6 +56,7 @@ public:
   static bool isValidRotation(int degrees);
   static int normalizeRotation(int degrees);
   static String normalizeAsrLanguage(const String& value, const String& fallback = "ja");
+  static String normalizeVadEncoding(const String& value, const String& fallback = "pcm16");
   static HeadroomPlacementPose parsePlacementPose(const String& value);
   static const char* placementPoseName(HeadroomPlacementPose pose);
 

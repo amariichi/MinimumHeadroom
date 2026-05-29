@@ -22,6 +22,8 @@
 // room. Set to ~0.005 if the PC bridge uses Silero so Silero can see
 // marginal-energy frames.
 #define HEADROOM_VAD_FIRMWARE_RMS 0.025f
+// "pcm16" (raw 16-bit) or "ima_adpcm" (4:1 lossy for mobile use).
+#define HEADROOM_VAD_ENCODING "pcm16"
 #define HEADROOM_MAX_BASE64_TTS_SECONDS 15
 #define HEADROOM_MAX_HTTP_TTS_BYTES 1200000
 

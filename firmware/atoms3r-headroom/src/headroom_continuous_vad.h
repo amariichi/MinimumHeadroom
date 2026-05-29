@@ -98,6 +98,7 @@ private:
   HeadroomTransport* transport_ = nullptr;
   HeadroomFaceState* faceState_ = nullptr;
   String asrLanguage_ = "ja";
+  String encoding_ = "pcm16";
   float speechRms_ = 0.025f;
   HeadroomContinuousVadState state_ = HeadroomContinuousVadState::Disabled;
   uint32_t generation_ = 0;

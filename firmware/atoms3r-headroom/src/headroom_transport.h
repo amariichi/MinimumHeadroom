@@ -15,7 +15,9 @@ public:
   bool connected() const;
   bool handleJsonPayload(const uint8_t* payload, size_t length);
   bool sendOperatorText(const String& text);
-  bool sendAtomAudioFrame(const int16_t* samples, size_t sampleCount, uint32_t sampleRate, const String& language, uint32_t seq, uint32_t generation);
+  // encoding: "pcm16" (raw little-endian 16-bit) or "ima_adpcm" (4:1
+  // lossy). The receiver inspects the same string in the JSON envelope.
+  bool sendAtomAudioFrame(const int16_t* samples, size_t sampleCount, uint32_t sampleRate, const String& language, uint32_t seq, uint32_t generation, const String& encoding);
   void setBeforeAudioPlaybackCallback(void (*callback)(void*), void* context);
 
 private:

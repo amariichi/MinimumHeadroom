@@ -17,6 +17,7 @@ void HeadroomContinuousVad::begin(const HeadroomSettingsData& settings, Headroom
   transport_ = &transport;
   faceState_ = &faceState;
   asrLanguage_ = HeadroomSettings::normalizeAsrLanguage(settings.asrLanguage);
+  encoding_ = HeadroomSettings::normalizeVadEncoding(settings.vadEncoding);
   // Clamp the persisted threshold to a safe range. 0 means "send every
   // frame" (Silero mode); the upper bound stops a typo from silencing
   // the device forever.
@@ -31,9 +32,9 @@ void HeadroomContinuousVad::begin(const HeadroomSettingsData& settings, Headroom
   // directly. This keeps the cooldown hysteresis honest across both the WS
   // and HTTP playback paths.
   transport_->setBeforeAudioPlaybackCallback(&HeadroomContinuousVad::playbackCallback, this);
-  Serial.printf("continuous VAD ready enabled=%s state=%s asr_lang=%s gen=%u speech_rms=%.4f\n",
+  Serial.printf("continuous VAD ready enabled=%s state=%s asr_lang=%s gen=%u speech_rms=%.4f encoding=%s\n",
                 enabled() ? "yes" : "no", stateName(), asrLanguage_.c_str(),
-                static_cast<unsigned>(generation_), speechRms_);
+                static_cast<unsigned>(generation_), speechRms_, encoding_.c_str());
 }
 
 void HeadroomContinuousVad::update() {
@@ -266,7 +267,7 @@ void HeadroomContinuousVad::captureAndSend() {
   }
 
   ++seq_;
-  bool ok = transport_->sendAtomAudioFrame(frame_, kChunkSamples, kSampleRate, asrLanguage_, seq_, generation_);
+  bool ok = transport_->sendAtomAudioFrame(frame_, kChunkSamples, kSampleRate, asrLanguage_, seq_, generation_, encoding_);
   if (!ok) {
     Serial.println("continuous VAD audio frame send failed");
   }

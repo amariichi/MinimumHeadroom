@@ -48,6 +48,80 @@ export function pcm16ToWavBuffer(pcmBuffer, sampleRate = 16000) {
   return wav;
 }
 
+// IMA ADPCM 4:1 decoder. Matches the encoder in
+// firmware/atoms3r-headroom/src/ima_adpcm.cpp byte-for-byte: a 4-byte
+// header (predictor LE16 | step index | reserved) followed by 4-bit
+// nibbles (low nibble first). Returns a PCM16 little-endian Buffer.
+const IMA_STEP_TABLE = [
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
+  19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+  50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+  130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+  337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+  876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+  2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
+  5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+  15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+];
+const IMA_INDEX_TABLE = [
+  -1, -1, -1, -1, 2, 4, 6, 8,
+  -1, -1, -1, -1, 2, 4, 6, 8
+];
+
+function clampInt16(value) {
+  if (value > 32767) return 32767;
+  if (value < -32768) return -32768;
+  return value;
+}
+
+function clampStepIndex(value) {
+  if (value < 0) return 0;
+  if (value > 88) return 88;
+  return value;
+}
+
+export function imaAdpcmDecode(buffer, sampleCount) {
+  const src = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer ?? []);
+  if (src.length < 4 || sampleCount < 1) {
+    return Buffer.alloc(0);
+  }
+  let predictor = src.readInt16LE(0);
+  let stepIndex = clampStepIndex(src.readInt8(2));
+  const out = Buffer.alloc(sampleCount * 2);
+  out.writeInt16LE(predictor, 0);
+
+  let byteOffset = 4;
+  let nibbleHigh = false;
+  for (let i = 1; i < sampleCount; i += 1) {
+    if (byteOffset >= src.length) {
+      break;
+    }
+    let nibble;
+    if (!nibbleHigh) {
+      nibble = src[byteOffset] & 0x0f;
+      nibbleHigh = true;
+    } else {
+      nibble = (src[byteOffset] >> 4) & 0x0f;
+      nibbleHigh = false;
+      byteOffset += 1;
+    }
+    const step = IMA_STEP_TABLE[stepIndex];
+    let delta = step >> 3;
+    if (nibble & 0x1) delta += step >> 2;
+    if (nibble & 0x2) delta += step >> 1;
+    if (nibble & 0x4) delta += step;
+    if (nibble & 0x8) {
+      predictor -= delta;
+    } else {
+      predictor += delta;
+    }
+    predictor = clampInt16(predictor);
+    stepIndex = clampStepIndex(stepIndex + IMA_INDEX_TABLE[nibble]);
+    out.writeInt16LE(predictor, i * 2);
+  }
+  return out;
+}
+
 export function pcm16Rms(buffer) {
   const pcm = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer ?? []);
   const samples = Math.floor(pcm.length / 2);
@@ -403,6 +477,30 @@ export function createAtomAudioVadBridge(options = {}) {
     }
     if (frame.length < 2) {
       return { relay: false, accepted: false, reason: 'empty_audio' };
+    }
+
+    // Decode firmware-side compression. The bridge's downstream logic
+    // (RMS / Silero / WAV submit) expects raw PCM16; decoding here keeps
+    // the rest of the pipeline encoding-agnostic.
+    const encoding = typeof payload.encoding === 'string' ? payload.encoding.trim().toLowerCase() : 'pcm16';
+    if (encoding === 'ima_adpcm' || encoding === 'adpcm') {
+      const reportedSampleCount = Number.isFinite(payload.sample_count)
+        ? Math.max(0, Math.floor(payload.sample_count))
+        : 0;
+      const inferredSampleCount = reportedSampleCount > 0
+        ? reportedSampleCount
+        : Math.max(1, 1 + (frame.length - 4) * 2);
+      try {
+        frame = imaAdpcmDecode(frame, inferredSampleCount);
+      } catch (error) {
+        log.warn(`[face-app] Atom VAD ima_adpcm decode failed: ${error?.message ?? error}`);
+        return { relay: false, accepted: false, reason: 'bad_ima_adpcm' };
+      }
+      if (frame.length < 2) {
+        return { relay: false, accepted: false, reason: 'empty_audio' };
+      }
+    } else if (encoding && encoding !== 'pcm16' && encoding !== 'pcm') {
+      return { relay: false, accepted: false, reason: 'unsupported_encoding' };
     }
 
     const session = sessionFor(payload.session_id ?? payload.device_id);
