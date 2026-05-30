@@ -155,7 +155,7 @@ The PC-side bridge supports two interchangeable VAD backends, selected by `MH_AT
 - `rms` (default): the built-in deterministic RMS-energy gate. Lightweight, no extra worker required, but ambient noise above the threshold registers as speech. Good for quiet rooms.
 - `silero`: forwards every frame to the `silero-vad-worker` HTTP service for ML-based classification. Robust against street / station / cafe noise, ~1–3 ms CPU per frame. Start the worker with `scripts/run-silero-vad-worker.sh` (run-operator-stack.sh launches it automatically when this backend is selected). Configure via `MH_SILERO_VAD_BASE_URL` (default `http://127.0.0.1:8092`) and `MH_SILERO_VAD_THRESHOLD` (default 0.5).
 
-Note that the AtomS3R firmware applies its own RMS energy gate (`kFrameSpeechRms = 0.025`) to suppress sending silent frames over mobile-tethered links. When `MH_ATOM_VAD_BACKEND=silero` is used in a noisy environment, lower the firmware gate (planned: `vad_firmware_rms` NVS setting) so Silero can see the marginal-energy frames where its discriminative advantage matters.
+Note that the AtomS3R firmware applies its own RMS energy gate (`vad_rms`, NVS, set via `scripts/atoms3r-provision.mjs --vad-rms`) to skip silent frames over mobile-tethered links. When `MH_ATOM_VAD_BACKEND=silero` is used in a noisy environment, keep the firmware gate low (~0.005) so Silero sees the marginal-energy frames where its discriminative advantage matters. For flashing, USB provisioning, ADPCM compression, every tuning knob (`MH_ATOM_VAD_END_SILENCE_MS` / `_THRESHOLD_RMS` / `_MAX_UTTERANCE_MS`, `vad_tail`), PTT, and troubleshooting, see the **[AtomS3R Voice Guide](atoms3r-voice.md#english)**.
 
 The key batch ASR variables are:
 
@@ -490,7 +490,7 @@ PC 側 bridge には差し替え可能な VAD バックエンドが 2 つあり�
 - `rms` (デフォルト): 組み込みの決定的 RMS エネルギーゲート。軽量で別ワーカー不要、静かな部屋向け。
 - `silero`: 各フレームを `silero-vad-worker` HTTP サービスに転送し、ML ベースで speech/非 speech を判定。駅・路上・カフェなど環境音がある場所で有効。CPU 1〜3 ms/フレーム。`scripts/run-silero-vad-worker.sh` で起動（このバックエンドを選ぶと `run-operator-stack.sh` が自動で立ち上げます）。`MH_SILERO_VAD_BASE_URL` (デフォルト `http://127.0.0.1:8092`) と `MH_SILERO_VAD_THRESHOLD` (デフォルト 0.5) で調整。
 
-AtomS3R firmware にも独自の RMS ゲート (`kFrameSpeechRms = 0.025`) が入っており、モバイル回線経由の帯域節約のため弱いフレームをそもそも送りません。`MH_ATOM_VAD_BACKEND=silero` を騒がしい場所で使う場合は、Silero の判別力を活かすため firmware 側ゲートを下げる必要があります（予定: `vad_firmware_rms` の NVS 設定化）。
+AtomS3R firmware にも独自の RMS ゲート (`vad_rms`、NVS、`scripts/atoms3r-provision.mjs --vad-rms` で設定) が入っており、モバイル回線経由の帯域節約のため弱いフレームをそもそも送りません。`MH_ATOM_VAD_BACKEND=silero` を騒がしい場所で使う場合は、Silero の判別力を活かすため firmware 側ゲートを低め (~0.005) に保ちます。書き込み・USB プロビジョニング・ADPCM 圧縮・各チューニング (`MH_ATOM_VAD_END_SILENCE_MS` / `_THRESHOLD_RMS` / `_MAX_UTTERANCE_MS`、`vad_tail`)・PTT・トラブルシュートは **[AtomS3R Voice Guide](atoms3r-voice.md#japanese)** を参照。
 
 主な batch ASR 変数:
 

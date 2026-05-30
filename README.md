@@ -433,6 +433,7 @@ If your MCP client rejects tool names with dots (for example `face.event`), set 
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english) — launcher choice, tmux bridge, operator UI, keyboard shortcuts, hidden mobile recovery, batch/realtime ASR, Tailscale remote operation
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization
 - [Multi-Agent Guide](doc/guides/multi-agent.md#english) — spawning helpers, permission presets, mission assignment, owner inbox, worktree isolation, security hardening
+- [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#english) — hands-free VAD pipeline, flashing + USB provisioning, RMS vs Silero backends, ADPCM, every tuning knob (endSilence / threshold / tail / maxUtterance), PTT, troubleshooting
 
 ## Hook Bridge (safety net for forgotten face_say)
 
@@ -952,6 +953,7 @@ MCP クライアントがドット付きツール名（例: `face.event`）を�
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) — 起動スクリプトの選び方、tmux bridge、operator UI、キーボードショートカット、batch / realtime ASR、隠し復旧、Tailscale リモート運用
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化
 - [マルチエージェントガイド](doc/guides/multi-agent.md#japanese) — helper の生成、権限プリセット、ミッション割当、owner inbox、worktree 分離、セキュリティ強化
+- [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#japanese) — ハンズフリー VAD パイプライン、書き込み＋USB プロビジョニング、RMS と Silero、ADPCM、各チューニング（endSilence / 閾値 / tail / maxUtterance）、PTT、トラブルシュート
 
 ## オプションスキル
 
