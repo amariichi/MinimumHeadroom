@@ -27,14 +27,20 @@ void HeadroomContinuousVad::begin(const HeadroomSettingsData& settings, Headroom
   } else if (speechRms_ > 1.0f) {
     speechRms_ = 1.0f;
   }
+  // Trailing-silence frames sent after speech so the PC bridge can finalize.
+  // Must exceed the bridge's endSilenceMs in duration (see header invariant).
+  speechTailFrames_ = settings.vadSpeechTailFrames < 0
+                          ? 0u
+                          : static_cast<uint32_t>(settings.vadSpeechTailFrames);
   state_ = settings.continuousVadEnabled ? HeadroomContinuousVadState::Idle : HeadroomContinuousVadState::Disabled;
   // Transport's before-playback callback feeds the state machine, not stop()
   // directly. This keeps the cooldown hysteresis honest across both the WS
   // and HTTP playback paths.
   transport_->setBeforeAudioPlaybackCallback(&HeadroomContinuousVad::playbackCallback, this);
-  Serial.printf("continuous VAD ready enabled=%s state=%s asr_lang=%s gen=%u speech_rms=%.4f encoding=%s\n",
+  Serial.printf("continuous VAD ready enabled=%s state=%s asr_lang=%s gen=%u speech_rms=%.4f tail=%u encoding=%s\n",
                 enabled() ? "yes" : "no", stateName(), asrLanguage_.c_str(),
-                static_cast<unsigned>(generation_), speechRms_, encoding_.c_str());
+                static_cast<unsigned>(generation_), speechRms_,
+                static_cast<unsigned>(speechTailFrames_), encoding_.c_str());
 }
 
 void HeadroomContinuousVad::update() {
@@ -250,13 +256,13 @@ void HeadroomContinuousVad::captureAndSend() {
 
   // Bandwidth gate: skip frames whose RMS energy is below the speech
   // threshold AND are past the speech tail window. A speech frame resets
-  // the tail counter so the next kSpeechTailFrames silent frames are
+  // the tail counter so the next speechTailFrames_ silent frames are
   // still forwarded; the PC-side bridge needs those to advance its
   // silenceMs counter past endSilenceMs and finalize the utterance.
   const float rms = frameRmsAmplitude();
   const bool isSpeechFrame = rms >= speechRms_;
   if (isSpeechFrame) {
-    tailFramesRemaining_ = kSpeechTailFrames;
+    tailFramesRemaining_ = speechTailFrames_;
   } else if (tailFramesRemaining_ > 0) {
     --tailFramesRemaining_;
   } else {

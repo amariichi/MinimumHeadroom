@@ -30,6 +30,7 @@ private:
   bool continuousVadEnabled_ = false;
   float vadFirmwareRms_ = 0.025f;
   String vadEncoding_ = "pcm16";
+  int vadSpeechTailFrames_ = 16;
   bool active_ = false;
   size_t maxPayloadBytes_ = 720000;
   uint32_t lastPayloadMs_ = 0;

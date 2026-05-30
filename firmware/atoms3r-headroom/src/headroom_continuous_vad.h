@@ -49,15 +49,24 @@ public:
   // before base64-encoding and the WebSocket send. This is the primary
   // bandwidth reduction for mobile-tethered operation. Speech onset is
   // preserved by sending the first frame above threshold (no pre-roll
-  // buffer yet); tail context is preserved by sending kSpeechTailFrames
+  // buffer yet); tail context is preserved by sending speechTailFrames_
   // silent frames after the last speech frame so the PC-side bridge gets
   // enough trailing silence to finalize the utterance.
   //
-  // The runtime threshold comes from HeadroomSettingsData::vadFirmwareRms
-  // (NVS-persisted). For PC-side RMS backend the default 0.025 works in
-  // a quiet room; for the Silero backend, set it to ~0.005 via the
-  // provisioning script so Silero can see marginal-energy frames.
-  static constexpr uint32_t kSpeechTailFrames = 8;  // ~512 ms at 1024 samples / 16 kHz
+  // INVARIANT: the tail duration (speechTailFrames_ * 64 ms) must exceed the
+  // PC bridge's endSilenceMs, or the device stops sending before the bridge
+  // has accumulated enough silence to finalize — the utterance then hangs
+  // until the next speech. The default 16 frames (~1.0 s) clears the 900 ms
+  // MH_ATOM_VAD_END_SILENCE_MS default with margin. A non-zero tail is what
+  // lets vadFirmwareRms stay > 0 (idle silence skipped, ~zero bandwidth when
+  // no one speaks) without chopping an utterance at every natural pause.
+  //
+  // The runtime threshold comes from HeadroomSettingsData::vadFirmwareRms and
+  // the tail count from HeadroomSettingsData::vadSpeechTailFrames (both
+  // NVS-persisted). For PC-side RMS backend the default 0.025 works in a quiet
+  // room; for the Silero backend, set it to ~0.005 via the provisioning script
+  // so Silero can see marginal-energy frames.
+  static constexpr uint32_t kDefaultSpeechTailFrames = 16;  // ~1.0 s at 1024 samples / 16 kHz
 
   void begin(const HeadroomSettingsData& settings, HeadroomAudio& audio, HeadroomTransport& transport, HeadroomFaceState& faceState);
   void update();
@@ -100,6 +109,7 @@ private:
   String asrLanguage_ = "ja";
   String encoding_ = "pcm16";
   float speechRms_ = 0.025f;
+  uint32_t speechTailFrames_ = kDefaultSpeechTailFrames;
   HeadroomContinuousVadState state_ = HeadroomContinuousVadState::Disabled;
   uint32_t generation_ = 0;
   uint32_t suspendUntilMs_ = 0;

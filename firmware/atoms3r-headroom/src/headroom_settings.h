@@ -32,6 +32,12 @@ struct HeadroomSettingsData {
   // ADPCM cuts mobile-tethered bandwidth roughly 4x and is what to
   // enable for outdoor / Silero usage. Persisted to NVS.
   String vadEncoding = "pcm16";
+  // Trailing low-energy frames captureAndSend keeps forwarding after the
+  // last speech frame so the PC bridge gets enough silence to finalize the
+  // utterance. Must exceed endSilenceMs/64ms on the PC (>=15 for the 900 ms
+  // default); 16 (~1.0 s) gives margin. 0 disables the tail (idle-skip then
+  // chops at pauses). Persisted to NVS.
+  int vadSpeechTailFrames = 16;
   int maxBase64TtsSeconds = 10;
   int maxHttpTtsBytes = 1200000;
   int faceRotationDegrees = 0;

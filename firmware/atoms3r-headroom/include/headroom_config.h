@@ -34,6 +34,17 @@
 #define HEADROOM_VAD_ENCODING "pcm16"
 #endif
 
+// Number of trailing low-energy frames captureAndSend keeps forwarding after
+// the last speech frame, so the PC bridge receives enough silence to finalize
+// the utterance. INVARIANT: this * 64 ms must exceed the PC bridge's
+// endSilenceMs (MH_ATOM_VAD_END_SILENCE_MS, default 900 ms) — keep it >= 15.
+// 16 (~1.0 s) is the default and clears 900 ms with margin. A non-zero tail is
+// what lets the firmware skip true idle silence (vad_firmware_rms > 0) without
+// chopping an utterance at every natural pause. Persisted to NVS.
+#ifndef HEADROOM_VAD_SPEECH_TAIL_FRAMES
+#define HEADROOM_VAD_SPEECH_TAIL_FRAMES 16
+#endif
+
 // Wi-Fi slots 2/3 are optional. Guard them so a pre-existing
 // headroom_config.local.h that predates multi-AP support still compiles.
 #ifndef HEADROOM_WIFI_SSID2

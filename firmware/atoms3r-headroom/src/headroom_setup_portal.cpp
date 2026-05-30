@@ -204,6 +204,10 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += F("<input name='vad_rms' type='number' min='0' max='1' step='0.001' value='");
   html += String(data.vadFirmwareRms, 4);
   html += F("'>");
+  html += F("<label>VAD speech tail frames (0-240; ~16 ≈ 1s; must exceed PC endSilence/64ms)</label>");
+  html += F("<input name='vad_tail' type='number' min='0' max='240' step='1' value='");
+  html += String(data.vadSpeechTailFrames);
+  html += F("'>");
   html += F("<label>VAD audio encoding</label><select name='vad_enc'>");
   html += F("<option value='pcm16'");
   html += selectedIf(data.vadEncoding == "pcm16");
@@ -275,6 +279,12 @@ HeadroomSettingsData HeadroomSetupPortal::settingsFromRequest() {
     next.vadFirmwareRms = 1.0f;
   }
   next.vadEncoding = HeadroomSettings::normalizeVadEncoding(server_.arg("vad_enc"), next.vadEncoding);
+  next.vadSpeechTailFrames = requestInt(server_, "vad_tail", next.vadSpeechTailFrames);
+  if (next.vadSpeechTailFrames < 0) {
+    next.vadSpeechTailFrames = 0;
+  } else if (next.vadSpeechTailFrames > 240) {
+    next.vadSpeechTailFrames = 240;
+  }
   next.maxBase64TtsSeconds = requestInt(server_, "max_b64_sec", next.maxBase64TtsSeconds);
   next.maxHttpTtsBytes = requestInt(server_, "max_http_b", next.maxHttpTtsBytes);
   next.faceRotationDegrees = HeadroomSettings::normalizeRotation(requestInt(server_, "rotation", next.faceRotationDegrees));

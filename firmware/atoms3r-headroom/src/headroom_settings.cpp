@@ -61,6 +61,11 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   normalized.upSideDegrees = normalizeRotation(normalized.upSideDegrees);
   normalized.asrLanguage = normalizeAsrLanguage(normalized.asrLanguage);
   normalized.vadEncoding = normalizeVadEncoding(normalized.vadEncoding);
+  if (normalized.vadSpeechTailFrames < 0) {
+    normalized.vadSpeechTailFrames = 0;
+  } else if (normalized.vadSpeechTailFrames > 240) {
+    normalized.vadSpeechTailFrames = 240;
+  }
 
   Preferences prefs;
   if (!prefs.begin(kNamespace, false)) {
@@ -83,6 +88,7 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   prefs.putBool("vad_on", normalized.continuousVadEnabled);
   prefs.putFloat("vad_rms", normalized.vadFirmwareRms);
   prefs.putString("vad_enc", normalized.vadEncoding);
+  prefs.putInt("vad_tail", normalized.vadSpeechTailFrames);
   prefs.putInt("max_b64_sec", normalized.maxBase64TtsSeconds);
   prefs.putInt("max_http_b", normalized.maxHttpTtsBytes);
   prefs.putInt("rotation", normalized.faceRotationDegrees);
@@ -222,6 +228,7 @@ void HeadroomSettings::loadCompileDefaults() {
   data_.continuousVadEnabled = HEADROOM_CONTINUOUS_VAD_ENABLED != 0;
   data_.vadFirmwareRms = HEADROOM_VAD_FIRMWARE_RMS;
   data_.vadEncoding = normalizeVadEncoding(HEADROOM_VAD_ENCODING);
+  data_.vadSpeechTailFrames = HEADROOM_VAD_SPEECH_TAIL_FRAMES;
   data_.maxBase64TtsSeconds = HEADROOM_MAX_BASE64_TTS_SECONDS;
   data_.maxHttpTtsBytes = HEADROOM_MAX_HTTP_TTS_BYTES;
   data_.faceRotationDegrees = normalizeRotation(HEADROOM_FACE_ROTATION_DEGREES);
@@ -271,6 +278,10 @@ void HeadroomSettings::loadNvsOverrides() {
     data_.vadFirmwareRms = rawRms < 0.0f ? 0.0f : (rawRms > 1.0f ? 1.0f : rawRms);
   }
   data_.vadEncoding = normalizeVadEncoding(readString(prefs, "vad_enc", data_.vadEncoding));
+  {
+    const int rawTail = readInt(prefs, "vad_tail", data_.vadSpeechTailFrames);
+    data_.vadSpeechTailFrames = rawTail < 0 ? 0 : (rawTail > 240 ? 240 : rawTail);
+  }
   data_.maxBase64TtsSeconds = readInt(prefs, "max_b64_sec", data_.maxBase64TtsSeconds);
   data_.maxHttpTtsBytes = readInt(prefs, "max_http_b", data_.maxHttpTtsBytes);
   data_.faceRotationDegrees = normalizeRotation(readInt(prefs, "rotation", data_.faceRotationDegrees));

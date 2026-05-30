@@ -354,6 +354,12 @@ async function handleInternalSay(payload, options = {}) {
 const atomVadBackendKind = (process.env.MH_ATOM_VAD_BACKEND ?? 'rms').trim().toLowerCase();
 const sileroBaseUrl = (process.env.MH_SILERO_VAD_BASE_URL ?? 'http://127.0.0.1:8092').trim();
 const sileroThresholdEnv = Number.parseFloat(process.env.MH_SILERO_VAD_THRESHOLD ?? '');
+// PC-side RMS speech threshold for the default (non-Silero) Atom backend.
+// The firmware uses the identical RMS formula as its own bandwidth gate, so
+// both must sit below the speaker's actual frame energy. 0.025 (the backend
+// default) suits a mic held close; lower it (~0.01) for normal talking
+// distance. NaN (unset) falls through to the createRmsVadBackend default.
+const atomRmsThreshold = Number.parseFloat(process.env.MH_ATOM_VAD_THRESHOLD_RMS ?? '');
 // Atom VAD utterance segmentation tuning. endSilenceMs is how long a pause may
 // last before the bridge finalizes an utterance; too low (default was 400 ms)
 // cuts natural speech at every breath. NaN here falls through to the bridge's
@@ -365,7 +371,7 @@ const atomVadBackend = atomVadBackendKind === 'silero'
       baseUrl: sileroBaseUrl,
       threshold: Number.isFinite(sileroThresholdEnv) ? sileroThresholdEnv : 0.5
     })
-  : createRmsVadBackend({});
+  : createRmsVadBackend({ thresholdRms: atomRmsThreshold });
 console.info(`[face-app] Atom VAD backend=${atomVadBackend.name}`);
 
 const atomAudioVadBridge = createAtomAudioVadBridge({

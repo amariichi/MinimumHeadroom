@@ -44,6 +44,9 @@ Options:
   --vad-rms <f>         firmware speech threshold (0..1; 0 = send every frame, ~0.025 default,
                         lower for Silero PC backend)
   --vad-encoding <enc>  pcm16 (default, raw 16-bit) or ima_adpcm (4:1 lossy for mobile use)
+  --vad-tail <n>        trailing silence frames sent after speech (0..240; ~16 ≈ 1s).
+                        Must exceed the PC endSilenceMs/64ms so natural pauses don't
+                        chop the utterance; lets vad-rms stay >0 to skip idle silence
   --token <t>           auth token (else env MH_FACE_AUTH_TOKEN, else shared env file)
   --reboot              tell the Atom to reboot after saving
   --dry-run             print the redacted RMHCFG payload and exit (no port access)
@@ -68,6 +71,7 @@ function parseArgs(argv) {
     else if (a === '--vad-off') out.vadOn = false;
     else if (a === '--vad-rms') out.vadRms = next();
     else if (a === '--vad-encoding') out.vadEncoding = next();
+    else if (a === '--vad-tail') out.vadTail = next();
     else if (a === '--token') out.token = next();
     else if (a === '--reboot') out.reboot = true;
     else if (a === '--dry-run') out.dryRun = true;
@@ -143,6 +147,14 @@ function buildPayload(opts, token) {
       process.exit(2);
     }
     cfg.vad_enc = enc === 'pcm' ? 'pcm16' : (enc === 'adpcm' ? 'ima_adpcm' : enc);
+  }
+  if (opts.vadTail !== undefined) {
+    const n = Number(opts.vadTail);
+    if (!Number.isInteger(n) || n < 0 || n > 240) {
+      console.error('--vad-tail must be an integer between 0 and 240 (got: ' + opts.vadTail + ')');
+      process.exit(2);
+    }
+    cfg.vad_tail = n;
   }
   if (token) cfg.auth = token;
   if (opts.reboot) cfg.reboot = true;

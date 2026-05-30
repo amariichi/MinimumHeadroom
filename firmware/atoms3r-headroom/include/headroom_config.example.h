@@ -24,6 +24,11 @@
 #define HEADROOM_VAD_FIRMWARE_RMS 0.025f
 // "pcm16" (raw 16-bit) or "ima_adpcm" (4:1 lossy for mobile use).
 #define HEADROOM_VAD_ENCODING "pcm16"
+// Trailing silence frames sent after speech (0..240; 16 ≈ 1.0 s). Must exceed
+// the PC bridge's MH_ATOM_VAD_END_SILENCE_MS/64ms (>=15 for 900 ms) or the
+// utterance never finalizes. Lets vad_firmware_rms stay >0 (idle skipped)
+// without chopping at natural pauses.
+#define HEADROOM_VAD_SPEECH_TAIL_FRAMES 16
 #define HEADROOM_MAX_BASE64_TTS_SECONDS 15
 #define HEADROOM_MAX_HTTP_TTS_BYTES 1200000
 
