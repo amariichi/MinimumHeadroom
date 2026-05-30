@@ -275,6 +275,8 @@ export function createAtomAudioVadBridge(options = {}) {
   const vadBackend = options.vadBackend && typeof options.vadBackend.decide === 'function'
     ? options.vadBackend
     : createRmsVadBackend({ thresholdRms });
+  // Injectable clock so checkUtteranceTimeouts() is deterministic under test.
+  const nowFn = typeof options.now === 'function' ? options.now : () => Date.now();
   const sessions = new Map();
   const pending = new Set();
 
@@ -296,6 +298,10 @@ export function createAtomAudioVadBridge(options = {}) {
         silenceMs: 0,
         utteranceMs: 0,
         seq: 0,
+        // Wall-clock time (from nowFn) of the most recent frame applied while
+        // active. checkUtteranceTimeouts() uses it to finalize on a receive
+        // gap, decoupling the firmware speech-tail length from endSilenceMs.
+        lastFrameAtMs: 0,
         // Highest generation seen so far. Frames with a lower generation are
         // stale (from a capture session the device has already retired) and
         // must be dropped. A higher generation resets in-flight state.
@@ -397,6 +403,7 @@ export function createAtomAudioVadBridge(options = {}) {
       session.silenceMs += frameMs;
     }
     if (session.active) {
+      session.lastFrameAtMs = nowFn();
       session.buffers.push(frame);
       session.utteranceMs += frameMs;
       if (
@@ -577,6 +584,24 @@ export function createAtomAudioVadBridge(options = {}) {
     resetSession,
     async drain() {
       await Promise.all([...pending]);
+    },
+    // Wall-clock fallback finalize. When the device stops sending frames
+    // (firmware silence-skip after a short tail) no more silence frames arrive
+    // to push silenceMs over endSilenceMs, so combine the received silence with
+    // the gap since the last frame. The utterance still finalizes ~endSilenceMs
+    // after speech ends, which decouples the firmware speech-tail length from
+    // endSilenceMs — the tail only has to carry the speech decay and
+    // endSilenceMs becomes a pure PC-side knob. Drive this from a setInterval.
+    checkUtteranceTimeouts(nowMs = nowFn()) {
+      for (const session of sessions.values()) {
+        if (!session.active || session.buffers.length === 0) {
+          continue;
+        }
+        const effectiveSilenceMs = session.silenceMs + Math.max(0, nowMs - session.lastFrameAtMs);
+        if (effectiveSilenceMs >= endSilenceMs && session.speechMs >= minSpeechMs) {
+          finalize(session);
+        }
+      }
     },
     flush(sessionId = 'atom-headroom') {
       const session = sessionFor(sessionId);

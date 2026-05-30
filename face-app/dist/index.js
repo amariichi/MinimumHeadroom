@@ -392,6 +392,19 @@ const atomAudioVadBridge = createAtomAudioVadBridge({
   log: console
 });
 
+// Drive the bridge's wall-clock finalize so an utterance still completes when
+// the device goes silent (firmware silence-skip) and stops sending frames.
+// This is what lets MH_ATOM_VAD_END_SILENCE_MS be tuned from the PC alone,
+// independent of the firmware speech-tail length (vad_tail).
+const atomVadTimeoutTimer = setInterval(() => {
+  try {
+    atomAudioVadBridge.checkUtteranceTimeouts();
+  } catch (error) {
+    console.warn(`[face-app] Atom VAD timeout check failed: ${error?.message ?? error}`);
+  }
+}, 200);
+atomVadTimeoutTimer.unref?.();
+
 const operatorAsrProxy = createOperatorAsrProxy({
   baseUrl: operatorAsrBaseUrl,
   endpointUrl: operatorAsrEndpointUrl,

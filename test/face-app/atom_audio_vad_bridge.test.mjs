@@ -585,3 +585,68 @@ test('Atom audio VAD bridge drops frames when no ASR upstream is configured', ()
   assert.equal(directive.accepted, false);
   assert.equal(directive.reason, 'asr_not_configured');
 });
+
+test('Atom audio VAD bridge finalizes on a receive-gap timer when the device stops sending', async () => {
+  const fetches = [];
+  const operatorResponses = [];
+  let clock = 1000;
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    thresholdRms: 0.01,
+    endSilenceMs: 900,
+    minSpeechMs: 50,
+    now: () => clock,
+    onOperatorResponse: (payload) => operatorResponses.push(payload),
+    fetchImpl: async (url, options) => {
+      fetches.push({ url: String(url), body: options.body });
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: 'タイマー確定', language: 'ja' });
+        }
+      };
+    }
+  });
+
+  // Two speech frames, then the device goes silent and sends NOTHING more
+  // (firmware silence-skip past its tail). No trailing silence frames arrive.
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 2 }));
+
+  // A timer tick before the gap reaches endSilenceMs must NOT finalize.
+  clock += 500;
+  bridge.checkUtteranceTimeouts();
+  await bridge.drain();
+  assert.equal(fetches.length, 0);
+
+  // Once the gap since the last received frame exceeds endSilenceMs, the
+  // wall-clock fallback finalizes the buffered utterance — no tail frames
+  // were needed, so the firmware tail is decoupled from endSilenceMs.
+  clock += 500; // total gap 1000 ms >= 900 ms
+  bridge.checkUtteranceTimeouts();
+  await bridge.drain();
+  assert.equal(fetches.length, 1);
+  assert.equal(operatorResponses.length, 1);
+  assert.equal(operatorResponses[0].value, 'タイマー確定');
+});
+
+test('Atom audio VAD bridge receive-gap timer ignores idle/too-short sessions', async () => {
+  const fetches = [];
+  let clock = 0;
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    thresholdRms: 0.01,
+    endSilenceMs: 900,
+    minSpeechMs: 5000, // unrealistically high so the utterance never qualifies
+    now: () => clock,
+    fetchImpl: async () => {
+      throw new Error('fetch must not be called when speechMs < minSpeechMs');
+    }
+  });
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1 }));
+  clock += 10000;
+  bridge.checkUtteranceTimeouts();
+  await bridge.drain();
+  assert.equal(fetches.length, 0);
+});

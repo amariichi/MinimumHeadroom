@@ -35,14 +35,14 @@
 #endif
 
 // Number of trailing low-energy frames captureAndSend keeps forwarding after
-// the last speech frame, so the PC bridge receives enough silence to finalize
-// the utterance. INVARIANT: this * 64 ms must exceed the PC bridge's
-// endSilenceMs (MH_ATOM_VAD_END_SILENCE_MS, default 900 ms) — keep it >= 15.
-// 16 (~1.0 s) is the default and clears 900 ms with margin. A non-zero tail is
-// what lets the firmware skip true idle silence (vad_firmware_rms > 0) without
-// chopping an utterance at every natural pause. Persisted to NVS.
+// the last speech frame. Its only job is to carry the speech decay/reverb so
+// ASR receives the tail of the final word; the PC bridge finalizes the
+// utterance with a receive-gap timer (MH_ATOM_VAD_END_SILENCE_MS counted from
+// the last frame it got), so this no longer has to exceed endSilenceMs. 8
+// (~0.5 s) is plenty. A non-zero tail is what lets the firmware skip true idle
+// silence (vad_firmware_rms > 0) without clipping the end of a word. NVS.
 #ifndef HEADROOM_VAD_SPEECH_TAIL_FRAMES
-#define HEADROOM_VAD_SPEECH_TAIL_FRAMES 16
+#define HEADROOM_VAD_SPEECH_TAIL_FRAMES 8
 #endif
 
 // Wi-Fi slots 2/3 are optional. Guard them so a pre-existing

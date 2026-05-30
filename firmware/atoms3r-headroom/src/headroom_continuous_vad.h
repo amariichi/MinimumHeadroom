@@ -53,20 +53,20 @@ public:
   // silent frames after the last speech frame so the PC-side bridge gets
   // enough trailing silence to finalize the utterance.
   //
-  // INVARIANT: the tail duration (speechTailFrames_ * 64 ms) must exceed the
-  // PC bridge's endSilenceMs, or the device stops sending before the bridge
-  // has accumulated enough silence to finalize — the utterance then hangs
-  // until the next speech. The default 16 frames (~1.0 s) clears the 900 ms
-  // MH_ATOM_VAD_END_SILENCE_MS default with margin. A non-zero tail is what
-  // lets vadFirmwareRms stay > 0 (idle silence skipped, ~zero bandwidth when
-  // no one speaks) without chopping an utterance at every natural pause.
+  // The tail only carries the speech decay/reverb so ASR gets the end of the
+  // final word. The PC bridge finalizes the utterance with a receive-gap timer
+  // (endSilenceMs counted from the last frame it received), so the tail no
+  // longer has to exceed endSilenceMs — 8 frames (~0.5 s) is plenty and keeps
+  // per-utterance bandwidth low. A non-zero tail is what lets vadFirmwareRms
+  // stay > 0 (idle silence skipped, ~zero bandwidth when no one speaks) without
+  // clipping the end of a word.
   //
   // The runtime threshold comes from HeadroomSettingsData::vadFirmwareRms and
   // the tail count from HeadroomSettingsData::vadSpeechTailFrames (both
   // NVS-persisted). For PC-side RMS backend the default 0.025 works in a quiet
   // room; for the Silero backend, set it to ~0.005 via the provisioning script
   // so Silero can see marginal-energy frames.
-  static constexpr uint32_t kDefaultSpeechTailFrames = 16;  // ~1.0 s at 1024 samples / 16 kHz
+  static constexpr uint32_t kDefaultSpeechTailFrames = 8;  // ~0.5 s at 1024 samples / 16 kHz
 
   void begin(const HeadroomSettingsData& settings, HeadroomAudio& audio, HeadroomTransport& transport, HeadroomFaceState& faceState);
   void update();
