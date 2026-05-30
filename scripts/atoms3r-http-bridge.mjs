@@ -22,6 +22,13 @@ const discoveryEnabled = process.env.ATOM_HEADROOM_DISCOVERY !== '0';
 const discoveryTimeoutMs = positiveInt(process.env.ATOM_HEADROOM_DISCOVERY_TIMEOUT_MS, 450);
 const discoveryConcurrency = positiveInt(process.env.ATOM_HEADROOM_DISCOVERY_CONCURRENCY, 32);
 const expectedDeviceId = normalizeOptionalString(process.env.ATOM_HEADROOM_DEVICE_ID ?? 'atom-headroom-1');
+// Extra /24 subnets to sweep during Atom discovery, beyond the PC's directly
+// attached interfaces. Needed when the Atom sits on a subnet the PC can route to
+// but isn't locally attached to — e.g. a travel router's LAN (192.168.8.0/24)
+// reachable over a Tailscale subnet route. Comma/space separated; each entry is
+// "a.b.c.0/24" or a bare "a.b.c" /24 prefix. Pairs with the firmware mDNS
+// feature so both directions self-heal as the Atom roams.
+const discoverySubnets = parseDiscoverySubnets(process.env.ATOM_HEADROOM_DISCOVERY_SUBNETS);
 
 const faceWsUrl = withAuthQuery(faceWsUrlInput, faceAuthToken);
 const faceHttpBase = httpBaseFromWsUrl(faceWsUrl);
@@ -63,7 +70,7 @@ if (typeof WebSocket !== 'function') {
 }
 
 console.log(
-  `[atoms3r-bridge] face_ws=${redactUrl(faceWsUrl)} atom=${redactUrl(atomBaseUrl)} max_payload=${maxPayloadBytes} forward_audio=${forwardAudio} fetch_audio_ref=${fetchAudioRef} discovery=${discoveryEnabled}`
+  `[atoms3r-bridge] face_ws=${redactUrl(faceWsUrl)} atom=${redactUrl(atomBaseUrl)} max_payload=${maxPayloadBytes} forward_audio=${forwardAudio} fetch_audio_ref=${fetchAudioRef} discovery=${discoveryEnabled}${discoverySubnets.length ? ` discovery_subnets=${discoverySubnets.map((p) => `${p}.0/24`).join(',')}` : ''}`
 );
 
 await ensureAtomReachable('startup');
@@ -510,7 +517,49 @@ function discoverCandidateUrls() {
     }
   }
 
+  // Routed subnets the PC can reach but isn't locally attached to (e.g. a travel
+  // router's LAN over a Tailscale subnet route). These don't appear in
+  // networkInterfaces(), so add them explicitly.
+  for (const prefix of discoverySubnets) {
+    for (let host = 1; host <= 254; host += 1) {
+      urls.add(`http://${prefix}.${host}/`);
+    }
+  }
+
   return [...urls];
+}
+
+// Parse ATOM_HEADROOM_DISCOVERY_SUBNETS into a list of "a.b.c" /24 prefixes.
+// Accepts "a.b.c.0/24" or a bare "a.b.c" prefix, comma/space separated. Only
+// /24 is supported — a single /24 sweep is 254 probes, and wider masks are
+// impractical to brute-force.
+function parseDiscoverySubnets(value) {
+  const out = [];
+  if (!value) {
+    return out;
+  }
+  for (const raw of String(value).split(/[,\s]+/)) {
+    const entry = raw.trim();
+    if (!entry) {
+      continue;
+    }
+    const match = entry.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\.\d{1,3})?(?:\/(\d{1,2}))?$/);
+    if (!match) {
+      console.error(`[atoms3r-bridge] ignoring invalid ATOM_HEADROOM_DISCOVERY_SUBNETS entry: ${entry}`);
+      continue;
+    }
+    const octets = [match[1], match[2], match[3]].map((part) => Number.parseInt(part, 10));
+    if (octets.some((part) => part < 0 || part > 255)) {
+      console.error(`[atoms3r-bridge] ignoring out-of-range discovery subnet: ${entry}`);
+      continue;
+    }
+    if (match[4] !== undefined && Number.parseInt(match[4], 10) !== 24) {
+      console.error(`[atoms3r-bridge] only /24 discovery subnets are supported; ignoring: ${entry}`);
+      continue;
+    }
+    out.push(`${octets[0]}.${octets[1]}.${octets[2]}`);
+  }
+  return out;
 }
 
 function refreshAtomUrls() {

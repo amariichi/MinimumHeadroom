@@ -140,6 +140,84 @@ tailscale debug prefs | grep -A2 AdvertiseRoutes
 
 ---
 
+## ステップ4b: デバイス → PC を許可する (デバイスが PC に接続する場合)
+
+ステップ4は **PC → デバイス** (PC がデバイスに POST する向き) でした。アプリによっては
+**デバイス → PC** の接続も必要です。例えば minimum-headroom では、対象デバイスが PC の
+face-app WebSocket (既定 `:8765`) に **クライアントとして接続** してマイク音声 (VAD/PTT)
+を PC へ送ります。この向きには別の grant が要ります。
+
+```jsonc
+{
+    "hosts": {
+        // PC の Tailscale IP (100.x の自ノードIP) に名前を付ける
+        "apps-host": "<PC の Tailscale IP>"
+    },
+
+    "grants": [
+        // 既存のルール...
+
+        // (任意) 自分の tailnet "ノード" (スマホ/PC 等) から PC の face サービスへ。
+        //  AtomS3R はノードではないのでこの grant は使わない (モバイル UI やテスト用)。
+        //  既にこの grant があるなら ip 配列に "tcp:8765" を足すだけでよい。
+        {
+            "src": ["group:me"],
+            "dst": ["host:apps-host"],
+            "ip":  ["tcp:8765"]            // ← face-app のポート。他に使うポートがあれば併記
+        },
+
+        // ★必須★ トラベルルーター配下のデバイス (AtomS3R) から PC の face サービスへ。
+        //  デバイスが繋がるにはこの subnet 指定の grant が要る (下のハマりポイント参照)。
+        {
+            "src": ["192.168.8.0/24"],    // ← トラベルルーターの LAN CIDR に置き換える
+            "dst": ["host:apps-host"],
+            "ip":  ["tcp:8765"]
+        }
+    ]
+}
+```
+
+> **ポート補足**: `ip` に並ぶのは「PC 側で実際に使うサービスのポート」です。AtomS3R の
+> face WS に必要なのは face-app のポート (既定 `8765`) **だけ**。既存の grant に他のポート
+> (例: モバイル UI を Tailscale Serve の HTTPS で見るための `8443` など、別用途のポート) が
+> あれば**消さずに残し**、`8765` を加えるだけにします。**AtomS3R に効くのは下の
+> `192.168.8.0/24` の grant** で、`group:me` の grant は (AtomS3R の WS には) 無くても繋がり
+> ます (こちらは tailnet ノードからのモバイル UI / テスト用)。
+
+### 最大のハマりポイント (重要): src は「ノード」ではなく「LAN サブネット」
+
+Tailscale 非対応デバイスが PC に接続するとき、**ルーターはデバイスの元の送信元 IP
+(LAN の `192.168.8.x`) をそのまま中継** します (SNAT してルーター自身の Tailnet IP に
+化けさせ *ない*)。そのため:
+
+- `group:me` (= 自分の tailnet *ノード*) を src にした grant **だけでは届きません**。
+  PC から見た送信元はノードの `100.x` ではなく `192.168.8.x` だからです。
+- **`src` にトラベルルーターの LAN CIDR (`192.168.8.0/24`) を指定した grant が必須** です。
+  Tailscale はサブネット CIDR を grant の src に受け付けます (advertise + approve 済みが前提)。
+
+### 症状と確認
+
+- **症状**: デバイスは WiFi に繋がっているのに PC への TCP/WebSocket 接続がタイムアウトする。
+  デバイス側 `/health` は `ws_connected: false`。**ufw で `tailscale0` のポートを許可していても
+  効かない** (Tailscale の ACL が OS firewall より *手前* で評価され、grant が無いと先に落とす)。
+- **PC 側で許可状況を確認** — `packetFilter` にそのルールが出るか:
+  ```bash
+  tailscale debug netmap   # src=192.168.8.0/24, dst=自ノード, port=8765 のルールがあるか
+  ```
+- **接続を確認**:
+  ```bash
+  ss -tnp | grep :8765     # 192.168.8.x からの ESTAB が出れば成功
+  ```
+
+### なぜこの非対称が起きるのか
+
+サブネットルーターの「LAN を advertise」は **tailnet → LAN (inbound)** を開けるだけです
+(= PC → デバイスが通る理由)。**LAN → tailnet (outbound)** にあたるデバイス発の接続は、
+ACL で LAN サブネットを src として明示しない限り通りません。「PC からは届くのにデバイス
+からは届かない」ときは、まずこの逆方向 grant を疑ってください。
+
+---
+
 ## ステップ5: PC 側で accept-routes を有効化する
 
 PC の Tailscale クライアントは、デフォルトでは他ノードが advertise したサブネット route を **受け入れません**。明示的に有効化が必要です。
@@ -226,6 +304,8 @@ ip route get <対象デバイスIP>
    - もし PC が両方のネットワークに繋がっている (例: 自宅 LAN + トラベルルーター WiFi) なら、より具体的なルートが優先される。
 8. **対象デバイスが応答するか?**
    - 同じ LAN にいる別端末から `curl http://<対象デバイスIP>/` 等で疎通確認。デバイス自体の問題切り分け。
+9. **デバイス → PC の接続が要る構成か? (例: 音声WS)**
+   - その向きは別 grant が必要 (ステップ4b)。ACL に **LAN サブネットを src にした grant** があるか確認する。`group:me` (ノード) だけでは届かない。PC 側 `tailscale debug netmap` の `packetFilter` に該当ポートのルールが出ているかも見る。
 
 ---
 
@@ -250,6 +330,16 @@ export ATOM_HEADROOM_URL="http://192.168.8.100"
 ```
 
 PC が自宅 LAN にいる時は Tailscale 経由、PC をトラベルルーターの WiFi に直接繋いだ時は LAN 直結、と **カーネルが自動で経路選択** してくれます。一つの URL 設定で両ケースカバーできるので、アプリケーション側で接続経路を分岐する必要はありません。
+
+デバイスの IP が自宅 ⇄ トラベルで切り替わる場合、固定値の直書きだと追従できません。
+minimum-headroom の bridge は `device_id` で対象を **自動発見** するので、トラベルルーターの
+LAN 帯を探索対象に足しておけば手で書き換えずに済みます (直結インターフェースの帯は自動で
+探索しますが、Tailscale 経由で *routed* な帯は明示が必要です):
+
+```bash
+# 直結インターフェース以外に探索したいサブネット (カンマ区切り)
+export ATOM_HEADROOM_DISCOVERY_SUBNETS="192.168.8.0/24"
+```
 
 ---
 
