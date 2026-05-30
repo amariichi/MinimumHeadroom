@@ -93,6 +93,7 @@ void HeadroomSerialProvision::handleConfig(const String& json) {
   mergeString(doc, "wifi_pw3", next.wifiPassword3);
   mergeString(doc, "http_base", next.faceHttpBase);
   mergeString(doc, "ws_url", next.faceWsUrl);
+  mergeString(doc, "mdns_host", next.mdnsHost);
   mergeString(doc, "auth", next.authToken);
   mergeString(doc, "device_id", next.deviceId);
   mergeString(doc, "display_id", next.displayAgentId);
@@ -142,6 +143,7 @@ void HeadroomSerialProvision::handleQuery() {
   doc["wifi_pw3_len"] = static_cast<int>(d.wifiPassword3.length());
   doc["http_base"] = d.faceHttpBase;
   doc["ws_url"] = d.faceWsUrl;
+  doc["mdns_host"] = d.mdnsHost;
   doc["auth_len"] = static_cast<int>(d.authToken.length());
   doc["device_id"] = d.deviceId;
   doc["display_id"] = d.displayAgentId;

@@ -75,6 +75,7 @@ void HeadroomIngressServer::begin(const HeadroomSettingsData& settings, Headroom
   faceState_ = &faceState;
   faceHttpBase_ = settings.faceHttpBase;
   faceWsUrl_ = settings.faceWsUrl;
+  mdnsHost_ = settings.mdnsHost;
   authToken_ = settings.authToken;
   deviceId_ = settings.deviceId;
   asrLanguage_ = settings.asrLanguage;
@@ -134,6 +135,8 @@ void HeadroomIngressServer::handleHealth() {
   body += jsonEscape(faceHttpBase_);
   body += F("\",\"face_ws_url\":\"");
   body += jsonEscape(faceWsUrl_);
+  body += F("\",\"mdns_host\":\"");
+  body += jsonEscape(mdnsHost_);
   body += F("\",\"auth_configured\":");
   body += authToken_.length() > 0 ? F("true") : F("false");
   body += F(",\"asr_language\":\"");

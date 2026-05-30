@@ -177,6 +177,9 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += F("<label>Face WebSocket URL</label><input name='ws_url' value='");
   html += htmlEscape(data.faceWsUrl);
   html += F("'>");
+  html += F("<label>PC mDNS host (optional, e.g. my-pc.local — auto-tracks the PC's LAN IP)</label><input name='mdns_host' value='");
+  html += htmlEscape(data.mdnsHost);
+  html += F("' autocomplete='off'>");
   html += F("<label>Auth token</label><input name='auth' type='password' value='");
   html += htmlEscape(data.authToken);
   html += F("'>");
@@ -266,6 +269,7 @@ HeadroomSettingsData HeadroomSetupPortal::settingsFromRequest() {
   next.wifiPassword3 = server_.arg("wifi_pw3");
   next.faceHttpBase = server_.arg("http_base");
   next.faceWsUrl = server_.arg("ws_url");
+  next.mdnsHost = server_.arg("mdns_host");
   next.authToken = server_.arg("auth");
   next.deviceId = server_.arg("device_id");
   next.displayAgentId = server_.arg("display_id");

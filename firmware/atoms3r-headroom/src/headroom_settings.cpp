@@ -80,6 +80,7 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   prefs.putString("wifi_pw3", normalized.wifiPassword3);
   prefs.putString("http_base", normalized.faceHttpBase);
   prefs.putString("ws_url", normalized.faceWsUrl);
+  prefs.putString("mdns_host", normalized.mdnsHost);
   prefs.putString("auth", normalized.authToken);
   prefs.putString("device_id", normalized.deviceId);
   prefs.putString("display_id", normalized.displayAgentId);
@@ -220,6 +221,7 @@ void HeadroomSettings::loadCompileDefaults() {
   data_.wifiPassword3 = HEADROOM_WIFI_PASSWORD3;
   data_.faceHttpBase = HEADROOM_FACE_HTTP_BASE;
   data_.faceWsUrl = HEADROOM_FACE_WS_URL;
+  data_.mdnsHost = HEADROOM_MDNS_HOST;
   data_.authToken = HEADROOM_FACE_AUTH_TOKEN;
   data_.deviceId = HEADROOM_DEVICE_ID;
   data_.displayAgentId = HEADROOM_DISPLAY_AGENT_ID;
@@ -264,6 +266,7 @@ void HeadroomSettings::loadNvsOverrides() {
       compileWsUrl.length() > 0) {
     data_.faceWsUrl = compileWsUrl;
   }
+  data_.mdnsHost = readString(prefs, "mdns_host", data_.mdnsHost);
   data_.authToken = readString(prefs, "auth", data_.authToken);
   if (data_.authToken.length() == 0 && compileAuthToken.length() > 0) {
     data_.authToken = compileAuthToken;

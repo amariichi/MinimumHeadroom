@@ -10,6 +10,13 @@
 #define HEADROOM_ASR_LANGUAGE "ja"
 #endif
 
+// mDNS hostname of the PC running face-app. Empty disables mDNS resolution and
+// keeps the static HEADROOM_FACE_* URLs. Guarded so a pre-existing
+// headroom_config.local.h that predates mDNS support still compiles.
+#ifndef HEADROOM_MDNS_HOST
+#define HEADROOM_MDNS_HOST ""
+#endif
+
 #ifndef HEADROOM_CONTINUOUS_VAD_ENABLED
 #define HEADROOM_CONTINUOUS_VAD_ENABLED 0
 #endif

@@ -16,6 +16,11 @@ struct HeadroomSettingsData {
   String wifiPassword3;
   String faceHttpBase;
   String faceWsUrl;
+  // Optional mDNS hostname of the PC running face-app (e.g. "my-pc.local").
+  // When set, main resolves it at boot and rewrites the host in faceWsUrl and
+  // faceHttpBase to the PC's current LAN IP. Empty = mDNS disabled. Persisted to
+  // NVS; never overwritten by the resolved value (the resolve is per-boot).
+  String mdnsHost;
   String authToken;
   String deviceId;
   String displayAgentId;

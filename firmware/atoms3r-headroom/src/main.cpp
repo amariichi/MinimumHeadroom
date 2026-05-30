@@ -1,3 +1,4 @@
+#include <ESPmDNS.h>
 #include <M5Unified.h>
 #include <WiFi.h>
 
@@ -223,6 +224,60 @@ bool connectWifi(const HeadroomSettingsData& data, uint32_t timeoutMs) {
   return false;
 }
 
+// Swap only the host portion of a "scheme://host[:port][/path]" URL, leaving the
+// scheme, port, and path intact. Used to retarget faceWsUrl/faceHttpBase at the
+// PC's freshly resolved mDNS IP without disturbing the configured port/path.
+String replaceUrlHost(const String& url, const String& newHost) {
+  int schemeEnd = url.indexOf("://");
+  if (schemeEnd < 0) {
+    return url;
+  }
+  int authStart = schemeEnd + 3;
+  int pathStart = url.indexOf('/', authStart);
+  String authority = pathStart >= 0 ? url.substring(authStart, pathStart) : url.substring(authStart);
+  String rest = pathStart >= 0 ? url.substring(pathStart) : String();
+  int portStart = authority.indexOf(':');
+  String portPart = portStart >= 0 ? authority.substring(portStart) : String();  // keeps leading ':'
+  return url.substring(0, authStart) + newHost + portPart + rest;
+}
+
+// If an mDNS host is provisioned, resolve it once at boot and rewrite the host
+// in both server URLs to the PC's current LAN IP. On any failure the static
+// faceWsUrl/faceHttpBase are left untouched (fallback). mDNS does not cross
+// subnets, so off-LAN the resolve fails and the static URLs (ideally a stable
+// Tailscale IP) carry the connection. Mutates the caller's runtime copy only;
+// the provisioned mdns_host in NVS is never overwritten.
+void resolveMdnsHost(HeadroomSettingsData& data) {
+  if (data.mdnsHost.length() == 0) {
+    return;
+  }
+  String host = data.mdnsHost;
+  host.trim();
+  if (host.endsWith(".local")) {
+    host = host.substring(0, host.length() - 6);  // queryHost() appends .local itself
+  }
+  if (host.length() == 0) {
+    return;
+  }
+  if (!MDNS.begin(data.deviceId.c_str())) {
+    Serial.println("mdns: MDNS.begin failed; keeping static ws_url/http_base");
+    return;
+  }
+  IPAddress ip = MDNS.queryHost(host, 2000);
+  if (static_cast<uint32_t>(ip) == 0) {
+    Serial.printf("mdns: resolve failed for %s.local; keeping static ws_url/http_base\n", host.c_str());
+    return;
+  }
+  String ipStr = ip.toString();
+  Serial.printf("mdns: %s.local -> %s\n", host.c_str(), ipStr.c_str());
+  if (data.faceWsUrl.length() > 0) {
+    data.faceWsUrl = replaceUrlHost(data.faceWsUrl, ipStr);
+  }
+  if (data.faceHttpBase.length() > 0) {
+    data.faceHttpBase = replaceUrlHost(data.faceHttpBase, ipStr);
+  }
+}
+
 bool shouldForceSetupPortal(uint32_t holdMs) {
   uint32_t started = millis();
   bool sawPressed = false;
@@ -307,14 +362,22 @@ void setup() {
   if (!wifiConnected) {
     startSetupPortal();
   } else {
+    // Mutable per-boot copy so an mDNS-resolved PC IP can be folded into the
+    // server URLs before any subsystem captures them. The persisted settings
+    // (and the static URL fallback) stay untouched.
+    HeadroomSettingsData runtimeData = data;
+    resolveMdnsHost(runtimeData);
+    // audio.begin() ran before Wi-Fi (above), so push the possibly-resolved
+    // HTTP base into it now that mDNS has had its say.
+    audio.setHttpBase(runtimeData.faceHttpBase);
     faceState.expression = HeadroomExpression::Thinking;
     faceState.connected = true;
-    transport.begin(data, faceState, audio);
-    ingressServer.begin(data, transport, audio, faceState);
+    transport.begin(runtimeData, faceState, audio);
+    ingressServer.begin(runtimeData, transport, audio, faceState);
     ingressServer.setBeforeAudioPlaybackCallback(&suspendContinuousVadForPlayback, nullptr);
-    ptt.begin(data, audio, transport, faceState);
+    ptt.begin(runtimeData, audio, transport, faceState);
     ptt.setBeforeRecordingCallback(&suspendContinuousVadForPtt, nullptr);
-    continuousVad.begin(data, audio, transport, faceState);
+    continuousVad.begin(runtimeData, audio, transport, faceState);
   }
 
   if (!wifiConnected) {

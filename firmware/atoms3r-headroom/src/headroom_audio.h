@@ -17,6 +17,9 @@ enum class HeadroomAudioResult {
 class HeadroomAudio {
 public:
   void begin(const HeadroomSettingsData& settings);
+  // Retarget the base used to resolve relative TTS audio refs. begin() runs
+  // before Wi-Fi connects, so the mDNS-resolved PC IP is applied afterward.
+  void setHttpBase(const String& base) { httpBase_ = base; }
   void loop();
   void stop();
   // Short confirmation tone (the PTT "ピッ" arming cue). MUST be called only

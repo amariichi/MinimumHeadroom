@@ -24,6 +24,7 @@ private:
   HeadroomFaceState* faceState_ = nullptr;
   String faceHttpBase_;
   String faceWsUrl_;
+  String mdnsHost_;
   String authToken_;
   String deviceId_;
   String asrLanguage_;

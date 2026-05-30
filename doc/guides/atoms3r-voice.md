@@ -43,6 +43,7 @@ the serial line so you never type them into the Wi-Fi portal by hand:
 node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
   --wifi "HomeSSID:pass" --wifi "CafeSSID:pass" \
   --http-base http://<pc-ip>:8765 --ws-url ws://<pc-ip>:8765/ws \
+  --mdns-host <pc-hostname>.local \
   --device-id atom-headroom-1 --asr-lang ja \
   --vad-on --vad-rms 0.005 --vad-tail 8 --vad-encoding ima_adpcm \
   --reboot
@@ -50,7 +51,12 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
 
 VAD-related flags: `--vad-on` / `--vad-off`, `--vad-rms <0..1>`,
 `--vad-tail <0..240>`, `--vad-encoding pcm16|ima_adpcm`, `--asr-lang ja|en`.
-Read current state by sending `RMHCFG?` over the serial port (115200, raw).
+`--mdns-host <pc-hostname>.local` makes the device resolve the PC's current IP at
+boot and rewrite the host in `--ws-url`/`--http-base`, so a DHCP change needs no
+re-provisioning; it falls back to the static URLs when mDNS can't resolve (e.g.
+off-LAN — keep those pointed at a stable address such as a Tailscale IP).
+`--mdns-host ""` disables it. Read current state by sending `RMHCFG?` over the
+serial port (115200, raw).
 
 ### How the VAD pipeline works
 
@@ -149,12 +155,18 @@ model.
   `scripts/restart-operator-stack-in-place.sh`; the device reconnects clean.
 - **VAD silently off** (`vad_on=false` in `RMHCFG?`) — a stray screen single-tap
   disabled it. Re-provision `--vad-on --reboot`. This recurs after flashes too.
-- **PC IP changed** (DHCP) — the device's `ws_url` points at the old IP. The
-  Atom→PC audio WS goes dark while TTS (a separate HTTP POST) may still play, so
-  only one direction breaks. Check from the PC with
+- **PC IP changed** (DHCP) — mostly automatic now. The device resolves the PC's
+  current IP at boot via **mDNS** (provision `--mdns-host <pc-hostname>.local`),
+  rewriting `ws_url` + `http_base` on the home LAN; and the PC-side bridge
+  **auto-discovers the device** by `device_id` (`ATOM_HEADROOM_DISCOVERY_SUBNETS`
+  adds routed subnets, e.g. a travel router's LAN, so it self-heals as the device
+  roams). mDNS does not cross subnets, so keep the static `ws_url`/`http_base`
+  fallback pointed at a stable address (e.g. a Tailscale IP) for off-LAN use. If
+  the audio WS still goes dark, check from the PC with
   `ss -tn state established | grep :8765 | grep -v 127.0.0.1` (no peer = audio WS
-  down). Re-provision `--ws-url`/`--http-base`, and update `ATOM_HEADROOM_URL`
-  for TTS. (mDNS auto-discovery is planned to remove this manual step.)
+  down) and re-provision `--ws-url`/`--http-base` as a manual fallback. Remote
+  (Tailscale) use also needs an ACL grant for the device→PC WS — see the
+  [Tailscale travel-router guide](tailscale-travel-router-setup.md).
 - **TTS plays as white noise / radio static** when your speech and TTS collide —
   an ES8311 ADC→DAC settle race; mitigated by a 30 ms DAC settle after the
   mic→speaker switch. Intermittent.
@@ -195,14 +207,19 @@ NVS 設定（Wi-Fi・URL・VAD 設定）は再書き込みでも保持されま�
 node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
   --wifi "HomeSSID:pass" --wifi "CafeSSID:pass" \
   --http-base http://<pc-ip>:8765 --ws-url ws://<pc-ip>:8765/ws \
+  --mdns-host <pc-hostname>.local \
   --device-id atom-headroom-1 --asr-lang ja \
   --vad-on --vad-rms 0.005 --vad-tail 8 --vad-encoding ima_adpcm \
   --reboot
 ```
 
 VAD 系フラグ: `--vad-on` / `--vad-off`、`--vad-rms <0..1>`、`--vad-tail <0..240>`、
-`--vad-encoding pcm16|ima_adpcm`、`--asr-lang ja|en`。現在値はシリアルに
-`RMHCFG?`（115200, raw）を送れば取得できます。
+`--vad-encoding pcm16|ima_adpcm`、`--asr-lang ja|en`。`--mdns-host <PCのホスト名>.local`
+を渡すと、デバイスが起動時に PC の現 IP を解決して `--ws-url`/`--http-base` のホストを
+書き換えるので、DHCP 変動でも再プロビジョン不要になります。mDNS が解決できない場合
+（屋外など）は静的 URL にフォールバックするので、そちらは安定アドレス（例: Tailscale IP）
+にしておきます。`--mdns-host ""` で無効化。現在値はシリアルに `RMHCFG?`（115200, raw）を
+送れば取得できます。
 
 ### VAD パイプラインの仕組み
 
@@ -295,11 +312,17 @@ RMS の方がキビキビします。
   はクリーンに再接続します。
 - **VAD が勝手にオフ**（`RMHCFG?` で `vad_on=false`）— 画面の単タップで無効化された
   状態。`--vad-on --reboot` で再プロビジョン。書き込み後にも起きがちです。
-- **PC の IP が変わった**（DHCP）— デバイスの `ws_url` が旧 IP を指しています。Atom→PC
-  の音声 WS は切れる一方、TTS（別経路の HTTP POST）は鳴ることがあり、片方向だけ壊れます。
-  PC 側で `ss -tn state established | grep :8765 | grep -v 127.0.0.1`（peer 無し＝音声 WS
-  断）。`--ws-url`/`--http-base` を再プロビジョンし、TTS 用に `ATOM_HEADROOM_URL` も更新。
-  （この手作業をなくす mDNS 自動検出を予定）。
+- **PC の IP が変わった**（DHCP）— 今はほぼ自動です。デバイスは起動時に **mDNS** で PC の
+  現 IP を解決して `ws_url`＋`http_base` を書き換え（`--mdns-host <PCのホスト名>.local` で
+  プロビジョン、自宅 LAN 用）、PC 側 bridge は `device_id` で**デバイスを自動発見**
+  （`ATOM_HEADROOM_DISCOVERY_SUBNETS` で routed なサブネット＝トラベルルーター LAN 等を
+  探索対象に追加、端末が移動しても自己修復）。mDNS はサブネットを越えないので、屋外用に
+  静的 `ws_url`/`http_base` のフォールバックは安定アドレス（例: Tailscale IP）にしておき
+  ます。それでも音声 WS が切れるときは PC 側で
+  `ss -tn state established | grep :8765 | grep -v 127.0.0.1`（peer 無し＝断）を確認し、
+  手動フォールバックとして `--ws-url`/`--http-base` を再プロビジョン。リモート（Tailscale）
+  では Atom→PC の WS に ACL 許可も必要 —
+  [Tailscale トラベルルーター手順](tailscale-travel-router-setup.md) を参照。
 - **TTS がホワイトノイズ／無線機のような音**になる（発話と TTS がかち合った時）— ES8311
   の ADC→DAC 切替の settle レース。マイク→スピーカー切替後に 30 ms の DAC settle を入れて
   緩和済み。間欠的。

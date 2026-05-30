@@ -11,6 +11,15 @@
 #define HEADROOM_WIFI_PASSWORD3 ""
 #define HEADROOM_FACE_HTTP_BASE "http://192.168.1.10:8765"
 #define HEADROOM_FACE_WS_URL "ws://192.168.1.10:8765/ws"
+// Optional mDNS hostname of the PC running face-app (e.g. "my-pc.local"). When
+// non-empty, the device resolves it at boot and rewrites the host in BOTH the
+// WebSocket and HTTP base URLs above to the PC's current LAN IP, so a DHCP
+// address change no longer needs re-provisioning. Empty disables mDNS (the
+// static URLs are used verbatim). mDNS does not cross subnets — keep the static
+// URLs pointed at a stable off-LAN address (e.g. a Tailscale IP) so the device
+// still reaches the PC when mDNS can't resolve (the resolve failure falls back
+// to the static URLs).
+#define HEADROOM_MDNS_HOST ""
 #define HEADROOM_FACE_AUTH_TOKEN ""
 #define HEADROOM_DEVICE_ID "atom-headroom-1"
 #define HEADROOM_DISPLAY_AGENT_ID "__operator__"
