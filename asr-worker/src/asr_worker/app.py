@@ -118,7 +118,17 @@ def create_app() -> FastAPI:
     def preload_on_startup() -> None:
         if not settings.preload_models:
             return
-        for model_name in configured_models:
+        # Under a single-model cache only one model stays resident, so
+        # preloading every configured model would load each then immediately
+        # evict all but the last — wasted startup work. Preload just the
+        # default (Japanese) model, which is the one the Atom uses and the
+        # one that ends up resident anyway. This also keeps VRAM free for a
+        # co-resident local LLM. With single_model_cache disabled, preload
+        # everything so each language is instant on first request.
+        models_to_preload = (
+            [settings.ja_model] if settings.single_model_cache else configured_models
+        )
+        for model_name in models_to_preload:
             registry.get(model_name)
 
     @app.get("/health")

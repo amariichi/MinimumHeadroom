@@ -354,6 +354,12 @@ async function handleInternalSay(payload, options = {}) {
 const atomVadBackendKind = (process.env.MH_ATOM_VAD_BACKEND ?? 'rms').trim().toLowerCase();
 const sileroBaseUrl = (process.env.MH_SILERO_VAD_BASE_URL ?? 'http://127.0.0.1:8092').trim();
 const sileroThresholdEnv = Number.parseFloat(process.env.MH_SILERO_VAD_THRESHOLD ?? '');
+// Atom VAD utterance segmentation tuning. endSilenceMs is how long a pause may
+// last before the bridge finalizes an utterance; too low (default was 400 ms)
+// cuts natural speech at every breath. NaN here falls through to the bridge's
+// own defaults, so an unset env var changes nothing.
+const atomEndSilenceMs = Number.parseInt(process.env.MH_ATOM_VAD_END_SILENCE_MS ?? '', 10);
+const atomMinSpeechMs = Number.parseInt(process.env.MH_ATOM_VAD_MIN_SPEECH_MS ?? '', 10);
 const atomVadBackend = atomVadBackendKind === 'silero'
   ? createSileroVadBackend({
       baseUrl: sileroBaseUrl,
@@ -366,6 +372,8 @@ const atomAudioVadBridge = createAtomAudioVadBridge({
   asrBaseUrl: operatorAsrBaseUrl,
   asrEndpointUrl: operatorAsrEndpointUrl,
   vadBackend: atomVadBackend,
+  endSilenceMs: atomEndSilenceMs,
+  minSpeechMs: atomMinSpeechMs,
   onAcceptedSpeech: ({ language }) => emitAcceptedSpeechAck({ language, source: 'atom_vad' }),
   onOperatorResponse: (payload) => {
     server.broadcast(payload);
