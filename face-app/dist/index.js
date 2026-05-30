@@ -366,6 +366,10 @@ const atomRmsThreshold = Number.parseFloat(process.env.MH_ATOM_VAD_THRESHOLD_RMS
 // own defaults, so an unset env var changes nothing.
 const atomEndSilenceMs = Number.parseInt(process.env.MH_ATOM_VAD_END_SILENCE_MS ?? '', 10);
 const atomMinSpeechMs = Number.parseInt(process.env.MH_ATOM_VAD_MIN_SPEECH_MS ?? '', 10);
+// Hard cap on a single CONTINUOUS utterance (one with no >= endSilence pause).
+// The bridge force-finalizes at this length, so the 12 s default cut off long
+// monologues. Raise via env; NaN falls through to the bridge default.
+const atomMaxUtteranceMs = Number.parseInt(process.env.MH_ATOM_VAD_MAX_UTTERANCE_MS ?? '', 10);
 const atomVadBackend = atomVadBackendKind === 'silero'
   ? createSileroVadBackend({
       baseUrl: sileroBaseUrl,
@@ -380,6 +384,7 @@ const atomAudioVadBridge = createAtomAudioVadBridge({
   vadBackend: atomVadBackend,
   endSilenceMs: atomEndSilenceMs,
   minSpeechMs: atomMinSpeechMs,
+  maxUtteranceMs: atomMaxUtteranceMs,
   onAcceptedSpeech: ({ language }) => emitAcceptedSpeechAck({ language, source: 'atom_vad' }),
   onOperatorResponse: (payload) => {
     server.broadcast(payload);
