@@ -1,4 +1,4 @@
-● Read(/home/amari1/.gemini/antigravity-cli/mcp/minimum_headroom/agent_report.json)
+● Read(/home/user/.gemini/antigravity-cli/mcp/minimum_headroom/agent_report.json)
 ● minimum_headroom/agent_report(Agent Report Progress) (ctrl+o to expand)
 
 MCP

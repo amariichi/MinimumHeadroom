@@ -34,6 +34,50 @@ NVS settings (Wi-Fi, URLs, VAD config) survive a reflash. After any flash or
 reboot, re-confirm `vad_on` (see troubleshooting) since a stray screen tap can
 disable it.
 
+### Building a release image (maintainers)
+
+The normal build bakes `headroom_config.local.h` (your Wi-Fi / auth token / PC
+URLs) into the binary as string literals — fine for your own device, **not safe
+to publish**. To produce a distributable image, build with the placeholder
+example config instead:
+
+```bash
+scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
+```
+
+It forces the example config, **fails the build if any real value from your
+`local.h` leaked** into the binary, and stages esp-web-tools artifacts
+(`bootloader.bin` / `partitions.bin` / `boot_app0.bin` / `firmware.bin`),
+`manifest.json`, and a ready-to-host `index.html`. Your real Wi-Fi/token live in
+the device's NVS, not in these app artifacts, so the published image carries no
+secrets; users provision their own after flashing.
+
+### Browser install (end users, no toolchain)
+
+Host the `dist/atoms3r-firmware/` folder over **HTTPS** (GitHub Pages, Netlify, …)
+and share `index.html`. To install, the user:
+
+1. opens the page in **Chrome or Edge** (desktop — Web Serial is Chromium-only),
+2. connects the AtomS3R over USB-C,
+3. clicks **Install** and picks the device's serial port from the browser dialog
+   (the port is chosen manually; the chip type is auto-detected).
+
+> **Caveat:** this board requires `--no-stub` for CLI flashing. Whether
+> esp-web-tools (esptool-js) can flash it is **unverified** — test once in Chrome
+> before advertising the browser path; otherwise fall back to the PlatformIO flow
+> above.
+
+### Wi-Fi setup portal (no CLI)
+
+After flashing, configure Wi-Fi and server URLs without any tools:
+
+1. Enter the portal — **hold the screen button while powering on** (~2 s), or it
+   starts automatically when no Wi-Fi is saved.
+2. From a phone/PC, join the device's Wi-Fi access point **`RMH-SETUP-XXXX`**.
+3. A captive page opens (or browse to the AP IP, usually `http://192.168.4.1`).
+4. Fill in Wi-Fi SSID/password and the Face HTTP base / WebSocket URL (and optional
+   mDNS host, auth token, VAD settings), **Save**, and restart.
+
 ### Provisioning over USB (RMHCFG)
 
 `scripts/atoms3r-provision.mjs` pushes Wi-Fi / URLs / VAD config into NVS over
@@ -136,10 +180,11 @@ device sends ≈0. Use **ADPCM + Silero** outdoors on a mobile-tethered link.
 entirely and is reliable in any environment, a good fallback when hands-free
 tuning is marginal. Screen-button gestures:
 
-- single tap = VAD off (an escape hatch; persisted)
-- double tap = VAD on/off toggle
-- triple tap = IMU face auto-rotate (90° CW when the screen faces up)
-- long press = PTT (while connected)
+- single tap = VAD off when VAD is on (an escape hatch; persisted). No-op when VAD is already off.
+- double tap = VAD on/off toggle — the only on-device way to ENABLE VAD without re-provisioning
+- triple tap = IMU auto-upright: snaps the face to the current upright edge and persists it. When the screen faces up (flat, with no upright edge to detect) it falls back to +90° clockwise per triple-tap.
+- long press = PTT (while connected). A hold is never counted as a tap, so PTT takes priority and never changes the VAD setting.
+- Taps cluster within ~600 ms of each other. If your triple-tap is too slow the taps register separately and a stray single tap can switch VAD off — tap quickly.
 
 ### ASR model preload
 
@@ -200,6 +245,47 @@ PLATFORMIO_UPLOAD_FLAGS=--no-stub \
 
 NVS 設定（Wi-Fi・URL・VAD 設定）は再書き込みでも保持されます。書き込み／再起動の
 あとは `vad_on` を再確認してください（画面の不意のタップで無効になることがある）。
+
+### リリース用イメージのビルド（メンテナ向け）
+
+通常ビルドは `headroom_config.local.h`（あなたの Wi-Fi・認証トークン・PC の URL）を文字列
+としてバイナリに焼き込みます。自分の端末用なら問題ありませんが、**そのまま公開するのは
+危険**です。配布用は、プレースホルダの example 設定でビルドします：
+
+```bash
+scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
+```
+
+このスクリプトは example 設定を強制し、**`local.h` の実値が1つでもバイナリに漏れていれば
+ビルドを fail で止め**、esp-web-tools 用の成果物（`bootloader.bin`／`partitions.bin`／
+`boot_app0.bin`／`firmware.bin`）・`manifest.json`・すぐ置ける `index.html` を出力します。
+実 Wi-Fi/トークンは端末の NVS にあり、これら app 成果物には含まれないので、公開イメージに
+秘密は入りません（ユーザーは書き込み後に各自 provision）。
+
+### ブラウザ簡易インストール（一般ユーザー・ツール不要）
+
+`dist/atoms3r-firmware/` フォルダを **HTTPS** で公開（GitHub Pages / Netlify 等）し、
+`index.html` を案内します。ユーザーの手順：
+
+1. **Chrome か Edge**（デスクトップ。Web Serial は Chromium のみ）でページを開く
+2. AtomS3R を USB-C で接続
+3. **Install** を押し、ブラウザのダイアログから端末のシリアルポートを選ぶ（ポートは手動
+   選択、チップ種別は自動判定）
+
+> **注意:** このボードは CLI 書き込みで `--no-stub` が必須です。esp-web-tools（esptool-js）
+> で焼けるかは**未検証**——ブラウザ経路を案内する前に一度 Chrome で実機確認を。ダメなら
+> 上記 PlatformIO フローにフォールバックします。
+
+### Wi-Fi セットアップポータル（CLI 不要）
+
+書き込み後、ツールなしで Wi-Fi とサーバ URL を設定できます：
+
+1. ポータルに入る——**画面ボタンを押しながら電源を入れる**（約2秒）。Wi-Fi 未保存なら
+   自動で起動します。
+2. スマホ/PC から端末の Wi-Fi アクセスポイント **`RMH-SETUP-XXXX`** に接続。
+3. キャプティブ画面が開きます（または AP の IP、通常 `http://192.168.4.1` を開く）。
+4. Wi-Fi SSID/パスワードと Face HTTP base / WebSocket URL（任意で mDNS host・認証トークン・
+   VAD 設定）を入力し、**Save** して再起動。
 
 ### USB プロビジョニング（RMHCFG）
 
@@ -294,10 +380,11 @@ RMS の方がキビキビします。
 **画面ボタン長押し**で発話。PTT は VAD 閾値を介さないので、どんな環境でも確実です。
 ハンズフリーの調整が微妙なときの代替に。画面ボタンのジェスチャ:
 
-- 単タップ = VAD オフ（緊急停止・永続化）
-- ダブルタップ = VAD オン/オフ トグル
-- トリプルタップ = IMU で顔の向き自動回転（画面が上のとき 90° 時計回り）
-- 長押し = PTT（接続時）
+- 単タップ = VAD がオンのときオフ（緊急停止・永続化）。オフ時は無操作。
+- ダブルタップ = VAD オン/オフ トグル（再プロビジョンせずデバイス上で VAD をオンにできる唯一の操作）
+- トリプルタップ = IMU 自動正立：その時の上辺に顔を合わせて保存。画面が上向き（水平で正立判定できない）ときは +90° 時計回りのフォールバック。
+- 長押し = PTT（接続時）。長押しはタップに数えられないので PTT が優先され、VAD 設定は変えません。
+- タップは約 600ms 以内で1まとまり。トリプルタップが間延びすると別々のタップ扱いになり、単タップで VAD が誤オフすることがあります（素早くタップ）。
 
 ### ASR モデル先読み
 

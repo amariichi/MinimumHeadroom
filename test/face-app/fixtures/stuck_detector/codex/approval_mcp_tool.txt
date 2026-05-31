@@ -1,5 +1,5 @@
 • Calling
-  └ minimum_headroom.agent_report({"stream_id":"repo:/home/amari1/github/minimum-headroom","mission_id":"codex-
+  └ minimum_headroom.agent_report({"stream_id":"repo:/home/user/github/minimum-headroom","mission_id":"codex-
         fixture-1","owner_agent_id":"__operator__","from_agent_id":"helper-1","kind":"progress","summary":"Mission
         accepted"})
 

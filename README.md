@@ -522,6 +522,11 @@ npm run asr-worker:smoke
 
 - Runtime/local files (models, local MCP config, caches, venv) are excluded via `.gitignore`.
 
+## Acknowledgements
+
+- The AtomS3R firmware (`firmware/atoms3r-headroom/`) was implemented independently for this project; **no code is derived from other firmware**. We thank [**StackChan_Minimal** by A-Uta](https://github.com/A-Uta/StackChan_Minimal) (Apache-2.0) for serving as a helpful reference on AtomS3R voice-assistant design.
+- The firmware builds on [M5Unified](https://github.com/m5stack/M5Unified) (MIT) and the ESP32 Arduino core.
+
 <a id="japanese"></a>
 
 ## 日本語
@@ -1010,3 +1015,8 @@ npm run asr-worker:smoke
 ## 補足
 
 - 実行時ローカルファイル（モデル、ローカルMCP設定、キャッシュ、venv など）は `.gitignore` で除外されています。
+
+## 謝辞
+
+- 本プロジェクトの AtomS3R ファームウェア（`firmware/atoms3r-headroom/`）は独自に実装したもので、**他のファームウェアからコードを流用していません**。AtomS3R 音声アシスタントの設計にあたり、[**StackChan_Minimal**（A-Uta 氏）](https://github.com/A-Uta/StackChan_Minimal)（Apache-2.0）を参考にさせていただきました。感謝します。
+- ファームウェアは [M5Unified](https://github.com/m5stack/M5Unified)（MIT）および ESP32 Arduino core を基盤としています。

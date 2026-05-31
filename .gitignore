@@ -36,3 +36,6 @@ assets/kokoro/voices-v1.0.bin
 
 # Generated closed-loop reports
 test/tts-asr-loop/latest-*.md
+
+# Release firmware build output (scripts/build-release-firmware.sh) — binaries, not source
+dist/

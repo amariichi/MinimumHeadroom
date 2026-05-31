@@ -1,8 +1,8 @@
-● Read(/home/amari1/.gemini/antigravity-cli/mcp/minimum_headroom/agent_report.json)
+● Read(/home/user/.gemini/antigravity-cli/mcp/minimum_headroom/agent_report.json)
 ● minimum_headroom/agent_report(Agent Report Progress)
-● Read(/home/amari1/.gemini/antigravity-cli/mcp/minimum_headroom/face_ping.json)
-● Read(/home/amari1/.gemini/antigravity-cli/mcp/minimum_headroom/face_event.json)
-● Read(/home/amari1/.gemini/antigravity-cli/mcp/minimum_headroom/face_say.json)
+● Read(/home/user/.gemini/antigravity-cli/mcp/minimum_headroom/face_ping.json)
+● Read(/home/user/.gemini/antigravity-cli/mcp/minimum_headroom/face_event.json)
+● Read(/home/user/.gemini/antigravity-cli/mcp/minimum_headroom/face_say.json)
 ● minimum_headroom/face_ping(Face Ping)
 ● minimum_headroom/face_event(Face Event CMD Started) (ctrl+o to expand)
 ⣷ Loading...
