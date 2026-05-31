@@ -1,4 +1,249 @@
-# Tailscale 非対応デバイスを Tailscale 対応トラベルルーター経由で繋ぐ手順
+# Reach a non-Tailscale device through a Tailscale travel router / Tailscale 非対応デバイスをトラベルルーター経由で繋ぐ
+
+<a id="english"></a>
+
+## English
+
+How to reach a small device that can't run a Tailscale client (like the AtomS3R / ESP32) from a Tailscale-equipped PC on a different network, by routing through a Tailscale-capable travel router (e.g. GL.iNet GL-MT3600BE). It uses **Tailscale subnet routing** (the subnet-router feature).
+
+### Topology
+
+```
+[ Home LAN  192.168.1.0/24 ]                    [ Travel-router LAN  192.168.8.0/24 ]
+                                                                  │
+   PC (Tailscale) ───────── Tailscale ────────── Travel router (Tailscale)
+                                                                  │
+                                                        non-Tailscale device
+                                                            (e.g. AtomS3R)
+                                                              192.168.8.100
+```
+
+Goal: from the PC, reach a LAN IP like `http://192.168.8.100/` over Tailscale while the PC stays on the home LAN.
+
+### Prerequisites
+
+- The travel router has a built-in Tailscale client (GL.iNet 4.x firmware: GL-MT3600BE, GL-MT2500, …).
+- You have a Tailscale account and can join both the PC and the router to the same tailnet.
+- The target device is connected (wired/Wi-Fi) to the travel router's LAN.
+- The router and the PC are on different physical LANs (subnet routing is unnecessary if they share a LAN).
+
+### Overview
+
+1. Join the travel router to Tailscale
+2. Enable "LAN remote access" on the router (= advertise the LAN subnet)
+3. Approve the advertised subnet in the Tailscale admin console
+4. Add an ACL grant for "PC → target device"
+5. Enable `--accept-routes` on the PC and refresh its netmap
+6. Pin the device's IP and verify reachability from your app
+
+### Step 1: Join the travel router to Tailscale
+
+1. Open the router admin UI (`http://192.168.8.1/` etc.).
+2. Go to **Applications → Tailscale**.
+3. Turn **Enable** on.
+4. Click **Bind account**, open the shown auth URL, and authorize with your Tailscale account.
+5. After authorizing, the **router's virtual IP** (a `100.x.x.x` tailnet address) should appear.
+6. Confirm the router appears under `admin.tailscale.com → Machines`.
+
+Gotchas:
+
+- **Stale nodes linger** — repeated re-binds/resets can leave old nodes with the same hostname in Machines; delete them, or they confuse later steps.
+- **Key expiry** — nodes expire after 180 days by default. For long-term use, "Disable key expiry" for the node so it doesn't drop while you're away.
+
+### Step 2: Advertise the LAN subnet
+
+1. In the router's Tailscale page, turn **Allow Remote Access to LAN** on, then **Apply**.
+2. Internally this runs `tailscale up --advertise-routes=<LAN subnet>`, advertising the router's LAN subnet (e.g. `192.168.8.0/24`).
+
+Verify (optional), if you can SSH into the router (`ssh root@192.168.8.1` on GL.iNet):
+
+```bash
+tailscale debug prefs | grep -A2 AdvertiseRoutes
+```
+
+If `AdvertiseRoutes` is `["192.168.8.0/24"]` (not `null` / `[]`), it's advertised.
+
+Gotchas:
+
+- **The toggle alone isn't enough** — advertising doesn't make the route usable; it must be **Approved** (Step 3).
+- **It can reset on restart/re-bind** — re-check this toggle after any re-bind.
+- **"WAN remote access" / "Exit node" are different features** — leave them OFF for plain LAN reachability.
+
+### Step 3: Approve the subnet in the admin console
+
+1. In `admin.tailscale.com → Machines`, open the travel router.
+2. Open **Subnets** (or the **…** menu → **Edit route settings**).
+3. The advertised subnet (e.g. `192.168.8.0/24`) appears under **Awaiting Approval** — check it and save; it moves to **Approved**.
+
+Gotchas:
+
+- **Awaiting Approval empty** — the router isn't advertising yet; redo Step 2.
+- **Approved but never reaches the client netmap** — it may be "approved once but not currently advertised"; re-check `AdvertiseRoutes` isn't empty.
+- **Conflict with ACL `autoApprovers`** — a mismatch can stop it appearing at all; for a simple setup, avoid `autoApprovers`.
+
+### Step 4: ACL — allow PC → target device
+
+Open `admin.tailscale.com → Access controls` and add a grant. Example — let `group:me` reach TCP 80 on `192.168.8.100`:
+
+```jsonc
+{
+    "hosts": {
+        "atoms3r": "192.168.8.100"
+    },
+
+    "grants": [
+        // existing rules...
+
+        {
+            "src": ["group:me"],
+            "dst": ["host:atoms3r"],
+            "ip":  ["tcp:80"]
+        }
+    ]
+}
+```
+
+Notes:
+
+- Naming the LAN IP in `hosts` lets you reuse it. You can also use a CIDR: `"dst": ["192.168.8.0/24:*"]`.
+- Put the real protocol/port in `ip` (`tcp:80` HTTP, `tcp:443` HTTPS). `"ip": ["*"]` opens everything (not recommended).
+- Don't delete existing grants. Tailscale distributes the ACL to all clients in real time on save.
+
+Gotchas:
+
+- **No grant → the subnet route may be pruned from the netmap** (ACL-based pruning). If the route doesn't arrive, check this grant first.
+- **Old `acls` vs new `grants` format** — match whatever the file already uses; the visual editor is safer.
+- **Trailing commas** — the file is JSONC, but a syntax error blocks save; watch for the banner.
+
+### Step 4b: Allow device → PC (when the device connects to the PC)
+
+Step 4 was **PC → device**. Some apps also need **device → PC**. In minimum-headroom, the device **connects as a client** to the PC's face-app WebSocket (default `:8765`) to send mic audio (VAD/PTT). That direction needs a separate grant.
+
+```jsonc
+{
+    "hosts": {
+        // name the PC's Tailscale IP (your own 100.x node IP)
+        "apps-host": "<PC's Tailscale IP>"
+    },
+
+    "grants": [
+        // existing rules...
+
+        // (optional) from your tailnet "nodes" (phone/PC) to the PC's face service.
+        //  The AtomS3R is not a node, so it doesn't use this grant (mobile UI / testing).
+        //  If you already have it, just add "tcp:8765" to its ip list.
+        {
+            "src": ["group:me"],
+            "dst": ["host:apps-host"],
+            "ip":  ["tcp:8765"]            // ← face-app's port; keep any other ports you use
+        },
+
+        // *** required *** from the device behind the travel router (AtomS3R) to the PC.
+        {
+            "src": ["192.168.8.0/24"],    // ← replace with your travel router's LAN CIDR
+            "dst": ["host:apps-host"],
+            "ip":  ["tcp:8765"]
+        }
+    ]
+}
+```
+
+> **Port note**: values in `ip` are ports of services that actually run on the PC. The AtomS3R face WS needs **only** the face-app port (default `8765`). If your existing grant has other ports (e.g. `8443` for a mobile UI via Tailscale Serve HTTPS — a different purpose), keep them and just add `8765`. **What matters for the AtomS3R is the `192.168.8.0/24` grant**; the `group:me` grant is not needed for the AtomS3R WS.
+
+#### The key gotcha: `src` is the LAN subnet, not a node
+
+When a non-Tailscale device connects to the PC, **the router relays the device's original source IP** (`192.168.8.x`) — it does **not** SNAT it to the router's tailnet IP. So:
+
+- A grant with `src` = `group:me` (your tailnet *nodes*) **won't match** — the PC sees `192.168.8.x`, not a `100.x` node.
+- **A grant with `src` = the travel router's LAN CIDR (`192.168.8.0/24`) is required.** Tailscale accepts a subnet CIDR as a grant `src` (given the route is advertised + approved).
+
+#### Symptoms & checks
+
+- **Symptom**: the device is on Wi-Fi but its TCP/WebSocket to the PC times out; the device's `/health` shows `ws_connected: false`. **Allowing the port on `tailscale0` in ufw doesn't help** — Tailscale's ACL is evaluated *before* the OS firewall.
+- **Check the grant on the PC** — is the rule in `packetFilter`?
+  ```bash
+  tailscale debug netmap   # rule src=192.168.8.0/24, dst=this node, port=8765?
+  ```
+- **Check the connection**:
+  ```bash
+  ss -tnp | grep :8765     # an ESTAB from 192.168.8.x means success
+  ```
+
+#### Why the asymmetry
+
+The subnet router's "advertise LAN" only opens **tailnet → LAN (inbound)** — that's why PC → device works. A device-initiated **LAN → tailnet (outbound)** connection won't pass unless the ACL names the LAN subnet as `src`. When "the PC reaches the device but the device can't reach the PC", suspect this reverse grant first.
+
+### Step 5: Enable accept-routes on the PC
+
+The PC's Tailscale client does **not** accept other nodes' advertised subnet routes by default:
+
+```bash
+sudo tailscale set --accept-routes
+# or, from the start (pass all your current non-default flags too):
+sudo tailscale up --accept-routes --operator=<username> [other flags]
+```
+
+Verify on the PC — `tailscale debug netmap | grep -A2 "<router hostname>"`, or `ip route get <device IP>` (going out `dev tailscale0` = routing over Tailscale).
+
+**The key gotcha:** `--accept-routes` sometimes doesn't refresh the netmap — the subnet route (`192.168.8.0/24`) often fails to appear even with Steps 1–4 correct. A **full logout/login** refetches it and fixes it in one shot:
+
+```bash
+sudo tailscale logout
+sudo tailscale up --accept-routes --operator=<username> [other flags]
+```
+
+Start from `logout`, **not** `tailscale down && tailscale up` (down/up reconnects with cached state and may not clear the symptom).
+
+### Step 6: Pin the device IP + verify
+
+Set a **static lease (reserved IP)** in the router's DHCP for the device's MAC — otherwise a DHCP change breaks the ACL and bridge config. Verify from the PC:
+
+```bash
+curl -m 5 http://<device IP>/<endpoint>
+ip route get <device IP>          # dev tailscale0 = over Tailscale; dev eth0/wlan0 = same LAN
+```
+
+### Troubleshooting — order to isolate "still not reachable"
+
+1. **Router alive on Tailscale?** — `tailscale ping <router tailnet IP>` returns pong?
+2. **Router advertising the subnet?** — SSH: `tailscale debug prefs | grep -A2 AdvertiseRoutes`.
+3. **Approved in the admin console?** — Machines → router → Subnets.
+4. **ACL grant present?** — see the target IP/subnet grant in the JSON editor.
+5. **Subnet route in the PC netmap?** — `tailscale debug netmap`, check the peer's `AllowedIPs` for `192.168.8.0/24`.
+6. **If not → Step 5's logout/login.**
+7. **PC kernel routing choosing Tailscale?** — `ip route get <device IP>` shows `dev tailscale0`? If the PC is on both networks, the more specific route wins.
+8. **Device responds?** — `curl http://<device IP>/` from another host on the same LAN.
+9. **Need device → PC?** (e.g. an audio WS) — needs a separate grant (Step 4b): the ACL must have a grant with the **LAN subnet as `src`** (`group:me` alone won't reach), and the rule must appear in the PC's `tailscale debug netmap` `packetFilter`.
+
+### Choosing the subnet range (important upfront)
+
+If the home LAN and the travel-router LAN use the **same CIDR**, routing prefers the more specific (directly-attached) route, so the home route beats the Tailscale route and the device is unreachable. Example bad pairing: home `192.168.1.0/24` + travel `192.168.1.0/24`. GL.iNet defaults to `192.168.8.0/24`, so a home LAN of `192.168.1.0/24` won't collide; if your home LAN is also `192.168.8.0/24`, change the travel-router LAN (e.g. `192.168.50.0/24`).
+
+### Bonus: app-side URL config
+
+Once subnet routing works, the app (e.g. minimum-headroom's AtomS3R HTTP bridge) can use the device's **LAN IP as-is**:
+
+```bash
+export ATOM_HEADROOM_URL="http://192.168.8.100"
+```
+
+On the home LAN it routes via Tailscale; plugged directly into the travel-router Wi-Fi it's a direct LAN hop — the kernel picks the route. One URL covers both. If the device IP flips between home ⇄ travel, the bridge **auto-discovers** it by `device_id`; add the travel-router range to its discovery list (directly-attached ranges are swept automatically, but a Tailscale-*routed* range must be listed):
+
+```bash
+export ATOM_HEADROOM_DISCOVERY_SUBNETS="192.168.8.0/24"
+```
+
+### References
+
+- Tailscale: Subnet routers <https://tailscale.com/kb/1019/subnets/>
+- Tailscale: ACL syntax <https://tailscale.com/kb/1018/acls/>
+- GL.iNet docs (Tailscale): <https://docs.gl-inet.com/router/en/4/interface_guide/tailscale/>
+
+---
+
+<a id="japanese"></a>
+
+## 日本語
 
 AtomS3R (ESP32) のように Tailscale クライアントが入らない小型デバイスを、Tailscale 対応のトラベルルーター (GL.iNet GL-MT3600BE 等) を経由して、別ネットワークにいる Tailscale 入りの PC から到達できるようにする手順をまとめます。
 
