@@ -21,7 +21,7 @@
 - 将来: macOSも想定（ただしMVPはUbuntu優先）
 - Face App: Web技術（Electron想定、Three.js）
 - TTS: Ubuntuは **Kokoro-82M (ONNX) + Misaki G2P** を使用
-  - voice: **af_heart 固定**
+  - voice: 既定は **jf_alpha**（MH_KOKORO_VOICE で起動時に上書き可）
   - 日本語速度: **1.2倍**（speed=1.2）
   - ASCII(\x20-\x7E)は英語扱い、それ以外は日本語扱い
   - Misakiは必須（漢字を許容範囲で読むため）
@@ -275,12 +275,12 @@ Face App内部に「ジェスチャー生成器」を持つ（プリセット固
 
 ---
 
-## 9. TTS要件（Ubuntu固定：Kokoro + Misaki、af_heart、速度）
+## 9. TTS要件（Ubuntu固定：Kokoro + Misaki、jf_alpha既定、音声切替、速度）
 
 ### 9.1 言語分割
 - ASCII (\x20-\x7E) 連続部分 → 英語扱い（`lang='en-us'`）
 - それ以外 → 日本語扱い（`lang='j'`）
-- voice は常に `af_heart`
+- voice は既定で `jf_alpha`。`MH_KOKORO_VOICE=af_heart` などで起動時に上書きできる
 
 ### 9.2 日本語G2P
 - Misaki `ja.JAG2P()` を必須
@@ -336,7 +336,8 @@ Face App内部に「ジェスチャー生成器」を持つ（プリセット固
 ```yaml
 TTS:
   エンジン: kokoro
-  ボイス: af_heart
+  ボイス: jf_alpha
+  起動時上書き: MH_KOKORO_VOICE
   日本語速度倍率: 1.2
   英語速度倍率: 1.0
   半角ASCIIは英語: true

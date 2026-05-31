@@ -17,6 +17,7 @@ Behavior:
 
 Environment:
   TTS_ENGINE: defaults to kokoro
+  MH_KOKORO_VOICE: Kokoro voice override, for example jf_alpha or af_heart
   QWEN3_TTS_VENV: path to the optional Qwen3 virtualenv (default: ./.venv-qwen-tts)
 EOF
 }
