@@ -37,5 +37,6 @@ assets/kokoro/voices-v1.0.bin
 # Generated closed-loop reports
 test/tts-asr-loop/latest-*.md
 
-# Release firmware build output (scripts/build-release-firmware.sh) — binaries, not source
-dist/
+# Release firmware build output (scripts/build-release-firmware.sh) — binaries, not source.
+# Leading slash = repo root only, so it does NOT match the tracked mcp-server/dist or face-app/dist.
+/dist/
