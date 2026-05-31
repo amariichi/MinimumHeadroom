@@ -20,6 +20,10 @@ purpose; use this file when setting up or tuning an AtomS3R.
 
 ### Flashing the firmware
 
+> See the [firmware README](../../firmware/atoms3r-headroom/README.md#english) for
+> firmware-project specifics — notably the **WebServer library patch** (auto-applied
+> at build; required so chunked TTS doesn't stall ~5 s per chunk).
+
 ```bash
 # build
 .venv-platformio/bin/pio run -d firmware/atoms3r-headroom
@@ -250,6 +254,10 @@ RMS / Silero バックエンド・各チューニング・トラブルシュー�
 - 書き込み・シリアルプロビジョニングは USB-C 経由（`/dev/ttyACM0`）。
 
 ### ファーム書き込み
+
+> ファーム本体の詳細（特にビルド時に自動適用される **WebServer ライブラリパッチ**＝
+> チャンク TTS がチャンクごとに約5秒停滞しないために必須）は
+> [firmware README](../../firmware/atoms3r-headroom/README.md#japanese) を参照。
 
 ```bash
 # ビルド
