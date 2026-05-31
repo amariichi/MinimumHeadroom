@@ -205,6 +205,14 @@ sequenceDiagram
 <a id="en-quick-start"></a>
 ## Quick Start
 
+> [!IMPORTANT]
+> **English users: launch with `MH_KOKORO_VOICE=af_heart`.** The default Kokoro
+> voice is `jf_alpha`, which is tuned for Japanese; English sounds noticeably
+> better with `af_heart`. Prefix any startup command with it, for example:
+> `MH_KOKORO_VOICE=af_heart ./scripts/run-operator-once.sh --profile default --audio-target browser`.
+> The Kokoro voice is shared by English and Japanese, so pick the one that
+> matches your primary language.
+
 Choose one startup path depending on your goal.
 Before starting, configure your coding agent for MCP (see [Agent Setup](#en-agent-setup)), set up the agent-specific `AGENTS.md`, and reflect `doc/examples/AGENT_RULES.md` in the agent instructions. If you want a ready-to-paste starting point, use `doc/examples/AGENTS.sample.md` as the template for your project-local `AGENTS.md`.
 
@@ -718,6 +726,13 @@ sequenceDiagram
 
 <a id="ja-quick-start"></a>
 ## クイックスタート
+
+> [!IMPORTANT]
+> **英語が主な言語の方は `MH_KOKORO_VOICE=af_heart` を付けて起動してください。** Kokoro の
+> 既定 voice は日本語向けの `jf_alpha` で、英語は `af_heart` の方が明らかに自然に聞こえます。
+> 任意の起動コマンドの前に付けます。例：
+> `MH_KOKORO_VOICE=af_heart ./scripts/run-operator-once.sh --profile default --audio-target browser`
+> Kokoro voice は英語・日本語で共通なので、主に使う言語に合わせて選んでください。
 
 目的に合わせて起動パスを選んでください。
 開始前に、利用するコーディングエージェントで MCP 設定を行い（[エージェント設定](#ja-agent-setup) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。すぐ使えるひな形が必要なら、`doc/examples/AGENTS.sample.md` を project-local `AGENTS.md` のテンプレートとして使ってください。
