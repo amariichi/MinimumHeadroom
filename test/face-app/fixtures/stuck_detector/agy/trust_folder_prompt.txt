@@ -1,6 +1,6 @@
 Accessing workspace:
 
-/home/amari1/github/minimum-headroom/.agent/worktrees/helper-1
+/home/user/github/minimum-headroom/.agent/worktrees/helper-1
 
 Do you trust the contents of this project?
 

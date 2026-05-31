@@ -32,6 +32,15 @@ cd "$ROOT_DIR"
 # the single chokepoint every operator bring-up path passes through, since
 # env exported upstream does not reliably cross the operator tmux allowlist.
 : "${MH_TTS_CHUNK_MAX_CHARS:=64}"
+# Atom VAD backend selection. 'rms' is the default deterministic energy
+# gate; 'silero' routes frames through silero-vad-worker for ML-based
+# noise-vs-speech classification. The stack only starts the silero worker
+# when MH_ATOM_VAD_BACKEND=silero AND MH_STACK_START_SILERO_VAD!=0.
+: "${MH_ATOM_VAD_BACKEND:=rms}"
+: "${MH_STACK_START_SILERO_VAD:=1}"
+: "${SILERO_VAD_HOST:=127.0.0.1}"
+: "${SILERO_VAD_PORT:=8092}"
+: "${MH_SILERO_VAD_BASE_URL:=http://${SILERO_VAD_HOST}:${SILERO_VAD_PORT}}"
 
 DEFAULT_OPERATOR_ASR_BASE_URL="http://${ASR_HOST}:${ASR_PORT}"
 STACK_OPERATOR_ASR_BASE_URL="$MH_OPERATOR_ASR_BASE_URL"
@@ -87,13 +96,33 @@ echo "[run-operator-stack] MH_OPERATOR_REALTIME_ASR_WS_URL=${MH_OPERATOR_REALTIM
 echo "[run-operator-stack] MH_STACK_START_REALTIME_ASR=${MH_STACK_START_REALTIME_ASR}"
 echo "[run-operator-stack] MH_STACK_START_MCP=${MH_STACK_START_MCP}"
 echo "[run-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${MH_OPERATOR_FACE_AGENT_ID}"
+echo "[run-operator-stack] MH_ATOM_VAD_BACKEND=${MH_ATOM_VAD_BACKEND}"
+echo "[run-operator-stack] MH_SILERO_VAD_BASE_URL=${MH_SILERO_VAD_BASE_URL}"
 
 if [[ "${MH_STACK_SKIP_ASR}" == "1" ]]; then
   echo "[run-operator-stack] skipping asr-worker startup (MH_STACK_SKIP_ASR=1)."
 else
+  # Force the ASR worker onto CUDA when launched from the stack. The user's
+  # ~/.bashrc exports ASR_DEVICE=cpu as a safety default, which bleeds into
+  # any restart that does not explicitly set MH_ASR_DEVICE; the result was
+  # parakeet loading on CPU and adding several hundred ms of ASR latency
+  # for each VAD utterance. run-asr-worker.sh prefers MH_ASR_DEVICE over
+  # ASR_DEVICE precisely so this kind of override survives.
+  : "${MH_ASR_DEVICE:=cuda}"
+  echo "[run-operator-stack] MH_ASR_DEVICE=${MH_ASR_DEVICE}"
   start_proc "asr-worker" \
-    env ASR_HOST="$ASR_HOST" ASR_PORT="$ASR_PORT" \
+    env ASR_HOST="$ASR_HOST" ASR_PORT="$ASR_PORT" MH_ASR_DEVICE="$MH_ASR_DEVICE" \
     ./scripts/run-asr-worker.sh
+fi
+
+if [[ "${MH_ATOM_VAD_BACKEND}" == "silero" && "${MH_STACK_START_SILERO_VAD}" != "0" ]]; then
+  if [[ -x "./scripts/run-silero-vad-worker.sh" ]]; then
+    start_proc "silero-vad-worker" \
+      env SILERO_VAD_HOST="$SILERO_VAD_HOST" SILERO_VAD_PORT="$SILERO_VAD_PORT" \
+      ./scripts/run-silero-vad-worker.sh
+  else
+    echo "[run-operator-stack] MH_ATOM_VAD_BACKEND=silero but ./scripts/run-silero-vad-worker.sh is missing or not executable; relying on an externally-started worker at ${MH_SILERO_VAD_BASE_URL}"
+  fi
 fi
 
 if [[ "${MH_STACK_START_REALTIME_ASR}" == "1" ]]; then
@@ -112,6 +141,8 @@ start_proc "face-app" \
   env FACE_WS_HOST="$FACE_WS_HOST" FACE_WS_PORT="$FACE_WS_PORT" FACE_WS_PATH="$FACE_WS_PATH" \
   FACE_AUDIO_TARGET="$FACE_AUDIO_TARGET" FACE_UI_MODE="$FACE_UI_MODE" FACE_OPERATOR_PANEL_ENABLED="1" MH_OPERATOR_ASR_BASE_URL="$STACK_OPERATOR_ASR_BASE_URL" \
   MH_TTS_CHUNK_MAX_CHARS="$MH_TTS_CHUNK_MAX_CHARS" \
+  MH_ATOM_VAD_BACKEND="$MH_ATOM_VAD_BACKEND" \
+  MH_SILERO_VAD_BASE_URL="$MH_SILERO_VAD_BASE_URL" \
   MH_OPERATOR_REALTIME_ASR_ENABLED="$MH_OPERATOR_REALTIME_ASR_ENABLED" \
   MH_OPERATOR_REALTIME_ASR_WS_URL="$MH_OPERATOR_REALTIME_ASR_WS_URL" \
   MH_OPERATOR_REALTIME_ASR_MODEL="$MH_OPERATOR_REALTIME_ASR_MODEL" \

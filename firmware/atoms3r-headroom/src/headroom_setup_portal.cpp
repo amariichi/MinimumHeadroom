@@ -34,11 +34,22 @@ String selectedIf(bool selected) {
   return selected ? F(" selected") : String();
 }
 
+String checkedIf(bool checked) {
+  return checked ? F(" checked") : String();
+}
+
 int requestInt(WebServer& server, const char* name, int fallback) {
   if (!server.hasArg(name)) {
     return fallback;
   }
   return server.arg(name).toInt();
+}
+
+float requestFloat(WebServer& server, const char* name, float fallback) {
+  if (!server.hasArg(name)) {
+    return fallback;
+  }
+  return server.arg(name).toFloat();
 }
 
 }  // namespace
@@ -166,6 +177,9 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += F("<label>Face WebSocket URL</label><input name='ws_url' value='");
   html += htmlEscape(data.faceWsUrl);
   html += F("'>");
+  html += F("<label>PC mDNS host (optional, e.g. my-pc.local — auto-tracks the PC's LAN IP)</label><input name='mdns_host' value='");
+  html += htmlEscape(data.mdnsHost);
+  html += F("' autocomplete='off'>");
   html += F("<label>Auth token</label><input name='auth' type='password' value='");
   html += htmlEscape(data.authToken);
   html += F("'>");
@@ -185,6 +199,25 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += F("<option value='en'");
   html += selectedIf(data.asrLanguage == "en");
   html += F(">English</option>");
+  html += F("</select>");
+  html += F("<label><input name='vad_on' type='checkbox' value='1'");
+  html += checkedIf(data.continuousVadEnabled);
+  html += F("> Continuous hands-free VAD</label>");
+  html += F("<label>Firmware VAD RMS threshold (0=Silero mode, ~0.025 for RMS backend)</label>");
+  html += F("<input name='vad_rms' type='number' min='0' max='1' step='0.001' value='");
+  html += String(data.vadFirmwareRms, 4);
+  html += F("'>");
+  html += F("<label>VAD speech tail frames (0-240; ~16 ≈ 1s; must exceed PC endSilence/64ms)</label>");
+  html += F("<input name='vad_tail' type='number' min='0' max='240' step='1' value='");
+  html += String(data.vadSpeechTailFrames);
+  html += F("'>");
+  html += F("<label>VAD audio encoding</label><select name='vad_enc'>");
+  html += F("<option value='pcm16'");
+  html += selectedIf(data.vadEncoding == "pcm16");
+  html += F(">pcm16 (raw 16-bit, ~160 MB/h)</option>");
+  html += F("<option value='ima_adpcm'");
+  html += selectedIf(data.vadEncoding == "ima_adpcm");
+  html += F(">ima_adpcm (4:1 lossy, ~40 MB/h)</option>");
   html += F("</select>");
   html += F("<div class='row'><div><label>Max base64 TTS seconds</label><input name='max_b64_sec' type='number' min='1' max='15' value='");
   html += String(data.maxBase64TtsSeconds);
@@ -236,11 +269,26 @@ HeadroomSettingsData HeadroomSetupPortal::settingsFromRequest() {
   next.wifiPassword3 = server_.arg("wifi_pw3");
   next.faceHttpBase = server_.arg("http_base");
   next.faceWsUrl = server_.arg("ws_url");
+  next.mdnsHost = server_.arg("mdns_host");
   next.authToken = server_.arg("auth");
   next.deviceId = server_.arg("device_id");
   next.displayAgentId = server_.arg("display_id");
   next.inputTargetAgentId = server_.arg("input_id");
   next.asrLanguage = HeadroomSettings::normalizeAsrLanguage(server_.arg("asr_lang"), next.asrLanguage);
+  next.continuousVadEnabled = server_.hasArg("vad_on");
+  next.vadFirmwareRms = requestFloat(server_, "vad_rms", next.vadFirmwareRms);
+  if (next.vadFirmwareRms < 0.0f) {
+    next.vadFirmwareRms = 0.0f;
+  } else if (next.vadFirmwareRms > 1.0f) {
+    next.vadFirmwareRms = 1.0f;
+  }
+  next.vadEncoding = HeadroomSettings::normalizeVadEncoding(server_.arg("vad_enc"), next.vadEncoding);
+  next.vadSpeechTailFrames = requestInt(server_, "vad_tail", next.vadSpeechTailFrames);
+  if (next.vadSpeechTailFrames < 0) {
+    next.vadSpeechTailFrames = 0;
+  } else if (next.vadSpeechTailFrames > 240) {
+    next.vadSpeechTailFrames = 240;
+  }
   next.maxBase64TtsSeconds = requestInt(server_, "max_b64_sec", next.maxBase64TtsSeconds);
   next.maxHttpTtsBytes = requestInt(server_, "max_http_b", next.maxHttpTtsBytes);
   next.faceRotationDegrees = HeadroomSettings::normalizeRotation(requestInt(server_, "rotation", next.faceRotationDegrees));

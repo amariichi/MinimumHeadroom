@@ -1,5 +1,5 @@
       ▄▀▀▄        Antigravity CLI 1.0.1
-     ▀▀▀▀▀▀       akfsmti@gmail.com (Google AI Pro)
+     ▀▀▀▀▀▀       user@example.com (Google AI Pro)
     ▀▀▀▀▀▀▀▀      Gemini 3.5 Flash (Medium)
    ▄▀▀    ▀▀▄     ~/github/minimum-headroom/.agent/worktrees/helper-1
   ▄▀▀      ▀▀▄

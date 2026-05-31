@@ -280,3 +280,58 @@ test('ws server can suppress relay for server-only payloads', async (t) => {
   assert.equal(received.length, 1);
   assert.equal(received[0].type, 'operator_realtime_asr_chunk');
 });
+
+
+test("ws server suppresses audio payloads to arduino clients by default", async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    path: "/ws",
+    relayPayloads: true,
+    log: { info: () => {}, error: () => {} }
+  });
+
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const arduino = new WebSocket(server.url, "arduino");
+  const viewer = new WebSocket(server.url);
+
+  t.after(() => {
+    try { arduino.close(); } catch {}
+    try { viewer.close(); } catch {}
+  });
+
+  await waitForOpen(arduino);
+  await waitForOpen(viewer);
+
+  const arduinoMessages = [];
+  arduino.addEventListener("message", (event) => {
+    arduinoMessages.push(JSON.parse(event.data));
+  });
+
+  const viewerAudioPromise = waitForMessage(viewer);
+  server.broadcast({
+    v: 1,
+    type: "tts_audio",
+    session_id: "audio#test",
+    audio_base64: "ZmFrZQ==",
+    mime_type: "audio/wav",
+    ts: Date.now()
+  });
+  const viewerAudio = await viewerAudioPromise;
+  assert.equal(viewerAudio.type, "tts_audio");
+
+  const arduinoStatePromise = waitForMessage(arduino);
+  server.broadcast({
+    v: 1,
+    type: "tts_state",
+    session_id: "audio#test",
+    phase: "play_start",
+    ts: Date.now()
+  });
+  const arduinoState = await arduinoStatePromise;
+  assert.equal(arduinoState.type, "tts_state");
+  assert.equal(arduinoMessages.some((payload) => payload.type === "tts_audio"), false);
+});

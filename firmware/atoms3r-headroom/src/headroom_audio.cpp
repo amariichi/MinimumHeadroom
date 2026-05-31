@@ -341,6 +341,14 @@ void HeadroomAudio::resetSpeaker() {
   M5.Speaker.end();
   delay(20);
   beginSpeaker();
+  // Let the ES8311 DAC fully re-stabilize after the ADC->DAC switch before the
+  // caller drives it. resetSpeaker() runs in restoreAfterRecording(), i.e. on
+  // the mic->speaker handoff right before the first TTS chunk plays. Without a
+  // post-begin settle the leading tens of ms of that chunk can come out as
+  // white noise / radio static when user speech and TTS collide (intermittent).
+  // The other DAC paths already settle (resetSpeaker's end->begin gap above,
+  // playCueTone's trailing delay); this closes the one that fed playback.
+  delay(30);
 }
 
 void HeadroomAudio::releaseActive() {

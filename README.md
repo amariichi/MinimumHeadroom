@@ -433,6 +433,8 @@ If your MCP client rejects tool names with dots (for example `face.event`), set 
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english) — launcher choice, tmux bridge, operator UI, keyboard shortcuts, hidden mobile recovery, batch/realtime ASR, Tailscale remote operation
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization
 - [Multi-Agent Guide](doc/guides/multi-agent.md#english) — spawning helpers, permission presets, mission assignment, owner inbox, worktree isolation, security hardening
+- [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#english) — hands-free VAD pipeline, flashing + USB provisioning, RMS vs Silero backends, ADPCM, every tuning knob (endSilence / threshold / tail / maxUtterance), PTT, troubleshooting
+- [Tailscale Travel-Router Guide](doc/guides/tailscale-travel-router-setup.md#english) — reach a Tailscale-incapable device (e.g. AtomS3R) from the PC over a Tailscale-capable travel router via subnet routing. Covers the **bidirectional ACL**: PC→device, and device→PC (the face WebSocket port). For the device→PC direction the ACL `src` must be the travel router's **LAN CIDR** — the router relays the device's original source IP, so a node/group grant alone will not match.
 
 ## Hook Bridge (safety net for forgotten face_say)
 
@@ -519,6 +521,11 @@ npm run asr-worker:smoke
 ## Repository Notes
 
 - Runtime/local files (models, local MCP config, caches, venv) are excluded via `.gitignore`.
+
+## Acknowledgements
+
+- The AtomS3R firmware (`firmware/atoms3r-headroom/`) was implemented independently for this project; **no code is derived from other firmware**. We thank [**StackChan_Minimal** by A-Uta](https://github.com/A-Uta/StackChan_Minimal) (Apache-2.0) for serving as a helpful reference on AtomS3R voice-assistant design.
+- The firmware builds on [M5Unified](https://github.com/m5stack/M5Unified) (MIT) and the ESP32 Arduino core.
 
 <a id="japanese"></a>
 
@@ -952,6 +959,8 @@ MCP クライアントがドット付きツール名（例: `face.event`）を�
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) — 起動スクリプトの選び方、tmux bridge、operator UI、キーボードショートカット、batch / realtime ASR、隠し復旧、Tailscale リモート運用
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化
 - [マルチエージェントガイド](doc/guides/multi-agent.md#japanese) — helper の生成、権限プリセット、ミッション割当、owner inbox、worktree 分離、セキュリティ強化
+- [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#japanese) — ハンズフリー VAD パイプライン、書き込み＋USB プロビジョニング、RMS と Silero、ADPCM、各チューニング（endSilence / 閾値 / tail / maxUtterance）、PTT、トラブルシュート
+- [Tailscale トラベルルーター手順](doc/guides/tailscale-travel-router-setup.md#japanese) — Tailscale 非対応デバイス（AtomS3R 等）を、Tailscale 対応トラベルルーター経由で PC から到達させる subnet routing の手順。**双方向の ACL**（PC→デバイス／デバイス→PC＝顔の WebSocket ポート）を解説。デバイス→PC は ACL の `src` をトラベルルーターの **LAN CIDR** にする必要がある（ルーターはデバイスの元の送信元 IP をそのまま中継するため、ノード/グループ指定だけでは一致しない）。
 
 ## オプションスキル
 
@@ -1006,3 +1015,8 @@ npm run asr-worker:smoke
 ## 補足
 
 - 実行時ローカルファイル（モデル、ローカルMCP設定、キャッシュ、venv など）は `.gitignore` で除外されています。
+
+## 謝辞
+
+- 本プロジェクトの AtomS3R ファームウェア（`firmware/atoms3r-headroom/`）は独自に実装したもので、**他のファームウェアからコードを流用していません**。AtomS3R 音声アシスタントの設計にあたり、[**StackChan_Minimal**（A-Uta 氏）](https://github.com/A-Uta/StackChan_Minimal)（Apache-2.0）を参考にさせていただきました。感謝します。
+- ファームウェアは [M5Unified](https://github.com/m5stack/M5Unified)（MIT）および ESP32 Arduino core を基盤としています。

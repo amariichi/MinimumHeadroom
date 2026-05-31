@@ -1,3 +1,4 @@
+#include <ESPmDNS.h>
 #include <M5Unified.h>
 #include <WiFi.h>
 
@@ -5,6 +6,7 @@
 
 #include "face_renderer.h"
 #include "headroom_audio.h"
+#include "headroom_continuous_vad.h"
 #include "headroom_ingress_server.h"
 #include "headroom_ptt.h"
 #include "headroom_serial_provision.h"
@@ -21,6 +23,7 @@ HeadroomAudio audio;
 HeadroomTransport transport;
 HeadroomIngressServer ingressServer;
 HeadroomPtt ptt;
+HeadroomContinuousVad continuousVad;
 HeadroomFaceRenderer renderer;
 HeadroomFaceState faceState;
 
@@ -126,6 +129,41 @@ void applyTripleTapRotation() {
   Serial.printf("face rotation -> %d deg\n", next.faceRotationDegrees);
 }
 
+// Before-playback callback used by both HeadroomTransport (direct WS TTS) and
+// HeadroomIngressServer (HTTP TTS bridge). Goes through the state machine so
+// VAD enters Cooldown and resists thrash on the very next update() tick after
+// playback finishes; calling stop() directly would skip the cooldown gate.
+void suspendContinuousVadForPlayback(void*) {
+  continuousVad.suspendForPlayback();
+}
+
+// Pre-recording callback for HeadroomPtt. Fires before audio_->stopForRecording()
+// so the VAD state machine transitions to SuspendedForPtt and bumps generation
+// BEFORE the shared codec is reconfigured to ADC mode.
+void suspendContinuousVadForPtt(void*) {
+  continuousVad.suspendForPtt();
+}
+
+void setContinuousVadEnabled(bool enabled) {
+  HeadroomSettingsData next = settings.editable();
+  if (next.continuousVadEnabled == enabled) {
+    return;
+  }
+  next.continuousVadEnabled = enabled;
+  if (!settings.save(next)) {
+    faceState.expression = HeadroomExpression::Failed;
+    faceState.mouthOpen = 0.0f;
+    Serial.println("continuous VAD toggle save failed");
+    return;
+  }
+  ingressServer.setContinuousVadEnabled(next.continuousVadEnabled);
+  continuousVad.setEnabled(next.continuousVadEnabled);
+  faceState.expression = next.continuousVadEnabled ? HeadroomExpression::Listening : HeadroomExpression::Neutral;
+  faceState.mouthOpen = 0.0f;
+  Serial.printf("continuous VAD -> %s\n", next.continuousVadEnabled ? "on" : "off");
+}
+
+
 void updateDemoMotion(uint32_t nowMs) {
   if (wifiConnected && !setupMode) {
     return;
@@ -184,6 +222,60 @@ bool connectWifi(const HeadroomSettingsData& data, uint32_t timeoutMs) {
   Serial.println("all wifi slots failed; starting setup portal");
   WiFi.disconnect(true);
   return false;
+}
+
+// Swap only the host portion of a "scheme://host[:port][/path]" URL, leaving the
+// scheme, port, and path intact. Used to retarget faceWsUrl/faceHttpBase at the
+// PC's freshly resolved mDNS IP without disturbing the configured port/path.
+String replaceUrlHost(const String& url, const String& newHost) {
+  int schemeEnd = url.indexOf("://");
+  if (schemeEnd < 0) {
+    return url;
+  }
+  int authStart = schemeEnd + 3;
+  int pathStart = url.indexOf('/', authStart);
+  String authority = pathStart >= 0 ? url.substring(authStart, pathStart) : url.substring(authStart);
+  String rest = pathStart >= 0 ? url.substring(pathStart) : String();
+  int portStart = authority.indexOf(':');
+  String portPart = portStart >= 0 ? authority.substring(portStart) : String();  // keeps leading ':'
+  return url.substring(0, authStart) + newHost + portPart + rest;
+}
+
+// If an mDNS host is provisioned, resolve it once at boot and rewrite the host
+// in both server URLs to the PC's current LAN IP. On any failure the static
+// faceWsUrl/faceHttpBase are left untouched (fallback). mDNS does not cross
+// subnets, so off-LAN the resolve fails and the static URLs (ideally a stable
+// Tailscale IP) carry the connection. Mutates the caller's runtime copy only;
+// the provisioned mdns_host in NVS is never overwritten.
+void resolveMdnsHost(HeadroomSettingsData& data) {
+  if (data.mdnsHost.length() == 0) {
+    return;
+  }
+  String host = data.mdnsHost;
+  host.trim();
+  if (host.endsWith(".local")) {
+    host = host.substring(0, host.length() - 6);  // queryHost() appends .local itself
+  }
+  if (host.length() == 0) {
+    return;
+  }
+  if (!MDNS.begin(data.deviceId.c_str())) {
+    Serial.println("mdns: MDNS.begin failed; keeping static ws_url/http_base");
+    return;
+  }
+  IPAddress ip = MDNS.queryHost(host, 2000);
+  if (static_cast<uint32_t>(ip) == 0) {
+    Serial.printf("mdns: resolve failed for %s.local; keeping static ws_url/http_base\n", host.c_str());
+    return;
+  }
+  String ipStr = ip.toString();
+  Serial.printf("mdns: %s.local -> %s\n", host.c_str(), ipStr.c_str());
+  if (data.faceWsUrl.length() > 0) {
+    data.faceWsUrl = replaceUrlHost(data.faceWsUrl, ipStr);
+  }
+  if (data.faceHttpBase.length() > 0) {
+    data.faceHttpBase = replaceUrlHost(data.faceHttpBase, ipStr);
+  }
 }
 
 bool shouldForceSetupPortal(uint32_t holdMs) {
@@ -270,11 +362,22 @@ void setup() {
   if (!wifiConnected) {
     startSetupPortal();
   } else {
+    // Mutable per-boot copy so an mDNS-resolved PC IP can be folded into the
+    // server URLs before any subsystem captures them. The persisted settings
+    // (and the static URL fallback) stay untouched.
+    HeadroomSettingsData runtimeData = data;
+    resolveMdnsHost(runtimeData);
+    // audio.begin() ran before Wi-Fi (above), so push the possibly-resolved
+    // HTTP base into it now that mDNS has had its say.
+    audio.setHttpBase(runtimeData.faceHttpBase);
     faceState.expression = HeadroomExpression::Thinking;
     faceState.connected = true;
-    transport.begin(data, faceState, audio);
-    ingressServer.begin(data, transport, audio, faceState);
-    ptt.begin(data, audio, transport, faceState);
+    transport.begin(runtimeData, faceState, audio);
+    ingressServer.begin(runtimeData, transport, audio, faceState);
+    ingressServer.setBeforeAudioPlaybackCallback(&suspendContinuousVadForPlayback, nullptr);
+    ptt.begin(runtimeData, audio, transport, faceState);
+    ptt.setBeforeRecordingCallback(&suspendContinuousVadForPtt, nullptr);
+    continuousVad.begin(runtimeData, audio, transport, faceState);
   }
 
   if (!wifiConnected) {
@@ -290,10 +393,22 @@ void loop() {
   setupPortal.handleClient();
   audio.loop();
   if (!setupMode && wifiConnected) {
+    // Press-edge: suspend continuous VAD capture immediately so a long-hold
+    // for PTT does not race with VAD owning the mic, but do NOT persist the
+    // VAD-off setting here. Persistence is reserved for the short-tap-confirmed
+    // path below (tapCount == 1 after the gap timer expires), so a long hold
+    // for PTT no longer doubles as a destructive NVS write of the VAD setting.
+    {
+      bool pressedNow = M5.BtnA.isPressed();
+      if (pressedNow && !btnDownPrev && settings.data().continuousVadEnabled) {
+        continuousVad.suspendForPtt();
+      }
+    }
     ptt.update();
     if (!ptt.recording()) {
       ingressServer.loop();
       transport.loop();
+      continuousVad.update();
     }
     faceState.connected = transport.connected() || ingressServer.recentlyActive(10000);
 
@@ -328,10 +443,16 @@ void loop() {
   }
   uint32_t nowMs = millis();
 
-  // Unified screen-button tap gesture (all modes). Short taps: in offline /
-  // setup mode each tap cycles the expression preview; three quick taps in any
-  // mode rotate the face 90° clockwise and persist it (no PC needed). A long
-  // hold falls through to PTT when connected and never counts as a tap.
+  // Unified screen-button tap gesture (all modes). In connected mode, the
+  // press edge above suspends continuous VAD capture without persisting any
+  // setting; a single-tap-confirmed gesture (tapCount == 1 after the gap
+  // timer expires) persists VAD off as an escape hatch when VAD is on;
+  // a double-tap-confirmed gesture (tapCount == 2) toggles VAD on or off
+  // — the only on-device way to ENABLE VAD without re-provisioning. A long
+  // hold does NOT count as a tap and does NOT persist any VAD setting, so
+  // PTT stays non-destructive. In offline/setup mode, short taps cycle the
+  // expression preview. Three quick taps rotate the face 90° clockwise and
+  // persist it. A long hold falls through to PTT when connected.
   {
     bool down = M5.BtnA.isPressed();
     if (down && !btnDownPrev) {
@@ -356,6 +477,21 @@ void loop() {
       }
     }
     if (tapCount > 0 && nowMs - lastTapMs > kMultiTapGapMs) {
+      if (wifiConnected && !setupMode) {
+        if (tapCount == 1 && settings.data().continuousVadEnabled) {
+          // Short-tap escape hatch: persist VAD off when it is currently on.
+          // A single tap on a device with VAD already off is a no-op so the
+          // gesture cannot accidentally disrupt anything else.
+          setContinuousVadEnabled(false);
+        } else if (tapCount == 2) {
+          // Double-tap: toggle continuous VAD. This is the only on-device
+          // gesture that can ENABLE VAD; otherwise the user must reach the
+          // provisioning script. The toggle direction is determined by the
+          // current persisted setting so off→on enables and on→off mirrors
+          // the single-tap escape hatch.
+          setContinuousVadEnabled(!settings.data().continuousVadEnabled);
+        }
+      }
       tapCount = 0;
     }
     btnDownPrev = down;

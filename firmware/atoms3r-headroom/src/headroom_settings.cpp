@@ -26,6 +26,20 @@ int readInt(Preferences& prefs, const char* key, int fallback) {
   return prefs.getInt(key, fallback);
 }
 
+bool readBool(Preferences& prefs, const char* key, bool fallback) {
+  if (!prefs.isKey(key)) {
+    return fallback;
+  }
+  return prefs.getBool(key, fallback);
+}
+
+float readFloat(Preferences& prefs, const char* key, float fallback) {
+  if (!prefs.isKey(key)) {
+    return fallback;
+  }
+  return prefs.getFloat(key, fallback);
+}
+
 }  // namespace
 
 void HeadroomSettings::begin() {
@@ -46,6 +60,12 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   normalized.faceRotationDegrees = normalizeRotation(normalized.faceRotationDegrees);
   normalized.upSideDegrees = normalizeRotation(normalized.upSideDegrees);
   normalized.asrLanguage = normalizeAsrLanguage(normalized.asrLanguage);
+  normalized.vadEncoding = normalizeVadEncoding(normalized.vadEncoding);
+  if (normalized.vadSpeechTailFrames < 0) {
+    normalized.vadSpeechTailFrames = 0;
+  } else if (normalized.vadSpeechTailFrames > 240) {
+    normalized.vadSpeechTailFrames = 240;
+  }
 
   Preferences prefs;
   if (!prefs.begin(kNamespace, false)) {
@@ -60,11 +80,16 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   prefs.putString("wifi_pw3", normalized.wifiPassword3);
   prefs.putString("http_base", normalized.faceHttpBase);
   prefs.putString("ws_url", normalized.faceWsUrl);
+  prefs.putString("mdns_host", normalized.mdnsHost);
   prefs.putString("auth", normalized.authToken);
   prefs.putString("device_id", normalized.deviceId);
   prefs.putString("display_id", normalized.displayAgentId);
   prefs.putString("input_id", normalized.inputTargetAgentId);
   prefs.putString("asr_lang", normalized.asrLanguage);
+  prefs.putBool("vad_on", normalized.continuousVadEnabled);
+  prefs.putFloat("vad_rms", normalized.vadFirmwareRms);
+  prefs.putString("vad_enc", normalized.vadEncoding);
+  prefs.putInt("vad_tail", normalized.vadSpeechTailFrames);
   prefs.putInt("max_b64_sec", normalized.maxBase64TtsSeconds);
   prefs.putInt("max_http_b", normalized.maxHttpTtsBytes);
   prefs.putInt("rotation", normalized.faceRotationDegrees);
@@ -145,6 +170,22 @@ HeadroomPlacementPose HeadroomSettings::parsePlacementPose(const String& value) 
   return HeadroomPlacementPose::ScreenUp;
 }
 
+String HeadroomSettings::normalizeVadEncoding(const String& value, const String& fallback) {
+  String normalized = value;
+  normalized.trim();
+  normalized.toLowerCase();
+  if (normalized == "ima_adpcm" || normalized == "adpcm") {
+    return "ima_adpcm";
+  }
+  if (normalized == "pcm16" || normalized == "pcm") {
+    return "pcm16";
+  }
+  String normalizedFallback = fallback;
+  normalizedFallback.trim();
+  normalizedFallback.toLowerCase();
+  return normalizedFallback == "ima_adpcm" ? "ima_adpcm" : "pcm16";
+}
+
 String HeadroomSettings::normalizeAsrLanguage(const String& value, const String& fallback) {
   String normalized = value;
   normalized.trim();
@@ -180,11 +221,16 @@ void HeadroomSettings::loadCompileDefaults() {
   data_.wifiPassword3 = HEADROOM_WIFI_PASSWORD3;
   data_.faceHttpBase = HEADROOM_FACE_HTTP_BASE;
   data_.faceWsUrl = HEADROOM_FACE_WS_URL;
+  data_.mdnsHost = HEADROOM_MDNS_HOST;
   data_.authToken = HEADROOM_FACE_AUTH_TOKEN;
   data_.deviceId = HEADROOM_DEVICE_ID;
   data_.displayAgentId = HEADROOM_DISPLAY_AGENT_ID;
   data_.inputTargetAgentId = HEADROOM_INPUT_TARGET_AGENT_ID;
   data_.asrLanguage = normalizeAsrLanguage(HEADROOM_ASR_LANGUAGE);
+  data_.continuousVadEnabled = HEADROOM_CONTINUOUS_VAD_ENABLED != 0;
+  data_.vadFirmwareRms = HEADROOM_VAD_FIRMWARE_RMS;
+  data_.vadEncoding = normalizeVadEncoding(HEADROOM_VAD_ENCODING);
+  data_.vadSpeechTailFrames = HEADROOM_VAD_SPEECH_TAIL_FRAMES;
   data_.maxBase64TtsSeconds = HEADROOM_MAX_BASE64_TTS_SECONDS;
   data_.maxHttpTtsBytes = HEADROOM_MAX_HTTP_TTS_BYTES;
   data_.faceRotationDegrees = normalizeRotation(HEADROOM_FACE_ROTATION_DEGREES);
@@ -212,14 +258,15 @@ void HeadroomSettings::loadNvsOverrides() {
   data_.wifiPassword3 = readString(prefs, "wifi_pw3", data_.wifiPassword3);
   data_.faceHttpBase = readString(prefs, "http_base", data_.faceHttpBase);
   data_.faceWsUrl = readString(prefs, "ws_url", data_.faceWsUrl);
-  if ((data_.faceHttpBase.indexOf("192.168.1.10") >= 0 || data_.faceHttpBase.indexOf("192.168.1.34") >= 0) &&
+  if ((data_.faceHttpBase.indexOf("192.168.1.10") >= 0) &&
       compileHttpBase.length() > 0) {
     data_.faceHttpBase = compileHttpBase;
   }
-  if ((data_.faceWsUrl.indexOf("192.168.1.10") >= 0 || data_.faceWsUrl.indexOf("192.168.1.34") >= 0) &&
+  if ((data_.faceWsUrl.indexOf("192.168.1.10") >= 0) &&
       compileWsUrl.length() > 0) {
     data_.faceWsUrl = compileWsUrl;
   }
+  data_.mdnsHost = readString(prefs, "mdns_host", data_.mdnsHost);
   data_.authToken = readString(prefs, "auth", data_.authToken);
   if (data_.authToken.length() == 0 && compileAuthToken.length() > 0) {
     data_.authToken = compileAuthToken;
@@ -228,6 +275,16 @@ void HeadroomSettings::loadNvsOverrides() {
   data_.displayAgentId = readString(prefs, "display_id", data_.displayAgentId);
   data_.inputTargetAgentId = readString(prefs, "input_id", data_.inputTargetAgentId);
   data_.asrLanguage = normalizeAsrLanguage(readString(prefs, "asr_lang", data_.asrLanguage));
+  data_.continuousVadEnabled = readBool(prefs, "vad_on", data_.continuousVadEnabled);
+  {
+    const float rawRms = readFloat(prefs, "vad_rms", data_.vadFirmwareRms);
+    data_.vadFirmwareRms = rawRms < 0.0f ? 0.0f : (rawRms > 1.0f ? 1.0f : rawRms);
+  }
+  data_.vadEncoding = normalizeVadEncoding(readString(prefs, "vad_enc", data_.vadEncoding));
+  {
+    const int rawTail = readInt(prefs, "vad_tail", data_.vadSpeechTailFrames);
+    data_.vadSpeechTailFrames = rawTail < 0 ? 0 : (rawTail > 240 ? 240 : rawTail);
+  }
   data_.maxBase64TtsSeconds = readInt(prefs, "max_b64_sec", data_.maxBase64TtsSeconds);
   data_.maxHttpTtsBytes = readInt(prefs, "max_http_b", data_.maxHttpTtsBytes);
   data_.faceRotationDegrees = normalizeRotation(readInt(prefs, "rotation", data_.faceRotationDegrees));

@@ -20,6 +20,10 @@ public:
   void update();
   bool recording() const;
   HeadroomPttState state() const;
+  // Invoked at the very start of startRecording(), before any audio owner
+  // mutation. Wired to the continuous VAD state machine so the generation
+  // bump happens before the shared ES8311 codec is reconfigured to ADC mode.
+  void setBeforeRecordingCallback(void (*callback)(void*), void* context);
 
 private:
   static constexpr uint32_t kSampleRate = 16000;
@@ -35,6 +39,8 @@ private:
   HeadroomAudio* audio_ = nullptr;
   HeadroomTransport* transport_ = nullptr;
   HeadroomFaceState* faceState_ = nullptr;
+  void (*beforeRecordingCallback_)(void*) = nullptr;
+  void* beforeRecordingContext_ = nullptr;
   String httpBase_;
   String authToken_;
   String deviceId_;

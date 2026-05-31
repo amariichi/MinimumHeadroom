@@ -130,6 +130,7 @@ export function createOperatorAsrProxy(options = {}) {
   const modelJa = asNonEmptyString(options.modelJa);
   const fetchImpl = typeof options.fetchImpl === 'function' ? options.fetchImpl : globalThis.fetch;
   const onBargeIn = typeof options.onBargeIn === 'function' ? options.onBargeIn : null;
+  const onAcceptedSpeech = typeof options.onAcceptedSpeech === 'function' ? options.onAcceptedSpeech : null;
 
   if (typeof fetchImpl !== 'function') {
     throw new Error('fetch API is unavailable for operator ASR proxy');
@@ -244,6 +245,20 @@ export function createOperatorAsrProxy(options = {}) {
             detail: parsedBody ?? rawBody.slice(0, 300)
           });
           return true;
+        }
+
+        if (onAcceptedSpeech) {
+          try {
+            await onAcceptedSpeech({
+              text: normalized.text,
+              language: normalized.language,
+              requestedLanguage,
+              confidence: normalized.confidence,
+              source: 'operator_asr_proxy'
+            });
+          } catch (error) {
+            log.warn('[face-app] operator ASR accepted-speech handler failed: ' + error.message);
+          }
         }
 
         writeJson(response, 200, {

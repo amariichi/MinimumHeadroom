@@ -21,6 +21,18 @@ void mergeInt(JsonDocument& doc, const char* key, int& field) {
   }
 }
 
+void mergeBool(JsonDocument& doc, const char* key, bool& field) {
+  if (doc[key].is<bool>()) {
+    field = doc[key].as<bool>();
+  }
+}
+
+void mergeFloat(JsonDocument& doc, const char* key, float& field) {
+  if (doc[key].is<float>() || doc[key].is<double>() || doc[key].is<int>()) {
+    field = doc[key].as<float>();
+  }
+}
+
 }  // namespace
 
 void HeadroomSerialProvision::begin(HeadroomSettings& settings) {
@@ -81,6 +93,7 @@ void HeadroomSerialProvision::handleConfig(const String& json) {
   mergeString(doc, "wifi_pw3", next.wifiPassword3);
   mergeString(doc, "http_base", next.faceHttpBase);
   mergeString(doc, "ws_url", next.faceWsUrl);
+  mergeString(doc, "mdns_host", next.mdnsHost);
   mergeString(doc, "auth", next.authToken);
   mergeString(doc, "device_id", next.deviceId);
   mergeString(doc, "display_id", next.displayAgentId);
@@ -88,6 +101,13 @@ void HeadroomSerialProvision::handleConfig(const String& json) {
   if (doc["asr_lang"].is<const char*>() || doc["asr_lang"].is<String>()) {
     next.asrLanguage =
         HeadroomSettings::normalizeAsrLanguage(doc["asr_lang"].as<String>(), next.asrLanguage);
+  }
+  mergeBool(doc, "vad_on", next.continuousVadEnabled);
+  mergeFloat(doc, "vad_rms", next.vadFirmwareRms);
+  mergeInt(doc, "vad_tail", next.vadSpeechTailFrames);
+  if (doc["vad_enc"].is<const char*>() || doc["vad_enc"].is<String>()) {
+    next.vadEncoding =
+        HeadroomSettings::normalizeVadEncoding(doc["vad_enc"].as<String>(), next.vadEncoding);
   }
   mergeInt(doc, "max_b64_sec", next.maxBase64TtsSeconds);
   mergeInt(doc, "max_http_b", next.maxHttpTtsBytes);
@@ -123,11 +143,16 @@ void HeadroomSerialProvision::handleQuery() {
   doc["wifi_pw3_len"] = static_cast<int>(d.wifiPassword3.length());
   doc["http_base"] = d.faceHttpBase;
   doc["ws_url"] = d.faceWsUrl;
+  doc["mdns_host"] = d.mdnsHost;
   doc["auth_len"] = static_cast<int>(d.authToken.length());
   doc["device_id"] = d.deviceId;
   doc["display_id"] = d.displayAgentId;
   doc["input_id"] = d.inputTargetAgentId;
   doc["asr_lang"] = d.asrLanguage;
+  doc["vad_on"] = d.continuousVadEnabled;
+  doc["vad_rms"] = d.vadFirmwareRms;
+  doc["vad_tail"] = d.vadSpeechTailFrames;
+  doc["vad_enc"] = d.vadEncoding;
   doc["max_b64_sec"] = d.maxBase64TtsSeconds;
   doc["max_http_b"] = d.maxHttpTtsBytes;
   doc["rotation"] = d.faceRotationDegrees;

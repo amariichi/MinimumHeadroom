@@ -14,6 +14,8 @@ public:
   void loop();
   bool active() const;
   bool recentlyActive(uint32_t windowMs) const;
+  void setContinuousVadEnabled(bool enabled);
+  void setBeforeAudioPlaybackCallback(void (*callback)(void*), void* context);
 
 private:
   WebServer server_{80};
@@ -22,9 +24,14 @@ private:
   HeadroomFaceState* faceState_ = nullptr;
   String faceHttpBase_;
   String faceWsUrl_;
+  String mdnsHost_;
   String authToken_;
   String deviceId_;
   String asrLanguage_;
+  bool continuousVadEnabled_ = false;
+  float vadFirmwareRms_ = 0.025f;
+  String vadEncoding_ = "pcm16";
+  int vadSpeechTailFrames_ = 16;
   bool active_ = false;
   size_t maxPayloadBytes_ = 720000;
   uint32_t lastPayloadMs_ = 0;
@@ -34,6 +41,8 @@ private:
   bool audioRawUnauthorized_ = false;
   bool audioRawTooLarge_ = false;
   bool audioRawFailed_ = false;
+  void (*beforeAudioPlaybackCallback_)(void*) = nullptr;
+  void* beforeAudioPlaybackContext_ = nullptr;
 
   void handleHealth();
   void handlePayload();

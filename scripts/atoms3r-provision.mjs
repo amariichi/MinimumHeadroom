@@ -37,7 +37,20 @@ Options:
   --wifi "SSID:PASS"    Wi-Fi network; repeatable, max 3, in priority order
   --http-base <url>     Face HTTP base URL
   --ws-url <url>        Face WebSocket URL
+  --mdns-host <host>    PC mDNS hostname (e.g. my-pc.local) to auto-track the PC's
+                        LAN IP at boot; rewrites the host in --ws-url/--http-base.
+                        "" clears it (mDNS off). Does not cross subnets — keep the
+                        static URLs on a stable off-LAN address (e.g. Tailscale)
   --device-id <id>      device id
+  --asr-lang <ja|en>    ASR language used by Atom-originated capture
+  --vad-on              enable continuous VAD mode
+  --vad-off             disable continuous VAD mode
+  --vad-rms <f>         firmware speech threshold (0..1; 0 = send every frame, ~0.025 default,
+                        lower for Silero PC backend)
+  --vad-encoding <enc>  pcm16 (default, raw 16-bit) or ima_adpcm (4:1 lossy for mobile use)
+  --vad-tail <n>        trailing silence frames sent after speech (0..240; ~16 ≈ 1s).
+                        Must exceed the PC endSilenceMs/64ms so natural pauses don't
+                        chop the utterance; lets vad-rms stay >0 to skip idle silence
   --token <t>           auth token (else env MH_FACE_AUTH_TOKEN, else shared env file)
   --reboot              tell the Atom to reboot after saving
   --dry-run             print the redacted RMHCFG payload and exit (no port access)
@@ -56,7 +69,14 @@ function parseArgs(argv) {
     else if (a === '--wifi') out.wifi.push(next());
     else if (a === '--http-base') out.httpBase = next();
     else if (a === '--ws-url') out.wsUrl = next();
+    else if (a === '--mdns-host') out.mdnsHost = next();
     else if (a === '--device-id') out.deviceId = next();
+    else if (a === '--asr-lang') out.asrLang = next();
+    else if (a === '--vad-on') out.vadOn = true;
+    else if (a === '--vad-off') out.vadOn = false;
+    else if (a === '--vad-rms') out.vadRms = next();
+    else if (a === '--vad-encoding') out.vadEncoding = next();
+    else if (a === '--vad-tail') out.vadTail = next();
     else if (a === '--token') out.token = next();
     else if (a === '--reboot') out.reboot = true;
     else if (a === '--dry-run') out.dryRun = true;
@@ -108,7 +128,41 @@ function buildPayload(opts, token) {
   });
   if (opts.httpBase) cfg.http_base = opts.httpBase;
   if (opts.wsUrl) cfg.ws_url = opts.wsUrl;
+  // Allow "" to explicitly clear mdns_host (disable mDNS), so test for !== undefined.
+  if (opts.mdnsHost !== undefined) cfg.mdns_host = opts.mdnsHost;
   if (opts.deviceId) cfg.device_id = opts.deviceId;
+  if (opts.asrLang) {
+    if (!['ja', 'en'].includes(opts.asrLang)) {
+      console.error('--asr-lang must be "ja" or "en"');
+      process.exit(2);
+    }
+    cfg.asr_lang = opts.asrLang;
+  }
+  if (opts.vadOn !== undefined) cfg.vad_on = opts.vadOn;
+  if (opts.vadRms !== undefined) {
+    const numeric = Number(opts.vadRms);
+    if (!Number.isFinite(numeric) || numeric < 0 || numeric > 1) {
+      console.error('--vad-rms must be a float between 0 and 1 (got: ' + opts.vadRms + ')');
+      process.exit(2);
+    }
+    cfg.vad_rms = numeric;
+  }
+  if (opts.vadEncoding !== undefined) {
+    const enc = String(opts.vadEncoding).trim().toLowerCase();
+    if (!['pcm16', 'pcm', 'ima_adpcm', 'adpcm'].includes(enc)) {
+      console.error('--vad-encoding must be "pcm16" or "ima_adpcm" (got: ' + opts.vadEncoding + ')');
+      process.exit(2);
+    }
+    cfg.vad_enc = enc === 'pcm' ? 'pcm16' : (enc === 'adpcm' ? 'ima_adpcm' : enc);
+  }
+  if (opts.vadTail !== undefined) {
+    const n = Number(opts.vadTail);
+    if (!Number.isInteger(n) || n < 0 || n > 240) {
+      console.error('--vad-tail must be an integer between 0 and 240 (got: ' + opts.vadTail + ')');
+      process.exit(2);
+    }
+    cfg.vad_tail = n;
+  }
   if (token) cfg.auth = token;
   if (opts.reboot) cfg.reboot = true;
   return cfg;
@@ -180,6 +234,10 @@ async function main() {
   const res = await sendAndWait(opts.port, payloadLine, opts.timeoutMs);
   console.log(`atom: ${res.line}`);
   if (!res.ok) process.exit(1);
+  if (opts.reboot) {
+    console.log('atom: reboot requested; skipping state read');
+    return;
+  }
 
   // Confirm with a redacted state read.
   const state = await sendAndWait(opts.port, 'RMHCFG?\n', opts.timeoutMs);

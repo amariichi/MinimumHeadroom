@@ -152,7 +152,7 @@ http://192.168.4.1/
 ```
 
 The setup page saves Wi-Fi, face app URLs, auth token, device id, display
-priority agent id, input target agent id, ASR language, face rotation, placement
+priority agent id, input target agent id, ASR language, continuous VAD mode, face rotation, placement
 pose, and upper-side orientation to ESP32 NVS/Preferences.
 
 ## Multiple Wi-Fi networks (up to 3)
@@ -204,7 +204,14 @@ the press edge: hold the button, you hear a short "ピッ" cue the moment
 recording arms, then speak. The beep is the "speak now" signal, so the short
 arming delay does not clip your speech. Because a tap is shorter than the PTT
 arm time, taps never open the microphone and a stray single tap no longer
-flashes the Failed face. (Internally the cue tone is fully drained before the
+flashes the Failed face.
+
+Continuous hands-free VAD can be enabled from the setup portal or by
+double-tapping while Wi-Fi is connected. When continuous VAD is already on, one
+short tap turns it off as a quick stop action; double-tap still toggles it;
+three taps still rotate the face after the tap window.
+
+(Internally the cue tone is fully drained before the
 shared ES8311 codec is switched to the mic, so the documented record/playback
 corruption hazard is not reintroduced.)
 
@@ -261,7 +268,16 @@ WebSocket is unavailable, it falls back to authenticated HTTP:
 ```
 
 Recording and speaker playback are serialized because the Atomic Echo Base uses
-one ES8311 codec for both mic and speaker.
+one ES8311 codec for both mic and speaker. Continuous VAD follows the same rule:
+the Atom streams 16 kHz PCM frames only while it is connected, VAD is enabled,
+PTT is idle, and TTS playback is not active. The PC-side bridge currently uses
+a deterministic RMS-energy VAD fallback to segment turns, then submits completed
+utterances through the same ASR worker and operator response path as PTT. Silero
+can replace that backend on the PC side later; it is not run on the AtomS3R.
+
+The first continuous-mic implementation builds successfully, but the exact
+record/playback behavior still needs validation on real AtomS3R + Atomic Echo
+Base hardware.
 
 The normal-mode health endpoint is useful for desk debugging:
 
@@ -269,9 +285,9 @@ The normal-mode health endpoint is useful for desk debugging:
 http://<atom-ip>/health
 ```
 
-It reports the configured face HTTP/WS URLs, ASR language, auth presence, and
-whether the Atom-originated WebSocket is connected. The auth token value is not
-returned.
+It reports the configured face HTTP/WS URLs, ASR language, auth presence,
+whether the Atom-originated WebSocket is connected, and
+`continuous_vad_enabled`. The auth token value is not returned.
 
 If `MH_FACE_AUTH_TOKEN` is enabled on the PC, set the same token in the setup
 page. The firmware appends it as `auth_token` on the WebSocket URL for the
@@ -420,7 +436,7 @@ Atom ボタンを押すと、neutral / thinking / speaking / listening / permiss
 http://192.168.4.1/
 ```
 
-セットアップページでは Wi-Fi、face app の URL、認証トークン、デバイス ID、表示優先エージェント ID、入力ターゲットエージェント ID、ASR 言語、顔の回転、設置姿勢、上方向の向きを ESP32 の NVS/Preferences に保存します。
+セットアップページでは Wi-Fi、face app の URL、認証トークン、デバイス ID、表示優先エージェント ID、入力ターゲットエージェント ID、ASR 言語、連続 VAD モード、顔の回転、設置姿勢、上方向の向きを ESP32 の NVS/Preferences に保存します。
 
 ## 複数の Wi-Fi ネットワーク (最大 3 つ)
 
@@ -445,7 +461,11 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 --dry-run   # (RMHCFG? �
 
 ハードウェア検証済み (2026-05-19): 実機 AtomS3R 上で `imu_enabled:true` と妥当なライブ加速度を確認。マルチスロット Wi-Fi 接続と `RMHCFG` シリアルプロトコルもデバイス上で動作します。ジェスチャの *感触*、聴覚キュー、最終的なキャリブレーション定数は、引き続き実機での人手調整が必要です。
 
-PTT (プッシュ・トゥ・トーク) の体感は従来どおりですが、押した瞬間ではなく **約 0.5 秒の長押しでアーム** されるよう変更されました。ボタンを押し続けると、録音がアームされた瞬間に短い「ピッ」というキューが鳴り、それから話します。このビープが「話してください」の合図なので、短いアーム遅延で発話の頭が切れる心配はありません。タップは PTT アーム時間より短いため、タップでマイクが開くことはなく、誤って 1 回だけタップしても Failed の顔が一瞬出ることはありません。(内部的には、共有 ES8311 コーデックをマイクに切り替える前にキュー音を完全に出し切るので、既知の録音/再生破損の危険は再発しません。)
+PTT (プッシュ・トゥ・トーク) の体感は従来どおりですが、押した瞬間ではなく **約 0.5 秒の長押しでアーム** されるよう変更されました。ボタンを押し続けると、録音がアームされた瞬間に短い「ピッ」というキューが鳴り、それから話します。このビープが「話してください」の合図なので、短いアーム遅延で発話の頭が切れる心配はありません。タップは PTT アーム時間より短いため、タップでマイクが開くことはなく、誤って 1 回だけタップしても Failed の顔が一瞬出ることはありません。
+
+連続ハンズフリー VAD はセットアップポータル、または Wi-Fi 接続中のダブルタップで有効化できます。連続 VAD がすでに ON のときは、1 回の短いタップで素早く OFF にできます。ダブルタップは引き続き ON/OFF、3 回タップはタップ判定窓の後も顔の回転です。
+
+(内部的には、共有 ES8311 コーデックをマイクに切り替える前にキュー音を完全に出し切るので、既知の録音/再生破損の危険は再発しません。)
 
 ## PC からの USB プロビジョニング (ポータルでタイプ入力しない)
 
@@ -481,7 +501,9 @@ ASR が空でないテキストを返した場合、Atom は `source: "atom"`、
 <Face HTTP base>/api/operator/response
 ```
 
-Atomic Echo Base はマイクとスピーカーで 1 つの ES8311 コーデックを共有しているため、録音とスピーカー再生は直列化されます。
+Atomic Echo Base はマイクとスピーカーで 1 つの ES8311 コーデックを共有しているため、録音とスピーカー再生は直列化されます。連続 VAD も同じ制約に従い、Atom は接続済み・VAD 有効・PTT 待機中・TTS 再生なしの間だけ 16 kHz PCM フレームをストリームします。PC 側ブリッジは現時点では決定的な RMS エネルギー VAD フォールバックで発話区間を切り、完了した発話を PTT と同じ ASR worker と operator response 経路へ送ります。Silero は後で PC 側 backend として差し替える想定で、AtomS3R 上では動かしません。
+
+最初の連続マイク実装はビルド済みですが、録音/再生の実機挙動は AtomS3R + Atomic Echo Base での確認がまだ必要です。
 
 通常モードのヘルス用エンドポイントはデスクでのデバッグに便利です。
 
@@ -489,7 +511,7 @@ Atomic Echo Base はマイクとスピーカーで 1 つの ES8311 コーデッ�
 http://<atom-ip>/health
 ```
 
-設定された face HTTP/WS URL、ASR 言語、認証の有無、Atom 発の WebSocket が接続済みかを返します。認証トークン自体の値は返しません。
+設定された face HTTP/WS URL、ASR 言語、認証の有無、Atom 発の WebSocket が接続済みか、`continuous_vad_enabled` を返します。認証トークン自体の値は返しません。
 
 PC 側で `MH_FACE_AUTH_TOKEN` を有効にしている場合は、セットアップページにも同じトークンを設定してください。ファームウェアは同一 LAN を想定した初期実装として、これを WebSocket URL の `auth_token` クエリとして付与します。
 
@@ -497,4 +519,4 @@ PC 側で `MH_FACE_AUTH_TOKEN` を有効にしている場合は、セットア�
 
 ## ローカル設定
 
-リポジトリに含まれる `include/headroom_config.example.h` は安全なプレースホルダだけを持ちます。開発専用のデフォルト値を入れたい場合は `include/headroom_config.local.h` を作成してください (git で無視されます)。実行時の設定は NVS/Preferences が存在すればそこから読み込まれ、Atom 上のセットアップポータルから Wi-Fi、サーバ URL、認証トークン、ASR 言語、向きを再書き込みせずに更新できます。
+リポジトリに含まれる `include/headroom_config.example.h` は安全なプレースホルダだけを持ちます。開発専用のデフォルト値を入れたい場合は `include/headroom_config.local.h` を作成してください (git で無視されます)。実行時の設定は NVS/Preferences が存在すればそこから読み込まれ、Atom 上のセットアップポータルから Wi-Fi、サーバ URL、認証トークン、ASR 言語、連続 VAD モード、向きを再書き込みせずに更新できます。
