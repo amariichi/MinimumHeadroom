@@ -10,6 +10,13 @@
 
 This PlatformIO project is the AtomS3R hardware frontend for minimum-headroom.
 
+> **See also — [AtomS3R Voice Guide](../../doc/guides/atoms3r-voice.md#english).**
+> This README is the firmware project itself (build, the WebServer patch,
+> on-device setup portal, gestures, USB provisioning). The Voice Guide covers
+> the hands-free VAD pipeline (RMS vs **Silero**, **IMA-ADPCM**, every tuning
+> knob), **mDNS** + bridge auto-discovery, **browser (esp-web-tools) install**,
+> and the **secret-safe release build** (`scripts/build-release-firmware.sh`).
+
 ## Hardware
 
 This firmware targets the following M5Stack products:
@@ -314,6 +321,13 @@ language, and orientation without reflashing.
 ---
 
 minimum-headroom 用の AtomS3R ハードウェアフロントエンド (PlatformIO プロジェクト) です。
+
+> **関連 — [AtomS3R Voice Guide](../../doc/guides/atoms3r-voice.md#japanese)。**
+> 本 README はファームウェア本体（ビルド、WebServer パッチ、オンデバイスのセットアップ
+> ポータル、ジェスチャ、USB プロビジョニング）に絞っています。ハンズフリー VAD パイプ
+> ライン（RMS / **Silero**、**IMA-ADPCM**、各チューニング）、**mDNS** + bridge 自動発見、
+> **ブラウザ（esp-web-tools）インストール**、**秘密ゲート付き配布ビルド**
+> (`scripts/build-release-firmware.sh`) は Voice Guide を参照してください。
 
 ## ハードウェア
 
