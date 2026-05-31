@@ -62,10 +62,9 @@ and share `index.html`. To install, the user:
 3. clicks **Install** and picks the device's serial port from the browser dialog
    (the port is chosen manually; the chip type is auto-detected).
 
-> **Caveat:** this board requires `--no-stub` for CLI flashing. Whether
-> esp-web-tools (esptool-js) can flash it is **unverified** — test once in Chrome
-> before advertising the browser path; otherwise fall back to the PlatformIO flow
-> above.
+> **Verified on AtomS3R:** esp-web-tools flashes this board from Chrome even
+> though CLI flashing needs `--no-stub`. If a particular board/port misbehaves,
+> the PlatformIO flow above is the fallback.
 
 ### Wi-Fi setup portal (no CLI)
 
@@ -77,6 +76,25 @@ After flashing, configure Wi-Fi and server URLs without any tools:
 3. A captive page opens (or browse to the AP IP, usually `http://192.168.4.1`).
 4. Fill in Wi-Fi SSID/password and the Face HTTP base / WebSocket URL (and optional
    mDNS host, auth token, VAD settings), **Save**, and restart.
+
+**Field reference** — only three fields are mandatory; everything else has a
+working default:
+
+| Field | What to enter | |
+|---|---|---|
+| Wi-Fi SSID / password (#1–#3) | Networks tried in order (#1 first) | **required** |
+| Face HTTP base & WebSocket URL | The PC on port 8765 — `http://<pc>:8765` and `ws://<pc>:8765/ws`. For off-LAN use, point them at a stable address (e.g. a Tailscale IP) | **required** |
+| Auth token | The value of `MH_FACE_AUTH_TOKEN` (blank → the PC returns 401) | **required** |
+| PC mDNS host | e.g. `my-pc.local` — auto-tracks the PC's IP on the home LAN; blank disables it | optional |
+| **Continuous hands-free VAD** (checkbox) | **Check it for hands-free** (the device streams when it hears speech); unchecked = PTT only (long-press to talk). Easy to miss. | optional |
+| Firmware VAD RMS threshold | On-device energy gate, matched to the backend: **RMS (default) → ~0.025**; **Silero → ~0.005** (kept low so the PC's Silero worker still sees marginal frames) | default |
+| VAD audio encoding | `pcm16` (default) or `ima_adpcm` (4:1, for mobile / Silero) | default |
+| Device ID / agent IDs / ASR / TTS / rotation / pose | Sensible defaults — leave as-is unless you need to change them | default |
+
+The VAD **backend** (RMS vs Silero) is a PC-side choice: **RMS is the default**;
+Silero is opt-in (install `silero-vad-worker`, set `MH_ATOM_VAD_BACKEND=silero` —
+see *Backends: RMS vs Silero* below). Set the device-side *Firmware VAD RMS
+threshold* to match (≈0.025 for RMS, ≈0.005 for Silero).
 
 ### Provisioning over USB (RMHCFG)
 
@@ -272,9 +290,9 @@ scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
 3. **Install** を押し、ブラウザのダイアログから端末のシリアルポートを選ぶ（ポートは手動
    選択、チップ種別は自動判定）
 
-> **注意:** このボードは CLI 書き込みで `--no-stub` が必須です。esp-web-tools（esptool-js）
-> で焼けるかは**未検証**——ブラウザ経路を案内する前に一度 Chrome で実機確認を。ダメなら
-> 上記 PlatformIO フローにフォールバックします。
+> **AtomS3R で検証済み:** CLI では `--no-stub` が必須ですが、esp-web-tools は Chrome から
+> このボードを問題なく書き込めました。特定のボード/ポートで不調なら、上記 PlatformIO
+> フローがフォールバックです。
 
 ### Wi-Fi セットアップポータル（CLI 不要）
 
@@ -286,6 +304,24 @@ scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
 3. キャプティブ画面が開きます（または AP の IP、通常 `http://192.168.4.1` を開く）。
 4. Wi-Fi SSID/パスワードと Face HTTP base / WebSocket URL（任意で mDNS host・認証トークン・
    VAD 設定）を入力し、**Save** して再起動。
+
+**項目リファレンス** — 必須は3つだけ。残りは既定のままでOK：
+
+| 項目 | 入れる値 | |
+|---|---|---|
+| Wi-Fi SSID / password（#1〜#3） | 繋ぐネットワーク（上から順に試行） | **必須** |
+| Face HTTP base / WebSocket URL | PC の `:8765` — `http://<pc>:8765` と `ws://<pc>:8765/ws`。屋外も使うなら安定アドレス（例: Tailscale IP）を指定 | **必須** |
+| Auth token | `MH_FACE_AUTH_TOKEN` の値（空だと PC が 401） | **必須** |
+| PC mDNS host | 例 `my-pc.local` — 自宅LANで PC の IP を自動追従。空で無効 | 任意 |
+| **Continuous hands-free VAD**（チェック） | **ハンズフリーにするならチェック**（発話を検出して自動送信）。外すと PTT（長押し）専用。見落とし注意。 | 任意 |
+| Firmware VAD RMS threshold | 端末側エネルギーゲート。バックエンドに合わせる：**RMS（既定）→ ~0.025**／**Silero → ~0.005**（低くして PC の Silero に微弱フレームを渡す） | 既定 |
+| VAD audio encoding | `pcm16`（既定）／`ima_adpcm`（4:1、モバイル・Silero 向け） | 既定 |
+| Device ID / agent ID / ASR / TTS / 回転 / pose | 妥当な既定値。必要が無ければそのまま | 既定 |
+
+VAD **バックエンド**（RMS / Silero）は PC 側の選択で、**既定は RMS**。Silero は opt-in
+（`silero-vad-worker` を導入し `MH_ATOM_VAD_BACKEND=silero`。下の *バックエンド: RMS と
+Silero* 参照）。端末側の *Firmware VAD RMS threshold* はバックエンドに合わせる（RMS≈0.025／
+Silero≈0.005）。
 
 ### USB プロビジョニング（RMHCFG）
 
