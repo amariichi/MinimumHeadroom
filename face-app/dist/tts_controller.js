@@ -8,6 +8,7 @@ const DEFAULT_WORKER_COMMAND = {
   cmd: './scripts/run-tts-worker.sh',
   args: []
 };
+const DEFAULT_KOKORO_VOICE = 'jf_alpha';
 const DEFAULT_QWEN_BOUNDARY_SPEAKER = 'Ono_Anna';
 const QWEN_ENGINE_NAME = 'qwen3-tts-0.6b-customvoice';
 const KANJI_SCRIPT_CLASS = '㐀-䶿一-龯々〆ヵヶ豈-﫿';
@@ -339,11 +340,12 @@ export function createTtsController(options = {}) {
     env: options.workerEnv
   });
   const qwenBoundarySpeaker = normalizeSpeakerOverride(options.qwenBoundarySpeaker) ?? DEFAULT_QWEN_BOUNDARY_SPEAKER;
+  const defaultWorkerVoice = normalizeSpeakerOverride(options.defaultWorkerVoice) ?? DEFAULT_KOKORO_VOICE;
 
   let stopped = false;
   let workerReady = false;
   let workerEngine = 'unknown';
-  let workerVoice = 'af_heart';
+  let workerVoice = defaultWorkerVoice;
   let generation = 0;
   let active = null;
   let activeQueuedAt = null;
@@ -630,7 +632,7 @@ export function createTtsController(options = {}) {
     if (message.type === 'ready') {
       workerReady = true;
       workerEngine = typeof message.engine === 'string' ? message.engine : 'unknown';
-      workerVoice = typeof message.voice === 'string' ? message.voice : 'af_heart';
+      workerVoice = typeof message.voice === 'string' ? message.voice : defaultWorkerVoice;
       const playbackBackend = typeof message.playback_backend === 'string' ? message.playback_backend : 'unknown';
       emitState('-', null, 'worker_ready', {
         voice: workerVoice,

@@ -546,11 +546,18 @@ class WorkerRuntime:
     self.current_task = None
 
 
+def resolve_kokoro_voice() -> str:
+  raw = os.environ.get('MH_KOKORO_VOICE')
+  if raw is None or raw.strip() == '':
+    return 'jf_alpha'
+  return raw.strip()
+
+
 def create_tts_engine() -> TtsEngine:
   engine_name = (os.environ.get('TTS_ENGINE') or 'kokoro').strip().lower()
   if engine_name == 'kokoro':
     model_paths = resolve_model_paths()
-    return KokoroEngine(model_paths=model_paths, voice='af_heart')
+    return KokoroEngine(model_paths=model_paths, voice=resolve_kokoro_voice())
   if engine_name == 'qwen3':
     return Qwen3TtsEngine()
   raise RuntimeError(f'unsupported TTS_ENGINE: {engine_name} (expected kokoro|qwen3)')

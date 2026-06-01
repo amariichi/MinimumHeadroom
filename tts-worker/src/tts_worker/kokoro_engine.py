@@ -56,7 +56,7 @@ def verify_model_files(paths: ModelPaths) -> None:
 
 
 class KokoroEngine:
-  def __init__(self, *, model_paths: ModelPaths, voice: str = 'af_heart') -> None:
+  def __init__(self, *, model_paths: ModelPaths, voice: str = 'jf_alpha') -> None:
     verify_model_files(model_paths)
 
     self.model_paths = model_paths

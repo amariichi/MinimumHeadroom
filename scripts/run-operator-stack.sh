@@ -32,6 +32,7 @@ cd "$ROOT_DIR"
 # the single chokepoint every operator bring-up path passes through, since
 # env exported upstream does not reliably cross the operator tmux allowlist.
 : "${MH_TTS_CHUNK_MAX_CHARS:=64}"
+: "${MH_KOKORO_VOICE:=jf_alpha}"
 # Atom VAD backend selection. 'rms' is the default deterministic energy
 # gate; 'silero' routes frames through silero-vad-worker for ML-based
 # noise-vs-speech classification. The stack only starts the silero worker
@@ -96,6 +97,7 @@ echo "[run-operator-stack] MH_OPERATOR_REALTIME_ASR_WS_URL=${MH_OPERATOR_REALTIM
 echo "[run-operator-stack] MH_STACK_START_REALTIME_ASR=${MH_STACK_START_REALTIME_ASR}"
 echo "[run-operator-stack] MH_STACK_START_MCP=${MH_STACK_START_MCP}"
 echo "[run-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${MH_OPERATOR_FACE_AGENT_ID}"
+echo "[run-operator-stack] MH_KOKORO_VOICE=${MH_KOKORO_VOICE}"
 echo "[run-operator-stack] MH_ATOM_VAD_BACKEND=${MH_ATOM_VAD_BACKEND}"
 echo "[run-operator-stack] MH_SILERO_VAD_BASE_URL=${MH_SILERO_VAD_BASE_URL}"
 
@@ -141,6 +143,7 @@ start_proc "face-app" \
   env FACE_WS_HOST="$FACE_WS_HOST" FACE_WS_PORT="$FACE_WS_PORT" FACE_WS_PATH="$FACE_WS_PATH" \
   FACE_AUDIO_TARGET="$FACE_AUDIO_TARGET" FACE_UI_MODE="$FACE_UI_MODE" FACE_OPERATOR_PANEL_ENABLED="1" MH_OPERATOR_ASR_BASE_URL="$STACK_OPERATOR_ASR_BASE_URL" \
   MH_TTS_CHUNK_MAX_CHARS="$MH_TTS_CHUNK_MAX_CHARS" \
+  MH_KOKORO_VOICE="$MH_KOKORO_VOICE" \
   MH_ATOM_VAD_BACKEND="$MH_ATOM_VAD_BACKEND" \
   MH_SILERO_VAD_BASE_URL="$MH_SILERO_VAD_BASE_URL" \
   MH_OPERATOR_REALTIME_ASR_ENABLED="$MH_OPERATOR_REALTIME_ASR_ENABLED" \

@@ -11,6 +11,7 @@ PROFILE_NAME="default"
 STACK_CMD_SET=0
 FACE_UI_MODE=""
 FACE_AUDIO_TARGET="${MH_FACE_AUDIO_TARGET:-browser}"
+KOKORO_VOICE="${MH_KOKORO_VOICE:-}"
 ASR_BASE_URL=""
 OPERATOR_FACE_AGENT_ID="${MH_OPERATOR_FACE_AGENT_ID:-__operator__}"
 OPERATOR_FACE_AGENT_LABEL="${MH_OPERATOR_FACE_AGENT_LABEL:-Operator}"
@@ -70,6 +71,9 @@ Options:
                             FACE_AUDIO_TARGET override for stack launch
   --asr-base-url <url>      MH_OPERATOR_ASR_BASE_URL override for stack launch
   -h, --help                show this help
+
+Environment:
+  MH_KOKORO_VOICE=<voice> Kokoro voice override, for example jf_alpha or af_heart.
 
 Examples:
   ./scripts/restart-operator-stack-in-place.sh
@@ -217,6 +221,9 @@ fi
 if [[ -n "$FACE_AUDIO_TARGET" ]]; then
   append_env "FACE_AUDIO_TARGET" "$FACE_AUDIO_TARGET"
 fi
+if [[ -n "$KOKORO_VOICE" ]]; then
+  append_env "MH_KOKORO_VOICE" "$KOKORO_VOICE"
+fi
 if [[ -n "$ASR_BASE_URL" ]]; then
   append_env "MH_OPERATOR_ASR_BASE_URL" "$ASR_BASE_URL"
 fi
@@ -234,6 +241,9 @@ echo "[restart-operator-stack] stack pane=${stack_pane}"
 echo "[restart-operator-stack] repo root=${agent_repo_root}"
 echo "[restart-operator-stack] MH_BRIDGE_TMUX_PANE=${agent_pane}"
 echo "[restart-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${OPERATOR_FACE_AGENT_ID}"
+if [[ -n "$KOKORO_VOICE" ]]; then
+  echo "[restart-operator-stack] MH_KOKORO_VOICE=${KOKORO_VOICE}"
+fi
 
 if [[ -n "${TMUX:-}" ]]; then
   tmux select-window -t "${SESSION_NAME}:${WINDOW_NAME}"

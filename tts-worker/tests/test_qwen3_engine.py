@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
 if 'numpy' not in sys.modules:
   sys.modules['numpy'] = types.ModuleType('numpy')
 
+from tts_worker.__main__ import resolve_kokoro_voice
 from tts_worker.qwen3_engine import load_qwen3_config
 
 
@@ -31,5 +32,19 @@ class Qwen3EngineConfigTests(unittest.TestCase):
     self.assertEqual(config.speed, 1.1)
 
 
-if __name__ == '__main__':
+class KokoroVoiceConfigTests(unittest.TestCase):
+  def test_default_kokoro_voice_is_jf_alpha(self) -> None:
+    with patch.dict(os.environ, {}, clear=True):
+      self.assertEqual(resolve_kokoro_voice(), "jf_alpha")
+
+  def test_explicit_kokoro_voice_override_is_preserved(self) -> None:
+    with patch.dict(os.environ, {"MH_KOKORO_VOICE": "af_heart"}, clear=True):
+      self.assertEqual(resolve_kokoro_voice(), "af_heart")
+
+  def test_blank_kokoro_voice_uses_default(self) -> None:
+    with patch.dict(os.environ, {"MH_KOKORO_VOICE": "   "}, clear=True):
+      self.assertEqual(resolve_kokoro_voice(), "jf_alpha")
+
+
+if __name__ == "__main__":
   unittest.main()

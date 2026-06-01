@@ -14,6 +14,7 @@ AGENT_CWD="$CALLER_DIR"
 BRIDGE_TARGET="agent"
 FACE_UI_MODE=""
 FACE_AUDIO_TARGET=""
+KOKORO_VOICE="${MH_KOKORO_VOICE:-}"
 ASR_BASE_URL=""
 OPERATOR_FACE_AGENT_ID="${MH_OPERATOR_FACE_AGENT_ID:-__operator__}"
 OPERATOR_FACE_AGENT_LABEL="${MH_OPERATOR_FACE_AGENT_LABEL:-Operator}"
@@ -132,6 +133,7 @@ Environment:
   ASR_GPU=1                 Run the Parakeet asr-worker on CUDA (sets MH_ASR_DEVICE=cuda
                             in the stack pane so ~/.bashrc's ASR_DEVICE=cpu does not win).
   MH_ASR_DEVICE=<cpu|cuda>  Explicit asr-worker device override; takes precedence over ASR_GPU.
+  MH_KOKORO_VOICE=<voice> Kokoro voice override, for example jf_alpha or af_heart.
 
 Examples:
   ./scripts/run-operator-once.sh
@@ -140,7 +142,7 @@ Examples:
   ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
   ./scripts/run-operator-once.sh --agent-cmd 'bash -l'
   ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
-  ASR_GPU=1 ./scripts/run-operator-once.sh --profile default --audio-target browser
+  ASR_GPU=1 MH_KOKORO_VOICE=af_heart ./scripts/run-operator-once.sh --profile default --audio-target browser
 EOF
 }
 
@@ -349,6 +351,9 @@ fi
 if [[ -n "$FACE_AUDIO_TARGET" ]]; then
   append_env "FACE_AUDIO_TARGET" "$FACE_AUDIO_TARGET"
 fi
+if [[ -n "$KOKORO_VOICE" ]]; then
+  append_env "MH_KOKORO_VOICE" "$KOKORO_VOICE"
+fi
 if [[ -n "$ASR_BASE_URL" ]]; then
   append_env "MH_OPERATOR_ASR_BASE_URL" "$ASR_BASE_URL"
 fi
@@ -370,6 +375,9 @@ echo "[run-operator-once] stack pane=${stack_pane} command=${STACK_CMD}"
 echo "[run-operator-once] MH_BRIDGE_TMUX_PANE=${bridge_pane} (${BRIDGE_TARGET})"
 if [[ -n "$MH_ASR_DEVICE_OVERRIDE" ]]; then
   echo "[run-operator-once] MH_ASR_DEVICE=${MH_ASR_DEVICE_OVERRIDE} (asr-worker will use this device)"
+fi
+if [[ -n "$KOKORO_VOICE" ]]; then
+  echo "[run-operator-once] MH_KOKORO_VOICE=${KOKORO_VOICE}"
 fi
 
 if [[ "$ATTACH_AFTER_START" -eq 0 ]]; then

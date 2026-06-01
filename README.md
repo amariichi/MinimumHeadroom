@@ -205,6 +205,14 @@ sequenceDiagram
 <a id="en-quick-start"></a>
 ## Quick Start
 
+> [!IMPORTANT]
+> **English users: launch with `MH_KOKORO_VOICE=af_heart`.** The default Kokoro
+> voice is `jf_alpha`, which is tuned for Japanese; English sounds noticeably
+> better with `af_heart`. Prefix any startup command with it, for example:
+> `MH_KOKORO_VOICE=af_heart ./scripts/run-operator-once.sh --profile default --audio-target browser`.
+> The Kokoro voice is shared by English and Japanese, so pick the one that
+> matches your primary language.
+
 Choose one startup path depending on your goal.
 Before starting, configure your coding agent for MCP (see [Agent Setup](#en-agent-setup)), set up the agent-specific `AGENTS.md`, and reflect `doc/examples/AGENT_RULES.md` in the agent instructions. If you want a ready-to-paste starting point, use `doc/examples/AGENTS.sample.md` as the template for your project-local `AGENTS.md`.
 
@@ -281,7 +289,7 @@ Then, in another terminal:
 Use this path when you want the simple face UI and signaling, without the full operator panel workflow. `run-face-app.sh` hides the operator panel by default.
 
 - If your coding agent already starts this repository's MCP server from its own MCP client config, do not also run `./scripts/run-mcp-server.sh`.
-- By default, `face-app` starts `tts-worker` for you unless `FACE_TTS_ENABLED=0` is set. The default backend is Kokoro; if the `face-app` process is launched with `TTS_ENGINE=qwen3`, the spawned worker uses the optional Qwen3 path instead.
+- By default, `face-app` starts `tts-worker` for you unless `FACE_TTS_ENABLED=0` is set. The default backend is Kokoro; if the `face-app` process is launched with `TTS_ENGINE=qwen3`, the spawned worker uses the optional Qwen3 path instead. For Kokoro, the voice defaults to `jf_alpha`; set `MH_KOKORO_VOICE=af_heart` or another Kokoro voice id in the launcher environment to override it.
 
 ### Path B: Full Mobile Operator Stack (recommended)
 
@@ -293,7 +301,7 @@ After `./scripts/setup.sh`, recommended one-shot startup:
 
 Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring. Start with `--profile default` or `--profile realtime` unless you specifically want Qwen3 TTS.
 
-- `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. `qwen3` / `qwen3-realtime` profiles work by passing `TTS_ENGINE=qwen3` into that spawned worker path.
+- `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. `qwen3` / `qwen3-realtime` profiles work by passing `TTS_ENGINE=qwen3` into that spawned worker path. For Kokoro profiles, prefix startup with `MH_KOKORO_VOICE=af_heart` or `MH_KOKORO_VOICE=jf_alpha` to choose the shared voice for English and Japanese.
 - `run-operator-once.sh` exports `MH_FACE_AGENT_ID=__operator__` / `MH_FACE_AGENT_LABEL=Operator` for the operator pane, and the integrated operator stack binds its optional MCP server to the same identity. Helper panes get their assigned helper id at spawn time; Docker-based helper commands receive it through `docker exec -e`.
 - The MCP face tools auto-fill `agent_id` from `MH_FACE_AGENT_ID` when their MCP server process has that binding, and reject mismatched explicit ids with remediation guidance. If your MCP client runs a separate unbound server, pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call, using `MH_FACE_AGENT_ID` as the source of truth.
 - `--agent-cmd` controls only the primary operator pane. `MH_AGENT_DEFAULT_CMD` is the helper-agent launch template used by `face-app` when you add helpers later. If that helper template starts with `docker exec`, Minimum Headroom inserts the per-helper `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` with `docker exec -e`; otherwise it prefixes the helper command with `env ...`. See [Operator Stack Guide](doc/guides/operator-stack.md#docker-and-helper-agent-commands) for Docker examples.
@@ -719,6 +727,13 @@ sequenceDiagram
 <a id="ja-quick-start"></a>
 ## クイックスタート
 
+> [!IMPORTANT]
+> **英語が主な言語の方は `MH_KOKORO_VOICE=af_heart` を付けて起動してください。** Kokoro の
+> 既定 voice は日本語向けの `jf_alpha` で、英語は `af_heart` の方が明らかに自然に聞こえます。
+> 任意の起動コマンドの前に付けます。例：
+> `MH_KOKORO_VOICE=af_heart ./scripts/run-operator-once.sh --profile default --audio-target browser`
+> Kokoro voice は英語・日本語で共通なので、主に使う言語に合わせて選んでください。
+
 目的に合わせて起動パスを選んでください。
 開始前に、利用するコーディングエージェントで MCP 設定を行い（[エージェント設定](#ja-agent-setup) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。すぐ使えるひな形が必要なら、`doc/examples/AGENTS.sample.md` を project-local `AGENTS.md` のテンプレートとして使ってください。
 
@@ -793,7 +808,7 @@ token は、face-app・operator bridge・MCP forwarding を行う agent CLI を 
 これは、シンプルな face UI とシグナリングだけを使いたいとき向けです。`run-face-app.sh` は既定で operator panel を隠します。
 
 - 利用中のコーディングエージェントが MCP クライアント設定からこのリポジトリの MCP サーバーを自動起動する場合、`./scripts/run-mcp-server.sh` は二重起動しないでください。
-- 既定では `face-app` が `tts-worker` を子プロセス起動するため、`FACE_TTS_ENABLED=0` にしていない限り別ターミナルでの起動は不要です。既定 backend は Kokoro で、`face-app` 側を `TTS_ENGINE=qwen3` 付きで起動すると任意の Qwen3 worker 経路を使います。
+- 既定では `face-app` が `tts-worker` を子プロセス起動するため、`FACE_TTS_ENABLED=0` にしていない限り別ターミナルでの起動は不要です。既定 backend は Kokoro で、`face-app` 側を `TTS_ENGINE=qwen3` 付きで起動すると任意の Qwen3 worker 経路を使います。Kokoro の voice は既定で `jf_alpha` です。起動環境に `MH_KOKORO_VOICE=af_heart` など Kokoro の voice id を指定すると上書きできます。
 
 ### Path B: フルモバイル Operator Stack（推奨）
 
@@ -805,7 +820,7 @@ token は、face-app・operator bridge・MCP forwarding を行う agent CLI を 
 
 これは、tmux 連携、browser PTT、terminal mirror、隠し復旧、bridge の安全な既定配線まで含む、いちばん実用的な構成です。特に Qwen3 TTS を使いたい理由がなければ、`--profile default` か `--profile realtime` から始めてください。
 
-- `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`qwen3` / `qwen3-realtime` profile は、この子起動 worker に `TTS_ENGINE=qwen3` を渡して切り替えます。
+- `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`qwen3` / `qwen3-realtime` profile は、この子起動 worker に `TTS_ENGINE=qwen3` を渡して切り替えます。Kokoro profile では `MH_KOKORO_VOICE=af_heart` または `MH_KOKORO_VOICE=jf_alpha` を起動コマンドの前に付けると、英語・日本語で共通利用する voice を選べます。
 - `run-operator-once.sh` は operator pane に `MH_FACE_AGENT_ID=__operator__` / `MH_FACE_AGENT_LABEL=Operator` を export し、統合 operator stack の任意起動 MCP server も同じ identity に束縛します。helper pane は spawn 時に割り当てられた helper id を受け取り、Docker 経由の helper command には `docker exec -e` でコンテナ内へ渡されます。
 - MCP face tools は MCP server process に `MH_FACE_AGENT_ID` がある場合、`agent_id` を自動補完し、明示された id が束縛値と違う場合は対応方法つきで拒否します。MCP client が別の未束縛 server を起動する構成では、`MH_FACE_AGENT_ID` を正として `face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。
 - `--agent-cmd` は primary operator pane だけを指定します。`MH_AGENT_DEFAULT_CMD` は、あとで helper を追加するときに `face-app` が使う helper-agent 起動テンプレートです。この helper テンプレートが `docker exec` で始まる場合、Minimum Headroom は helper ごとの `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` を `docker exec -e` で挿入します。Docker でない場合は `env ...` を command の前に付けます。Docker の具体例は[Operator Stack Guide](doc/guides/operator-stack.md#ja-docker-and-helper-agent-commands)を参照してください。

@@ -126,11 +126,11 @@ cat > "$OUT/manifest.json" <<JSON
 }
 JSON
 
-# A ready-to-host esp-web-tools install page (loads the library from a CDN; no
-# vendored third-party code). Web Serial requires Chrome/Edge over HTTPS (or
-# localhost). NOTE: this board needs `--no-stub` for CLI flashing; whether
-# esptool-js (used by esp-web-tools) flashes it is UNVERIFIED — test in Chrome
-# before publishing the page.
+# An esp-web-tools install page (loads the library from a CDN; no vendored
+# third-party code). Web Serial requires Chrome/Edge over http://localhost or
+# HTTPS — a double-clicked file:// page can't fetch the manifest/.bin. NOTE:
+# this board needs `--no-stub` for CLI flashing; whether esptool-js (used by
+# esp-web-tools) flashes it is UNVERIFIED — test in Chrome first.
 cat > "$OUT/index.html" <<'HTML'
 <!doctype html>
 <html lang="en">
@@ -157,7 +157,8 @@ echo ""
 echo ">>> DONE — secret-safe artifacts (v${VERSION}) in: $OUT"
 ls -la "$OUT"
 echo ""
-echo "To publish browser install: host the whole $OUT folder over HTTPS"
-echo "(GitHub Pages, Netlify, …) and share index.html. It loads esp-web-tools from a CDN."
-echo "End users flash, then provision their own Wi-Fi/URLs/token (setup portal or scripts/atoms3r-provision.mjs)."
+echo "To flash from the browser: serve this folder on localhost, then open it in Chrome/Edge:"
+echo "  cd $OUT && python3 -m http.server 8099   # then open http://localhost:8099/"
+echo "Web Serial needs http://localhost or HTTPS (a file:// page can't fetch the manifest/.bin)."
+echo "After flashing, provision Wi-Fi/URLs/token (setup portal or scripts/atoms3r-provision.mjs)."
 echo "NOTE: verify esp-web-tools can flash this board (it needs --no-stub) in Chrome before relying on the page."
