@@ -41,9 +41,9 @@ disable it.
 ### Building a release image (maintainers)
 
 The normal build bakes `headroom_config.local.h` (your Wi-Fi / auth token / PC
-URLs) into the binary as string literals — fine for your own device, **not safe
-to publish**. To produce a distributable image, build with the placeholder
-example config instead:
+URLs) into the binary as string literals — fine for your own device, but
+**don't commit or share that binary**. To get a secret-free bundle for the
+browser installer, build with the placeholder example config instead:
 
 ```bash
 scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
@@ -52,18 +52,27 @@ scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
 It forces the example config, **fails the build if any real value from your
 `local.h` leaked** into the binary, and stages esp-web-tools artifacts
 (`bootloader.bin` / `partitions.bin` / `boot_app0.bin` / `firmware.bin`),
-`manifest.json`, and a ready-to-host `index.html`. Your real Wi-Fi/token live in
-the device's NVS, not in these app artifacts, so the published image carries no
-secrets; users provision their own after flashing.
+`manifest.json`, and an `index.html` install page. Your real Wi-Fi/token live in
+the device's NVS, not in these app artifacts, so the bundle carries no secrets;
+you provision them on the device after flashing (see the setup portal below).
 
-### Browser install (end users, no toolchain)
+### Browser install (no toolchain)
 
-Host the `dist/atoms3r-firmware/` folder over **HTTPS** (GitHub Pages, Netlify, …)
-and share `index.html`. To install, the user:
+Serve the `dist/atoms3r-firmware/` folder on localhost and open it in a Chromium
+browser. esp-web-tools `fetch()`es the `manifest.json` and `.bin` files, so a
+double-clicked `file://` page does **not** work — it needs `http://localhost`
+(or HTTPS):
 
-1. opens the page in **Chrome or Edge** (desktop — Web Serial is Chromium-only),
-2. connects the AtomS3R over USB-C,
-3. clicks **Install** and picks the device's serial port from the browser dialog
+```bash
+cd dist/atoms3r-firmware
+python3 -m http.server 8099        # any free port
+```
+
+Then:
+
+1. open `http://localhost:8099/` in **Chrome or Edge** (desktop — Web Serial is Chromium-only),
+2. connect the AtomS3R over USB-C,
+3. click **Install** and pick the device's serial port from the browser dialog
    (the port is chosen manually; the chip type is auto-detected).
 
 > **Verified on AtomS3R:** esp-web-tools flashes this board from Chrome even
@@ -275,8 +284,9 @@ NVS 設定（Wi-Fi・URL・VAD 設定）は再書き込みでも保持されま�
 ### リリース用イメージのビルド（メンテナ向け）
 
 通常ビルドは `headroom_config.local.h`（あなたの Wi-Fi・認証トークン・PC の URL）を文字列
-としてバイナリに焼き込みます。自分の端末用なら問題ありませんが、**そのまま公開するのは
-危険**です。配布用は、プレースホルダの example 設定でビルドします：
+としてバイナリに焼き込みます。自分の端末用なら問題ありませんが、**そのバイナリを commit
+したり共有したりしないでください**。ブラウザインストール用の秘密なしバンドルは、プレース
+ホルダの example 設定でビルドします：
 
 ```bash
 scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
@@ -284,16 +294,24 @@ scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
 
 このスクリプトは example 設定を強制し、**`local.h` の実値が1つでもバイナリに漏れていれば
 ビルドを fail で止め**、esp-web-tools 用の成果物（`bootloader.bin`／`partitions.bin`／
-`boot_app0.bin`／`firmware.bin`）・`manifest.json`・すぐ置ける `index.html` を出力します。
-実 Wi-Fi/トークンは端末の NVS にあり、これら app 成果物には含まれないので、公開イメージに
-秘密は入りません（ユーザーは書き込み後に各自 provision）。
+`boot_app0.bin`／`firmware.bin`）・`manifest.json`・`index.html` インストールページを出力します。
+実 Wi-Fi/トークンは端末の NVS にあり、これら app 成果物には含まれないので、バンドルに
+秘密は入りません（書き込み後に端末側で provision。下記セットアップポータル参照）。
 
-### ブラウザ簡易インストール（一般ユーザー・ツール不要）
+### ブラウザ簡易インストール（ツール不要）
 
-`dist/atoms3r-firmware/` フォルダを **HTTPS** で公開（GitHub Pages / Netlify 等）し、
-`index.html` を案内します。ユーザーの手順：
+`dist/atoms3r-firmware/` フォルダを localhost で配信し、Chromium 系ブラウザで開きます。
+esp-web-tools は `manifest.json` と `.bin` を `fetch()` するため、`file://`（index.html を
+ダブルクリック）では動かず、`http://localhost`（または HTTPS）が必要です：
 
-1. **Chrome か Edge**（デスクトップ。Web Serial は Chromium のみ）でページを開く
+```bash
+cd dist/atoms3r-firmware
+python3 -m http.server 8099        # 空いているポートなら何でも可
+```
+
+そのうえで：
+
+1. **Chrome か Edge**（デスクトップ。Web Serial は Chromium のみ）で `http://localhost:8099/` を開く
 2. AtomS3R を USB-C で接続
 3. **Install** を押し、ブラウザのダイアログから端末のシリアルポートを選ぶ（ポートは手動
    選択、チップ種別は自動判定）
