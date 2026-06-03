@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createDoubleTapTracker, shouldIgnoreToggleTarget } from '../../face-app/public/gesture_controls.js';
+import { createDoubleTapTracker, shouldIgnoreToggleTarget, shouldPreventPageZoomGesture } from '../../face-app/public/gesture_controls.js';
 
 test('shouldIgnoreToggleTarget returns true for interactive descendants', () => {
   const target = {
@@ -38,4 +38,38 @@ test('createDoubleTapTracker rejects taps that are too slow or too far', () => {
   const trackTapDistance = createDoubleTapTracker({ maxIntervalMs: 300, maxDistancePx: 20 });
   assert.equal(trackTapDistance(2_000, 10, 10), false);
   assert.equal(trackTapDistance(2_200, 40, 45), false);
+});
+
+function createTarget({ insideMirror = false } = {}) {
+  return {
+    closest(selector) {
+      return insideMirror && selector === '.operator-mirror' ? {} : null;
+    }
+  };
+}
+
+test('shouldPreventPageZoomGesture blocks Safari gesture events outside the mirror', () => {
+  assert.equal(
+    shouldPreventPageZoomGesture({ type: 'gesturestart', target: createTarget() }),
+    true
+  );
+  assert.equal(
+    shouldPreventPageZoomGesture({ type: 'gesturechange', target: createTarget({ insideMirror: true }) }),
+    true
+  );
+});
+
+test('shouldPreventPageZoomGesture blocks two-finger touch outside the mirror only', () => {
+  assert.equal(
+    shouldPreventPageZoomGesture({ type: 'touchmove', target: createTarget(), touches: [{}, {}] }),
+    true
+  );
+  assert.equal(
+    shouldPreventPageZoomGesture({ type: 'touchmove', target: createTarget({ insideMirror: true }), touches: [{}, {}] }),
+    false
+  );
+  assert.equal(
+    shouldPreventPageZoomGesture({ type: 'touchmove', target: createTarget(), touches: [{}] }),
+    false
+  );
 });
