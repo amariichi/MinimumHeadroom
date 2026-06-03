@@ -8,7 +8,7 @@ import {
   validateFeatureAnchors,
   validateFeatureDepth
 } from './state_engine.js';
-import { createDoubleTapTracker, shouldIgnoreToggleTarget } from './gesture_controls.js';
+import { createDoubleTapTracker, shouldIgnoreToggleTarget, shouldPreventPageZoomGesture } from './gesture_controls.js';
 import { createInitialOperatorUiState, deriveOperatorUiFlags, reduceOperatorUiState } from './operator_ui_state.js';
 import { isDefaultAnsiStyle, parseAnsiRuns } from './operator_ansi.js';
 import { getOperatorRealtimeAsrSuspicion, resolveOperatorRealtimeAsrFinalText, shouldAcceptOperatorBatchFallbackResult } from './operator_asr_text.js';
@@ -5234,6 +5234,19 @@ function handleStageDoubleClick(event) {
   togglePanelsVisible();
 }
 
+function handleDocumentPageZoomGesture(event) {
+  if (shouldPreventPageZoomGesture(event)) {
+    event.preventDefault();
+  }
+}
+
+function installPageZoomGuards() {
+  document.addEventListener('gesturestart', handleDocumentPageZoomGesture, { capture: true, passive: false });
+  document.addEventListener('gesturechange', handleDocumentPageZoomGesture, { capture: true, passive: false });
+  document.addEventListener('gestureend', handleDocumentPageZoomGesture, { capture: true, passive: false });
+  document.addEventListener('touchmove', handleDocumentPageZoomGesture, { capture: true, passive: false });
+}
+
 function installGestureShortcuts() {
   if (!stageEl) {
     return;
@@ -5879,6 +5892,7 @@ async function bootstrap() {
 
   await installLookingGlassPolyfill();
   mountXrButton();
+  installPageZoomGuards();
   installGestureShortcuts();
   installAudioUnlockHooks();
   installAudioReplayButton();

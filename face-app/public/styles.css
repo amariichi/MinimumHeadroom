@@ -1218,9 +1218,13 @@ body.ui-mode-mobile .operator-text-card {
 
 body.ui-mode-mobile .operator-text-input {
   min-height: 28px;
-  font-size: 0.86rem;
+  font-size: 16px;
   line-height: 1.32;
   padding: 4px 7px;
+}
+
+body.ui-mode-mobile .agent-dashboard-field > input {
+  font-size: 16px;
 }
 
 body.ui-mode-mobile .operator-status {
