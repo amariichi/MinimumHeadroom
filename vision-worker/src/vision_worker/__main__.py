@@ -53,6 +53,7 @@ def _run_replay(loop: bool) -> None:
             pipeline.process_frame(frame_jpeg)
     except KeyboardInterrupt:
         pass
+    pipeline.flush()  # commit any voting window left open at end of stream
 
     print(f"[vision-worker] pipeline {pipeline.stats.as_dict()}")
     print(f"[vision-worker] db {db.counts()}")

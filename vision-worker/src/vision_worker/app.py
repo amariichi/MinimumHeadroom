@@ -110,6 +110,16 @@ def create_app() -> FastAPI:
         record = db.latest()
         return {"changed": True, **(record or obs.as_dict())}
 
+    @app.post("/flush")
+    def flush() -> dict:
+        """Commit any open temporal-voting window (useful when VISION_VOTE_K > 1
+        and frames arrive one at a time over /ingest)."""
+        obs = pipeline.flush()
+        if obs is None:
+            return {"flushed": False}
+        record = db.latest()
+        return {"flushed": True, **(record or obs.as_dict())}
+
     @app.post("/watches")
     def add_watch(watch: WatchIn) -> dict:
         entry = {"name": watch.name, "rule": watch.rule, "kind": watch.kind}

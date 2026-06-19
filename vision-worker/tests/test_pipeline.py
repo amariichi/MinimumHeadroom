@@ -86,3 +86,72 @@ def test_scene_frames_route_as_non_text(tmp_path, make_scene):
     latest = db.latest()
     assert latest["is_text"] is False
     assert latest["ocr_full"] == ""
+
+
+class _ScriptedGate:
+    """Gate returning a preset changed/steady sequence (for voting tests)."""
+
+    def __init__(self, changes):
+        self.changes = list(changes)
+        self.i = 0
+
+    def is_changed(self, frame_jpeg: bytes) -> bool:
+        c = self.changes[self.i]
+        self.i += 1
+        return c
+
+    @property
+    def last_hash_hex(self) -> str:
+        return f"h{self.i}"
+
+
+class _ScriptedModel:
+    """Model returning preset (ocr, is_text) observations in order."""
+
+    name = "scripted"
+
+    def __init__(self, scripted):
+        self.scripted = list(scripted)
+        self.i = 0
+
+    def observe(self, frame_jpeg: bytes, prev):
+        ocr, is_text = self.scripted[self.i]
+        self.i += 1
+        return Observation(
+            is_text=is_text,
+            ocr_full=ocr if is_text else "",
+            overview="document" if is_text else ocr,
+            change_from_prev="c",
+            model=self.name,
+        )
+
+
+def test_voting_reconciles_a_steady_window(tmp_path, make_frame):
+    db = VisionDB(str(tmp_path / "v.db"))
+    store = FrameStore(str(tmp_path / "cache"))
+    gate = _ScriptedGate([True, False, False])  # one change, then steady
+    model = _ScriptedModel(
+        [
+            ("Problem 12 solve for x", True),
+            ("Problem 12 solve for x", True),
+            ("Problrm l2 zolve fnr x", True),  # outlier voted down
+        ]
+    )
+    pipeline = Pipeline(db, store, gate, model, vote_k=3)
+    for _ in range(3):
+        pipeline.process_frame(make_frame(1))
+    assert db.counts()["observations"] == 1
+    assert db.latest()["ocr_full"] == "Problem 12 solve for x"
+    assert pipeline.stats.observations_written == 1
+
+
+def test_change_before_k_flushes_partial_window(tmp_path, make_frame):
+    db = VisionDB(str(tmp_path / "v.db"))
+    store = FrameStore(str(tmp_path / "cache"))
+    gate = _ScriptedGate([True, True])  # second frame is a new scene
+    model = _ScriptedModel([("scene one here", False), ("scene two there", False)])
+    pipeline = Pipeline(db, store, gate, model, vote_k=3)
+    pipeline.process_frame(make_frame(1))  # opens window A
+    pipeline.process_frame(make_frame(2))  # change -> commits A, opens B
+    pipeline.flush()  # commits B at end of stream
+    assert db.counts()["observations"] == 2
