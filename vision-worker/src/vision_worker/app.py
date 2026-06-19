@@ -16,19 +16,24 @@ Stable endpoints (consumed by the agent skill and the alert layer):
 from __future__ import annotations
 
 import os
+import threading
 from typing import Literal
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
 from .alerts import build_alert_sink, make_alert_text
+from .capture import build_capture_source
 from .config import load_settings
 from .db import VisionDB
 from .model_client import build_model_client
+from .perception import PerceptionLoop, decide_start
 from .pipeline import build_pipeline
 from .store import FrameStore
+from .vram import free_vram_mb
+from .vram import model_healthy as vram_model_healthy
 from .watches import Watch, WatchRegistry
 
 #: Surfaced anywhere a user might mistake this for a safety device.
@@ -59,11 +64,20 @@ def create_app() -> FastAPI:
 
     pipeline = build_pipeline(settings, db, store, model_client, on_observation=_on_observation)
 
+    pipeline_lock = threading.Lock()
+    capture_source = build_capture_source(settings)
+    perception = (
+        PerceptionLoop(pipeline, capture_source, settings.capture_interval_ms, pipeline_lock)
+        if capture_source is not None
+        else None
+    )
+
     app = FastAPI(title="vision-worker", version=__version__)
     app.state.settings = settings
     app.state.db = db
     app.state.pipeline = pipeline
     app.state.watches = registry
+    app.state.perception = perception
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -113,7 +127,8 @@ def create_app() -> FastAPI:
         data = await image.read()
         if not data:
             raise HTTPException(status_code=400, detail="empty upload")
-        obs = pipeline.process_frame(data)
+        with pipeline_lock:
+            obs = pipeline.process_frame(data)
         if obs is None:
             return {"changed": False}
         record = db.latest()
@@ -123,11 +138,87 @@ def create_app() -> FastAPI:
     def flush() -> dict:
         """Commit any open temporal-voting window (useful when VISION_VOTE_K > 1
         and frames arrive one at a time over /ingest)."""
-        obs = pipeline.flush()
+        with pipeline_lock:
+            obs = pipeline.flush()
         if obs is None:
             return {"flushed": False}
         record = db.latest()
         return {"flushed": True, **(record or obs.as_dict())}
+
+    @app.post("/capture")
+    def capture(full: int = 0, store: int = 0):
+        """Mode A (on-demand): grab one fresh frame now and return the JPEG so the
+        agent can read it with its own vision. No model/GPU is used unless
+        store=1. `full` (full-resolution) is honored once the M12 camera is wired
+        (M3)."""
+        if capture_source is None:
+            raise HTTPException(status_code=503, detail="no camera configured (set VISION_CAMERA_URL)")
+        try:
+            frame = capture_source.capture()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"camera capture failed: {exc}") from exc
+        if not frame:
+            raise HTTPException(status_code=503, detail="camera returned no frame")
+        if store:
+            with pipeline_lock:
+                pipeline.process_frame(frame)
+        return Response(content=frame, media_type="image/jpeg")
+
+    @app.post("/perception/start")
+    def perception_start() -> dict:
+        """Mode B (ambient watching): start the continuous loop. Gated by the
+        prohibition lock and by free VRAM; the worker never stops another process
+        itself — on a conflict it reports so the agent can confirm with the user."""
+        if perception is None:
+            return {"started": False, "reason": "no_camera"}
+        if perception.is_running():
+            return {"started": True, "reason": "already_running"}
+        backend = settings.model_backend
+        healthy = vram_model_healthy(settings.model_url) if backend == "diffusiongemma" else True
+        decision = decide_start(
+            locked=settings.perception_lock,
+            backend=backend,
+            model_is_healthy=healthy,
+            free_vram_mb=free_vram_mb(),
+            needed_vram_mb=settings.model_vram_mb,
+        )
+        if not decision.get("can_start"):
+            return {"started": False, **decision, "disclaimer": DISCLAIMER}
+        perception.start()
+        return {"started": True, "reason": "ok"}
+
+    @app.post("/perception/stop")
+    def perception_stop() -> dict:
+        if perception is not None:
+            perception.stop()
+        return {"running": False}
+
+    @app.get("/perception/status")
+    def perception_status() -> dict:
+        running = perception.is_running() if perception is not None else False
+        backend = settings.model_backend
+        healthy = vram_model_healthy(settings.model_url) if backend == "diffusiongemma" else True
+        free = free_vram_mb()
+        if settings.perception_lock:
+            capability = "locked"
+        elif running:
+            capability = "running"
+        elif backend != "diffusiongemma" or healthy:
+            capability = "available"
+        elif free is not None and free >= settings.model_vram_mb:
+            capability = "needs_model_start"
+        else:
+            capability = "needs_vram"
+        return {
+            "running": running,
+            "locked": settings.perception_lock,
+            "camera_configured": capture_source is not None,
+            "model_backend": backend,
+            "model_healthy": healthy,
+            "free_vram_mb": free,
+            "needed_vram_mb": settings.model_vram_mb,
+            "capability": capability,
+        }
 
     @app.post("/watches")
     def add_watch(watch: WatchIn) -> dict:

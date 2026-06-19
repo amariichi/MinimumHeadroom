@@ -35,12 +35,16 @@ curl -s "$BASE/healthz"
 ## Endpoints
 
 ```bash
-curl -s "$BASE/latest"            # most recent observation (incl. frame_id)
+curl -s -X POST "$BASE/capture" -o /tmp/now.jpg   # Mode A: grab ONE fresh frame now (no GPU)
+curl -s "$BASE/latest"            # most recent stored observation (incl. frame_id)
 curl -s "$BASE/previous"          # the one before that
 curl -s "$BASE/diffs?n=50"        # rolling window of recent change observations
 curl -s "$BASE/search?q=problem"  # substring search over OCR text + overview
-curl -s "$BASE/frame/12" -o /tmp/frame.jpg   # original full-resolution JPEG by frame_id
+curl -s "$BASE/frame/12" -o /tmp/frame.jpg   # original full-resolution stored JPEG by id
 curl -s "$BASE/metrics"           # counts + pipeline stats
+curl -s -X POST "$BASE/perception/start"   # Mode B: start continuous watching (gated; see below)
+curl -s -X POST "$BASE/perception/stop"    # Mode B: stop continuous watching
+curl -s "$BASE/perception/status"          # running? locked? capability?
 ```
 
 Each observation looks like:
@@ -53,39 +57,63 @@ Each observation looks like:
 
 `low_confidence: true` means treat the text as especially unreliable — fetch the frame.
 
+## Two ways to use the camera
+
+- **Mode A — on-demand (default).** The user asks about what they are pointing
+  at right now ("read this", "explain problem 14"). Grab one fresh frame and read
+  it yourself. No continuous loop, no GPU; the camera only "looks" when asked.
+- **Mode B — continuous watching.** Ambient monitoring ("tell me if you see a red
+  light"). Start a background loop. Needs the GPU model and is gated (see below).
+
 ## Recipes
 
-**"What is the camera seeing right now?"**
+**"Can you read problem 14 / explain what I'm pointing at?"** (Mode A — primary)
 
 ```bash
-curl -s "$BASE/latest"
+curl -s -X POST "$BASE/capture?full=1" -o /tmp/now.jpg
 ```
-Answer from `overview` (and `ocr_full` for a quick gist).
+Then **read `/tmp/now.jpg` with your own vision** and answer from the actual
+image. This is the most accurate path; do not rely on stored OCR text.
 
-**"Explain how to solve problem 12 in this workbook."** (accuracy-sensitive)
+**"What is the camera seeing right now?"** (quick, if a loop is already running)
 
 ```bash
-# 1) locate the frame
-curl -s "$BASE/search?q=12"        # or /latest if it's what's in view now
-# 2) fetch the full-resolution frame for the chosen frame_id
-curl -s "$BASE/frame/<frame_id>" -o /tmp/vision_frame.jpg
+curl -s "$BASE/latest"     # otherwise use /capture and look yourself
 ```
-Then **read `/tmp/vision_frame.jpg` with your own vision** and explain from the actual image — not from `ocr_full`.
 
-**"What has changed recently?"**
+**"What has changed recently?"** (needs Mode B running)
 
 ```bash
-curl -s "$BASE/diffs?n=50"
+curl -s "$BASE/diffs?n=50"     # summarize change_from_prev, newest first
 ```
-Summarize the `change_from_prev` entries (newest first).
 
-**"Tell me if you see a red light."** (register a watch — alerting itself is delivered by the worker, M5)
+**"Tell me if you see a red light." / "Watch the door."** (Mode B)
 
 ```bash
 curl -s -X POST "$BASE/watches" -H 'Content-Type: application/json' \
   -d '{"name":"red light","rule":"red","kind":"keyword"}'
+curl -s -X POST "$BASE/perception/start"
 ```
-Relay the returned safety disclaimer to the user.
+Relay the returned safety disclaimer. **"Stop watching"** → `POST /perception/stop`.
+**"Are you watching?"** → `GET /perception/status`.
+
+## Controlling Mode B (the gating policy)
+
+`POST /perception/start` returns `started: true/false`. When false, `reason`
+tells you what to do — relay it to the user, and never silently stop another
+program:
+
+- `locked` — continuous watching is disabled by policy; only Mode A works.
+- `needs_model_start` — the model is not running but there is enough free GPU
+  memory to start it without displacing anything. Ask the user, then run
+  `./scripts/run-vllm-diffusiongemma.sh`.
+- `insufficient_vram` — starting the model would require freeing the GPU (i.e.
+  stopping the other local LLM). **Confirm with the user first.**
+- `no_camera` — no camera is configured.
+
+`GET /perception/status` reports `capability` (`available` / `running` /
+`locked` / `needs_model_start` / `needs_vram`) so you can explain the current
+state before acting.
 
 ## Notes
 

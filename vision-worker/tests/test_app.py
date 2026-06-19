@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi.testclient import TestClient
 
 
@@ -53,3 +55,50 @@ def test_watch_registration_includes_disclaimer(tmp_path, monkeypatch):
     body = resp.json()
     assert body["active"] == 1
     assert "safety" in body["disclaimer"].lower()
+
+
+def _fixtures_dir() -> str:
+    return os.path.join(os.path.dirname(__file__), "fixtures", "frames")
+
+
+def test_capture_returns_jpeg(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_FRAME_DIR", _fixtures_dir())
+    client = _client(tmp_path, monkeypatch)
+    resp = client.post("/capture")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/jpeg"
+    assert len(resp.content) > 0
+
+
+def test_capture_503_without_camera(tmp_path, monkeypatch):
+    monkeypatch.delenv("VISION_FRAME_DIR", raising=False)
+    monkeypatch.delenv("VISION_CAMERA_URL", raising=False)
+    client = _client(tmp_path, monkeypatch)
+    assert client.post("/capture").status_code == 503
+
+
+def test_perception_status_available_with_mock_backend(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_FRAME_DIR", _fixtures_dir())
+    client = _client(tmp_path, monkeypatch)
+    body = client.get("/perception/status").json()
+    assert body["camera_configured"] is True
+    assert body["locked"] is False
+    assert body["capability"] == "available"  # mock backend needs no GPU
+
+
+def test_perception_start_stop_with_mock_backend(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_FRAME_DIR", _fixtures_dir())
+    client = _client(tmp_path, monkeypatch)
+    assert client.post("/perception/start").json()["started"] is True
+    client.post("/perception/stop")
+    assert client.get("/perception/status").json()["running"] is False
+
+
+def test_perception_locked_refuses(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_FRAME_DIR", _fixtures_dir())
+    monkeypatch.setenv("VISION_PERCEPTION_LOCK", "1")
+    client = _client(tmp_path, monkeypatch)
+    started = client.post("/perception/start").json()
+    assert started["started"] is False
+    assert started["reason"] == "locked"
+    assert client.get("/perception/status").json()["capability"] == "locked"

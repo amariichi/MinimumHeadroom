@@ -58,6 +58,8 @@ class Settings:
     thumb_max: int
     alert_enabled: bool
     alert_webhook: str | None
+    perception_lock: bool
+    model_vram_mb: int
 
 
 def load_settings() -> Settings:
@@ -87,4 +89,6 @@ def load_settings() -> Settings:
         thumb_max=_int("VISION_THUMB_MAX", 256),
         alert_enabled=_bool("VISION_ALERT_ENABLED", False),
         alert_webhook=os.getenv("VISION_ALERT_WEBHOOK") or None,
+        perception_lock=_bool("VISION_PERCEPTION_LOCK", False),
+        model_vram_mb=_int("VISION_MODEL_VRAM_MB", 24000),
     )
