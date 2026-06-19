@@ -56,6 +56,8 @@ class Settings:
     gate_pixeldiff: float
     steady_frames: int
     thumb_max: int
+    alert_enabled: bool
+    alert_webhook: str | None
 
 
 def load_settings() -> Settings:
@@ -83,4 +85,6 @@ def load_settings() -> Settings:
         gate_pixeldiff=_float("VISION_GATE_PIXELDIFF", 0.06),
         steady_frames=_int("VISION_STEADY_FRAMES", 2),
         thumb_max=_int("VISION_THUMB_MAX", 256),
+        alert_enabled=_bool("VISION_ALERT_ENABLED", False),
+        alert_webhook=os.getenv("VISION_ALERT_WEBHOOK") or None,
     )

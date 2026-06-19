@@ -23,11 +23,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
+from .alerts import build_alert_sink, make_alert_text
 from .config import load_settings
 from .db import VisionDB
 from .model_client import build_model_client
 from .pipeline import build_pipeline
 from .store import FrameStore
+from .watches import Watch, WatchRegistry
 
 #: Surfaced anywhere a user might mistake this for a safety device.
 DISCLAIMER = (
@@ -48,13 +50,20 @@ def create_app() -> FastAPI:
     db = VisionDB(settings.db_path)
     store = FrameStore(settings.cache_dir, thumb_max=settings.thumb_max)
     model_client = build_model_client(settings)
-    pipeline = build_pipeline(settings, db, store, model_client)
+    registry = WatchRegistry()
+    sink = build_alert_sink(settings)
+
+    def _on_observation(obs) -> None:
+        for fired in registry.evaluate(obs):
+            sink.notify(make_alert_text(fired, obs), fired.name)
+
+    pipeline = build_pipeline(settings, db, store, model_client, on_observation=_on_observation)
 
     app = FastAPI(title="vision-worker", version=__version__)
     app.state.settings = settings
     app.state.db = db
     app.state.pipeline = pipeline
-    app.state.watches = []
+    app.state.watches = registry
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -122,16 +131,15 @@ def create_app() -> FastAPI:
 
     @app.post("/watches")
     def add_watch(watch: WatchIn) -> dict:
-        entry = {"name": watch.name, "rule": watch.rule, "kind": watch.kind}
-        app.state.watches.append(entry)
+        registry.add(Watch(name=watch.name, rule=watch.rule, kind=watch.kind))
         return {
-            "registered": entry,
-            "active": len(app.state.watches),
+            "registered": {"name": watch.name, "rule": watch.rule, "kind": watch.kind},
+            "active": len(registry),
             "disclaimer": DISCLAIMER,
         }
 
     @app.get("/watches")
     def list_watches() -> dict:
-        return {"watches": app.state.watches, "disclaimer": DISCLAIMER}
+        return {"watches": registry.list(), "disclaimer": DISCLAIMER}
 
     return app

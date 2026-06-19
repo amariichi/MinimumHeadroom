@@ -155,3 +155,13 @@ def test_change_before_k_flushes_partial_window(tmp_path, make_frame):
     pipeline.process_frame(make_frame(2))  # change -> commits A, opens B
     pipeline.flush()  # commits B at end of stream
     assert db.counts()["observations"] == 2
+
+
+def test_on_observation_callback_fires_on_commit(tmp_path, make_frame):
+    db = VisionDB(str(tmp_path / "v.db"))
+    store = FrameStore(str(tmp_path / "cache"))
+    seen = []
+    pipeline = Pipeline(db, store, ChangeGate(), MockModelClient(), on_observation=seen.append)
+    pipeline.process_frame(make_frame(0x0F0F))
+    assert len(seen) == 1
+    assert seen[0].overview.startswith("text document")

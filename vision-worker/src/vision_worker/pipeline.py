@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Callable
 
 from . import dedup, vote
 from .db import VisionDB
@@ -53,6 +54,7 @@ class Pipeline:
         max_changes: int = 50,
         dedup_threshold: float = 0.92,
         vote_k: int = 1,
+        on_observation: Callable[[Observation], None] | None = None,
     ) -> None:
         self.db = db
         self.store = store
@@ -61,6 +63,7 @@ class Pipeline:
         self.max_changes = max_changes
         self.dedup_threshold = dedup_threshold
         self.vote_k = max(1, vote_k)
+        self.on_observation = on_observation
         self.stats = PipelineStats()
         self._prev: PrevState | None = None
         # Open voting window for the current not-yet-committed scene:
@@ -87,6 +90,8 @@ class Pipeline:
         for removed_full, removed_thumb in self.db.prune(self.max_changes):
             self.store.remove(removed_full, removed_thumb)
         self.stats.observations_written += 1
+        if self.on_observation is not None:
+            self.on_observation(obs)
         return obs
 
     def flush(self) -> Observation | None:
@@ -125,7 +130,7 @@ class Pipeline:
         return None
 
 
-def build_pipeline(settings, db, store, model_client) -> Pipeline:
+def build_pipeline(settings, db, store, model_client, on_observation=None) -> Pipeline:
     """Construct a Pipeline with a gate configured from settings."""
     gate = ChangeGate(
         hamming_threshold=settings.gate_hamming,
@@ -139,4 +144,5 @@ def build_pipeline(settings, db, store, model_client) -> Pipeline:
         model_client=model_client,
         max_changes=settings.max_changes,
         vote_k=settings.vote_k,
+        on_observation=on_observation,
     )
