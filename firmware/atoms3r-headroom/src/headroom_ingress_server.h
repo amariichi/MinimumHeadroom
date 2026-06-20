@@ -16,6 +16,9 @@ public:
   bool recentlyActive(uint32_t windowMs) const;
   void setContinuousVadEnabled(bool enabled);
   void setBeforeAudioPlaybackCallback(void (*callback)(void*), void* context);
+  // Lends the shared WebServer so optional variants (the M12 camera) can
+  // register extra routes on the single server instance. Valid after begin().
+  WebServer& server() { return server_; }
 
 private:
   WebServer server_{80};

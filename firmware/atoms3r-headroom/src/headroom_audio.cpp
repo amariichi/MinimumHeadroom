@@ -328,6 +328,18 @@ HeadroomAudioResult HeadroomAudio::playWavBytes(const uint8_t* wav, size_t lengt
     return HeadroomAudioResult::DecodeFailed;
   }
   memcpy(owned, wav, length);
+
+#ifdef HEADROOM_M12
+  // The M12's Echo Base power amp (PI4IOE) is switched off by M5.Speaker's
+  // idle auto-disable. A plain re-begin is a no-op when M5 still thinks the
+  // speaker is started, so the atomic_echo enable callback never re-runs and the
+  // amp stays off -> playback is barely audible. Force a full end->begin re-init
+  // before each utterance so the PA is reliably powered back on. (Verified: an
+  // explicit speaker re-begin restores full volume.) The lead-in silence in the
+  // sender then absorbs the resulting ES8311 settle transient.
+  resetSpeaker();
+#endif
+
   return playOwnedWav(owned, length, true);
 }
 

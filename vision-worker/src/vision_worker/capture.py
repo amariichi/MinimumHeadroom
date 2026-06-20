@@ -18,16 +18,34 @@ class CaptureSource(Protocol):
 
 
 class NetworkCaptureSource:
-    def __init__(self, url: str, timeout: float = 10.0) -> None:
+    def __init__(self, url: str, timeout: float = 10.0, rotate_ccw: int = 0) -> None:
         self.url = url
         self.timeout = timeout
+        # Degrees counterclockwise to rotate each frame. The AtomS3R-M12 held
+        # USB-port-down delivers a frame rotated 90deg from upright (the sensor
+        # already undoes the left-right mirror via hmirror, but cannot rotate),
+        # so the consumer rotates it here. Normalised to {0, 90, 180, 270}.
+        self.rotate_ccw = rotate_ccw % 360
 
     def capture(self) -> bytes | None:
         import httpx
 
         resp = httpx.get(self.url, timeout=self.timeout)
         resp.raise_for_status()
-        return resp.content
+        return self._rotate(resp.content)
+
+    def _rotate(self, data: bytes) -> bytes:
+        if self.rotate_ccw % 360 == 0:
+            return data
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            rotated = im.rotate(self.rotate_ccw, expand=True)
+            out = io.BytesIO()
+            rotated.convert("RGB").save(out, format="JPEG", quality=85)
+            return out.getvalue()
 
 
 class DirectoryCaptureSource:
@@ -55,7 +73,9 @@ class DirectoryCaptureSource:
 
 def build_capture_source(settings) -> CaptureSource | None:
     if settings.camera_url:
-        return NetworkCaptureSource(settings.camera_url)
+        return NetworkCaptureSource(
+            settings.camera_url, rotate_ccw=getattr(settings, "camera_rotate", 0)
+        )
     if settings.frame_dir:
         return DirectoryCaptureSource(settings.frame_dir)
     return None

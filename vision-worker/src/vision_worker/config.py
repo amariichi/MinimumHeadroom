@@ -49,6 +49,7 @@ class Settings:
     db_path: str
     frame_dir: str | None
     camera_url: str | None
+    camera_rotate: int  # degrees CCW applied to network frames (M12 USB-down = 90)
     capture_interval_ms: int
     vote_k: int
     max_changes: int
@@ -80,6 +81,7 @@ def load_settings() -> Settings:
         db_path=db_path,
         frame_dir=os.getenv("VISION_FRAME_DIR") or None,
         camera_url=os.getenv("VISION_CAMERA_URL") or None,
+        camera_rotate=_int("VISION_CAMERA_ROTATE", 90),
         capture_interval_ms=_int("VISION_CAPTURE_INTERVAL_MS", 1500),
         vote_k=_int("VISION_VOTE_K", 1),
         max_changes=_int("VISION_MAX_CHANGES", 50),
