@@ -32,7 +32,11 @@ def main() -> None:
     parser.add_argument("--guided", action="store_true", help="use guided JSON decoding")
     parser.add_argument(
         "--report",
-        default=os.path.join(os.path.dirname(__file__), "probe-report.md"),
+        # Default outside the repo so probe runs never deposit (possibly
+        # personal) artifacts into the working tree. Override with --report.
+        default=os.path.expanduser(
+            "~/.cache/minimum-headroom/vision-probe/probe-report.md"
+        ),
     )
     args = parser.parse_args()
 
@@ -68,6 +72,9 @@ def main() -> None:
         print(summary)
         lines.append(summary)
 
+    report_dir = os.path.dirname(args.report)
+    if report_dir:
+        os.makedirs(report_dir, exist_ok=True)
     with open(args.report, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
     print(f"\nwrote {args.report}")
