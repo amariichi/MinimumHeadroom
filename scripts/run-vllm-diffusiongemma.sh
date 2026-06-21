@@ -29,7 +29,10 @@ HF_CACHE="${HF_HOME:-${XDG_CACHE_HOME:-${HOME:-$ROOT_DIR}/.cache}/huggingface}"
 GPU_MEM_UTIL="${VLLM_DGEMMA_GPU_MEM_UTIL:-0.75}"
 MAX_MODEL_LEN="${VLLM_DGEMMA_MAX_MODEL_LEN:-8192}"
 MAX_NUM_SEQS="${VLLM_DGEMMA_MAX_NUM_SEQS:-4}"
-ENFORCE_EAGER="${VLLM_DGEMMA_ENFORCE_EAGER:-1}"
+# CUDA-graph capture (the default, eager OFF) starts fine on the current pinned
+# image and is faster at inference; set VLLM_DGEMMA_ENFORCE_EAGER=1 only if a
+# future image regresses to the old startup hang that --enforce-eager worked around.
+ENFORCE_EAGER="${VLLM_DGEMMA_ENFORCE_EAGER:-0}"
 EAGER_ARGS=()
 case "${ENFORCE_EAGER,,}" in
   0|false|no|off) ;;
