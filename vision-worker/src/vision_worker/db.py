@@ -44,6 +44,18 @@ CREATE TABLE IF NOT EXISTS observations (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_observations_id ON observations(id DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_created ON observations(created_at);
+CREATE TABLE IF NOT EXISTS summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level INTEGER NOT NULL,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    source_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(level, period_start)
+);
+CREATE INDEX IF NOT EXISTS idx_summaries_level ON summaries(level, period_start DESC);
 """
 
 _SELECT = """
@@ -153,6 +165,59 @@ class VisionDB:
                 _SELECT + " ORDER BY o.id DESC LIMIT ?", (n,)
             ).fetchall()
             return [_to_public(r) for r in rows]
+
+    def changes_between(self, start_iso: str, end_iso: str) -> list[dict]:
+        """Change observations whose commit time is in [start_iso, end_iso).
+
+        Used by the hierarchical summarizer to gather one time band. Timestamps
+        are UTC ISO-8601 with the same offset everywhere, so lexicographic
+        comparison is a correct chronological comparison. Newest first.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                _SELECT
+                + " WHERE o.created_at >= ? AND o.created_at < ?"
+                + " ORDER BY o.id DESC",
+                (start_iso, end_iso),
+            ).fetchall()
+            return [_to_public(r) for r in rows]
+
+    def upsert_summary(
+        self,
+        level: int,
+        period_start: str,
+        period_end: str,
+        text: str,
+        source_count: int,
+    ) -> None:
+        """Insert or replace the summary for a (level, period_start) band."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO summaries(level, period_start, period_end, text,"
+                " source_count, created_at) VALUES(?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(level, period_start) DO UPDATE SET"
+                " period_end=excluded.period_end, text=excluded.text,"
+                " source_count=excluded.source_count, created_at=excluded.created_at",
+                (level, period_start, period_end, text, source_count, _now()),
+            )
+
+    def get_summary(self, level: int, period_start: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT level, period_start, period_end, text, source_count, created_at"
+                " FROM summaries WHERE level = ? AND period_start = ?",
+                (level, period_start),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def recent_summaries(self, level: int, n: int = 10) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT level, period_start, period_end, text, source_count, created_at"
+                " FROM summaries WHERE level = ? ORDER BY period_start DESC LIMIT ?",
+                (level, n),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def search(self, query: str, limit: int = 50) -> list[dict]:
         like = f"%{query}%"

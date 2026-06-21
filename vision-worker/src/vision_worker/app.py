@@ -34,6 +34,7 @@ from .perception import PerceptionLoop, decide_start
 from .pipeline import build_pipeline
 from .situation import compose_situation
 from .store import FrameStore
+from .summarize import build_summarizer, situation_summaries
 from .vram import free_vram_mb
 from .vram import model_healthy as vram_model_healthy
 from .watches import Watch, WatchRegistry
@@ -83,6 +84,7 @@ def create_app() -> FastAPI:
         narrator.consider(obs)
 
     pipeline = build_pipeline(settings, db, store, model_client, on_observation=_on_observation)
+    summarizer = build_summarizer(settings)
 
     pipeline_lock = threading.Lock()
     capture_source = build_capture_source(settings)
@@ -158,12 +160,13 @@ def create_app() -> FastAPI:
         and a multi-resolution history. Runs no vision model, so it is safe to
         read on every conversational turn. `summaries` is empty until the
         hierarchical summary layer (M2/M3) is active."""
+        now = datetime.now(timezone.utc)
         observing = perception.is_running() if perception is not None else False
         last_observed_at = (
             perception.last_observed_at if perception is not None else None
         )
         digest = compose_situation(
-            now=datetime.now(timezone.utc),
+            now=now,
             observing=observing,
             latest=db.latest(),
             last_change_at=pipeline.last_change_at,
@@ -171,6 +174,17 @@ def create_app() -> FastAPI:
             recent=db.recent_changes(settings.situation_recent_n),
             summaries=[],
         )
+        # "Idle" = the loop is running and the scene has held still at least one
+        # slow-poll cycle (not mid-burst). Summarization (the LLM text call) is
+        # gated to idle so it never competes with real-time recognition.
+        current = digest["current"]
+        stable = current["stable_seconds"] if current else None
+        idle = (
+            observing
+            and stable is not None
+            and stable >= settings.idle_interval_ms / 1000.0
+        )
+        digest["summaries"] = situation_summaries(db, summarizer, now, idle=idle)
         digest["disclaimer"] = DISCLAIMER
         return digest
 
