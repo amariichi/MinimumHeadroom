@@ -34,9 +34,13 @@ constexpr int kPinVsync = 10;
 constexpr int kPinHref = 14;
 constexpr int kPinPclk = 40;
 
-// QXGA (2048x1536) = the OV3660's native full 3MP. begin() steps fb_count down
-// if PSRAM can't hold it. ?full=1 is then a no-op (already at max).
-constexpr framesize_t kBaseFrameSize = FRAMESIZE_QXGA;
+// VGA (640x480) is the continuous/ambient default: each frame is ~30KB instead
+// of QXGA's ~260KB, which matters on the carry-around uplink (phone Wi-Fi ->
+// travel router -> mobile data -> tailnet -> PC), and scene recognition is just
+// as accurate at this size on this soft fixed-focus lens. ?full=1 raises the
+// sensor to QXGA (native 3MP) for one OCR-grade capture of large text, then the
+// snapshot handler drops it back to VGA.
+constexpr framesize_t kBaseFrameSize = FRAMESIZE_VGA;
 constexpr framesize_t kFullFrameSize = FRAMESIZE_QXGA;
 
 bool timingSafeEquals(const String& a, const String& b) {
@@ -105,8 +109,9 @@ bool HeadroomCamera::begin() {
 
   esp_err_t err = esp_camera_init(&cfg);
   if (err != ESP_OK) {
-    // QXGA with fb_count=2 may exhaust PSRAM; retry with a single buffer, then
-    // fall back to UXGA, so we still get the largest frame the board can hold.
+    // If init fails, retry with a single framebuffer, then fall back to UXGA.
+    // (VGA base is tiny in PSRAM, so this rarely triggers now; kept defensive
+    // because ?full=1 still raises the live sensor to QXGA on demand.)
     esp_camera_deinit();
     cfg.fb_count = 1;
     cfg.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
@@ -141,7 +146,7 @@ bool HeadroomCamera::begin() {
     // identical to rotating the raw frame 90deg CW then mirroring.)
     if (s->set_hmirror) s->set_hmirror(s, 1);
   }
-  Serial.println("camera init ok (OV3660, QXGA JPEG, hmirror=1)");
+  Serial.println("camera init ok (OV3660, VGA JPEG base / QXGA on ?full=1, hmirror=1)");
   return true;
 }
 

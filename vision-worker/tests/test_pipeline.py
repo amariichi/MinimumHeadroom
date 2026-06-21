@@ -157,6 +157,58 @@ def test_change_before_k_flushes_partial_window(tmp_path, make_frame):
     assert db.counts()["observations"] == 2
 
 
+class _ChangedModel:
+    """Model stub returning a preset `changed` verdict per call (overview unique
+    so the text-dedup heuristic never interferes)."""
+
+    name = "changed-stub"
+
+    def __init__(self, verdicts):
+        self.verdicts = list(verdicts)
+        self.i = 0
+
+    def observe(self, frame_jpeg: bytes, prev) -> Observation:
+        changed = self.verdicts[self.i]
+        self.i += 1
+        token = uuid.uuid4().hex
+        return Observation(
+            is_text=False,
+            ocr_full="",
+            overview=token[:8],
+            change_from_prev="c" if changed else "no significant change",
+            changed=changed,
+            model=self.name,
+        )
+
+
+def test_vlm_no_change_verdict_is_suppressed(tmp_path, make_frame):
+    # The perceptual gate fires on every frame (lighting jitter), but the model
+    # judges only the 2nd frame a real change. The baseline (1st) is kept; the
+    # no-change 3rd frame is dropped — so two observations, one suppressed.
+    db = VisionDB(str(tmp_path / "v.db"))
+    store = FrameStore(str(tmp_path / "cache"))
+    model = _ChangedModel([False, True, False])  # baseline, change, no-change
+    pipeline = Pipeline(db, store, _AlwaysChanged(), model)
+    for seed in (1, 2, 3):
+        pipeline.process_frame(make_frame(seed))
+    assert db.counts()["observations"] == 2
+    assert pipeline.stats.observations_written == 2
+    assert pipeline.stats.nochange_suppressed == 1
+
+
+def test_no_change_does_not_advance_prev_state(tmp_path, make_frame):
+    # A suppressed no-change frame must not become the new baseline, so a later
+    # frame is still diffed against the last *real* state.
+    db = VisionDB(str(tmp_path / "v.db"))
+    store = FrameStore(str(tmp_path / "cache"))
+    model = _ChangedModel([False, False, True])  # baseline, no-change, change
+    pipeline = Pipeline(db, store, _AlwaysChanged(), model)
+    for seed in (1, 2, 3):
+        pipeline.process_frame(make_frame(seed))
+    assert db.counts()["observations"] == 2  # baseline + the real change
+    assert pipeline.stats.nochange_suppressed == 1
+
+
 def test_on_observation_callback_fires_on_commit(tmp_path, make_frame):
     db = VisionDB(str(tmp_path / "v.db"))
     store = FrameStore(str(tmp_path / "cache"))

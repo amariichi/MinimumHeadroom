@@ -45,12 +45,17 @@ class Settings:
     model_url: str
     model_name: str
     guided_decoding: bool
+    output_lang: str  # language for spoken fields (overview/change_from_prev)
     cache_dir: str
     db_path: str
     frame_dir: str | None
     camera_url: str | None
     camera_rotate: int  # degrees CCW applied to network frames (M12 USB-down = 90)
-    capture_interval_ms: int
+    capture_interval_ms: int  # ACTIVE/burst cadence (fast, just after a change)
+    idle_interval_ms: int  # slow cadence when the scene is static (fewer fetches)
+    burst_frames: int  # frames to stay at the fast cadence after a change
+    narrate_changes: bool  # speak a short line on each salient committed change
+    narrate_min_interval_ms: int  # rate-limit between spoken change lines
     vote_k: int
     max_changes: int
     gate_hamming: int
@@ -61,6 +66,9 @@ class Settings:
     alert_webhook: str | None
     perception_lock: bool
     model_vram_mb: int
+    situation_recent_n: int  # how many raw recent changes GET /situation returns
+    summary_enabled: bool  # build hierarchical summaries (reuses the loaded VLM)
+    summary_max_tokens: int  # output cap for one summarization call
 
 
 def load_settings() -> Settings:
@@ -77,12 +85,17 @@ def load_settings() -> Settings:
             "VISION_MODEL_NAME", "nvidia/diffusiongemma-26B-A4B-it-NVFP4"
         ),
         guided_decoding=_bool("VISION_GUIDED_DECODING", False),
+        output_lang=os.getenv("VISION_OUTPUT_LANG", "en").strip().lower(),
         cache_dir=cache_dir,
         db_path=db_path,
         frame_dir=os.getenv("VISION_FRAME_DIR") or None,
         camera_url=os.getenv("VISION_CAMERA_URL") or None,
         camera_rotate=_int("VISION_CAMERA_ROTATE", 90),
         capture_interval_ms=_int("VISION_CAPTURE_INTERVAL_MS", 1500),
+        idle_interval_ms=_int("VISION_IDLE_INTERVAL_MS", 5000),
+        burst_frames=_int("VISION_BURST_FRAMES", 4),
+        narrate_changes=_bool("VISION_NARRATE_CHANGES", False),
+        narrate_min_interval_ms=_int("VISION_NARRATE_MIN_INTERVAL_MS", 4000),
         vote_k=_int("VISION_VOTE_K", 1),
         max_changes=_int("VISION_MAX_CHANGES", 50),
         gate_hamming=_int("VISION_GATE_HAMMING", 6),
@@ -93,4 +106,7 @@ def load_settings() -> Settings:
         alert_webhook=os.getenv("VISION_ALERT_WEBHOOK") or None,
         perception_lock=_bool("VISION_PERCEPTION_LOCK", False),
         model_vram_mb=_int("VISION_MODEL_VRAM_MB", 24000),
+        situation_recent_n=_int("VISION_SITUATION_RECENT_N", 8),
+        summary_enabled=_bool("VISION_SUMMARY_ENABLED", True),
+        summary_max_tokens=_int("VISION_SUMMARY_MAX_TOKENS", 80),
     )

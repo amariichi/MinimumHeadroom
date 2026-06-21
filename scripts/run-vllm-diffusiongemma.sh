@@ -25,10 +25,16 @@ NAME="${VLLM_DGEMMA_NAME:-dgemma}"
 PORT="${VLLM_DGEMMA_PORT:-8000}"
 MODEL="${VLLM_DGEMMA_MODEL:-nvidia/diffusiongemma-26B-A4B-it-NVFP4}"
 IMAGE="${VLLM_DGEMMA_IMAGE:-vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b}"
-HF_CACHE="${HF_HOME:-$ROOT_DIR/.cache/huggingface}"
+HF_CACHE="${HF_HOME:-${XDG_CACHE_HOME:-${HOME:-$ROOT_DIR}/.cache}/huggingface}"
 GPU_MEM_UTIL="${VLLM_DGEMMA_GPU_MEM_UTIL:-0.75}"
 MAX_MODEL_LEN="${VLLM_DGEMMA_MAX_MODEL_LEN:-8192}"
 MAX_NUM_SEQS="${VLLM_DGEMMA_MAX_NUM_SEQS:-4}"
+ENFORCE_EAGER="${VLLM_DGEMMA_ENFORCE_EAGER:-1}"
+EAGER_ARGS=()
+case "${ENFORCE_EAGER,,}" in
+  0|false|no|off) ;;
+  *) EAGER_ARGS=(--enforce-eager) ;;
+esac
 VENV_DIR="${VLLM_DGEMMA_VENV_DIR:-$ROOT_DIR/.venv-vllm-dgemma}"
 ACTION="start"
 
@@ -44,6 +50,7 @@ Usage: ./scripts/run-vllm-diffusiongemma.sh [start|stop|status] [--backend docke
   stop     Stop & remove the container (docker backend only).
   status   Show status.
   --backend docker|venv   Override $VLLM_DGEMMA_BACKEND (default docker).
+  HF_HOME                 Override Hugging Face cache root (default: XDG cache / ~/.cache/huggingface).
   -h, --help              Show this help.
 EOF
 }
@@ -87,14 +94,35 @@ case "$BACKEND" in
     if docker_running; then echo "[run-vllm-diffusiongemma] already running -> http://127.0.0.1:$PORT/v1"; exit 0; fi
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     mkdir -p "$HF_CACHE"
+    DOCKER_ENV_ARGS=(
+      -e VLLM_USE_V2_MODEL_RUNNER=1
+      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    )
+    if [[ -n "${HF_TOKEN:-}" ]]; then
+      DOCKER_ENV_ARGS+=(-e HF_TOKEN)
+    else
+      echo "[run-vllm-diffusiongemma] warning: HF_TOKEN is not set; large Hugging Face downloads may be slower or less reliable." >&2
+    fi
+    if [[ -n "${HUGGING_FACE_HUB_TOKEN:-}" ]]; then
+      DOCKER_ENV_ARGS+=(-e HUGGING_FACE_HUB_TOKEN)
+    fi
+    if [[ -n "${HF_HUB_ENABLE_HF_TRANSFER:-}" ]]; then
+      DOCKER_ENV_ARGS+=(-e HF_HUB_ENABLE_HF_TRANSFER)
+    fi
+    if [[ -n "${HF_HUB_DISABLE_XET:-}" ]]; then
+      DOCKER_ENV_ARGS+=(-e HF_HUB_DISABLE_XET)
+    fi
+    if [[ -n "${HF_XET_HIGH_PERFORMANCE:-}" ]]; then
+      DOCKER_ENV_ARGS+=(-e HF_XET_HIGH_PERFORMANCE)
+    fi
     echo "[run-vllm-diffusiongemma] starting $NAME (model=$MODEL, port=$PORT, first load takes minutes)..."
     docker run -d --name "$NAME" --gpus all \
       -v "$HF_CACHE:/root/.cache/huggingface" \
       -p "$PORT:8000" \
-      -e VLLM_USE_V2_MODEL_RUNNER=1 \
-      -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      "${DOCKER_ENV_ARGS[@]}" \
       "$IMAGE" "$MODEL" \
       --trust-remote-code \
+      "${EAGER_ARGS[@]}" \
       --max-num-seqs "$MAX_NUM_SEQS" \
       --max-model-len "$MAX_MODEL_LEN" \
       --gpu-memory-utilization "$GPU_MEM_UTIL" \
@@ -123,6 +151,7 @@ case "$BACKEND" in
       "$VENV_DIR/bin/vllm" serve "$MODEL" \
       --host 127.0.0.1 --port "$PORT" \
       --trust-remote-code \
+      "${EAGER_ARGS[@]}" \
       --max-num-seqs "$MAX_NUM_SEQS" \
       --max-model-len "$MAX_MODEL_LEN" \
       --gpu-memory-utilization "$GPU_MEM_UTIL"

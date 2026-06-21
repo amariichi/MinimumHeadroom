@@ -49,6 +49,27 @@ def test_unchanged_second_ingest_reports_no_change(tmp_path, monkeypatch, make_f
     assert second.json()["changed"] is False
 
 
+def test_situation_empty_before_any_observation(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    body = client.get("/situation").json()
+    assert body["current"] is None
+    assert body["recent"] == []
+    assert body["summaries"] == []
+    assert "safety" in body["disclaimer"].lower()
+
+
+def test_situation_reports_current_after_ingest(tmp_path, monkeypatch, make_frame):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/ingest", files={"image": ("f.jpg", make_frame(0x0F0F), "image/jpeg")})
+    body = client.get("/situation").json()
+    assert body["current"] is not None
+    assert body["current"]["overview"]  # non-empty
+    # Not observing via the loop here, so stable_seconds may be 0+ but present.
+    assert isinstance(body["current"]["stable_seconds"], int)
+    assert len(body["recent"]) == 1
+    assert body["recent"][0]["overview"] == body["current"]["overview"]
+
+
 def test_watch_registration_includes_disclaimer(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     resp = client.post("/watches", json={"name": "red light", "rule": "red", "kind": "keyword"})

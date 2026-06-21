@@ -14,6 +14,7 @@ be started and stopped at runtime.
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timezone
 
 
 def decide_start(
@@ -52,16 +53,61 @@ def decide_start(
     }
 
 
+def next_interval_s(
+    committed: bool,
+    burst_left: int,
+    *,
+    active_s: float,
+    idle_s: float,
+    burst_frames: int,
+) -> tuple[float, int]:
+    """Adaptive cadence: poll slowly when the scene is static, fast after a change.
+
+    Pure so it is trivially unit-testable. A committed observation (i.e. a real,
+    non-jitter scene change) re-arms a burst of `burst_frames` fast polls; once the
+    burst drains the loop falls back to the slow idle cadence. Fewer fetches while
+    nothing happens directly means less /snapshot traffic over the mobile uplink.
+
+    Returns (wait_seconds, new_burst_left).
+    """
+    if committed:
+        burst_left = burst_frames
+    if burst_left > 0:
+        return active_s, burst_left - 1
+    return idle_s, 0
+
+
 class PerceptionLoop:
-    def __init__(self, pipeline, capture_source, interval_ms: int, lock: threading.Lock) -> None:
+    def __init__(
+        self,
+        pipeline,
+        capture_source,
+        interval_ms: int,
+        lock: threading.Lock,
+        *,
+        idle_interval_ms: int | None = None,
+        burst_frames: int = 0,
+    ) -> None:
         self._pipeline = pipeline
         self._capture = capture_source
-        self._interval = max(0.0, interval_ms / 1000.0)
+        self._active_interval = max(0.0, interval_ms / 1000.0)
+        # idle defaults to the active interval, i.e. a constant cadence, unless an
+        # explicit (slower) idle interval is given.
+        idle_ms = interval_ms if idle_interval_ms is None else idle_interval_ms
+        self._idle_interval = max(0.0, idle_ms / 1000.0)
+        self._burst_frames = max(0, burst_frames)
+        # Start responsive: spend the first frames at the active cadence.
+        self._burst_left = self._burst_frames
         self._lock = lock  # shared with /ingest so pipeline state stays single-writer
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self.frames = 0
         self.last_error: str | None = None
+        # When the loop last looked at the scene (any successful capture+process,
+        # whether or not it committed a change). GET /situation uses this as the
+        # "confirmed_at" proof-of-liveness: while the loop runs it advances each
+        # iteration, so a still scene's stable_seconds keeps growing on re-read.
+        self.last_observed_at: datetime | None = None
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -82,12 +128,21 @@ class PerceptionLoop:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            committed = False
             try:
                 frame = self._capture.capture() if self._capture else None
                 if frame:
                     with self._lock:
-                        self._pipeline.process_frame(frame)
+                        committed = self._pipeline.process_frame(frame) is not None
                     self.frames += 1
+                    self.last_observed_at = datetime.now(timezone.utc)
             except Exception as exc:  # noqa: BLE001 - keep looping through transient errors
                 self.last_error = str(exc)
-            self._stop.wait(self._interval)
+            wait_s, self._burst_left = next_interval_s(
+                committed,
+                self._burst_left,
+                active_s=self._active_interval,
+                idle_s=self._idle_interval,
+                burst_frames=self._burst_frames,
+            )
+            self._stop.wait(wait_s)

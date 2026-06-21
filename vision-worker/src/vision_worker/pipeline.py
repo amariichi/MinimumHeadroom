@@ -33,6 +33,7 @@ class PipelineStats:
     frames_seen: int = 0
     gate_suppressed: int = 0
     dedup_suppressed: int = 0
+    nochange_suppressed: int = 0
     observations_written: int = 0
 
     def as_dict(self) -> dict:
@@ -40,6 +41,7 @@ class PipelineStats:
             "frames_seen": self.frames_seen,
             "gate_suppressed": self.gate_suppressed,
             "dedup_suppressed": self.dedup_suppressed,
+            "nochange_suppressed": self.nochange_suppressed,
             "observations_written": self.observations_written,
         }
 
@@ -66,6 +68,11 @@ class Pipeline:
         self.on_observation = on_observation
         self.stats = PipelineStats()
         self._prev: PrevState | None = None
+        # When the most recent change was committed (a real write, including the
+        # first baseline). Drives `stable_seconds` in GET /situation: the current
+        # scene has held since this moment. None until the first commit; on a
+        # fresh restart the digest falls back to the latest DB row's created_at.
+        self.last_change_at: datetime | None = None
         # Open voting window for the current not-yet-committed scene:
         self._pending: list[tuple[Observation, bytes]] = []
 
@@ -77,10 +84,18 @@ class Pipeline:
         return dedup.is_duplicate(self._prev.overview, obs.overview, self.dedup_threshold)
 
     def _commit(self, obs: Observation, frame_jpeg: bytes) -> Observation | None:
+        # The cheap perceptual gate over-fires (lighting, sensor noise, a hand of
+        # framing drift). The model is the arbiter: if it says nothing meaningful
+        # changed, this is not a change point — drop it like jitter. The very
+        # first observation (no prior state) is always kept as the baseline.
+        if self._prev is not None and not obs.changed:
+            self.stats.nochange_suppressed += 1
+            return None
         if self._is_jitter(obs):
             self.stats.dedup_suppressed += 1
             return None
-        when = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        when = now_dt.isoformat()
         full_path, thumb_path, width, height = self.store.save(frame_jpeg)
         frame_id = self.db.insert_frame(
             when, self.gate.last_hash_hex, full_path, thumb_path, width, height
@@ -90,6 +105,8 @@ class Pipeline:
         for removed_full, removed_thumb in self.db.prune(self.max_changes):
             self.store.remove(removed_full, removed_thumb)
         self.stats.observations_written += 1
+        # Mark the start of the now-current scene so stable_seconds resets here.
+        self.last_change_at = now_dt
         if self.on_observation is not None:
             self.on_observation(obs)
         return obs

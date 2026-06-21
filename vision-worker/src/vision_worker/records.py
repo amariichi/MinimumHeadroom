@@ -26,6 +26,13 @@ class Observation:
     ocr_full: str
     overview: str
     change_from_prev: str
+    # The model's own verdict that something *meaningful* changed versus the
+    # previous state (a new/removed/moved object, a person, a different scene) —
+    # not mere lighting/noise/framing jitter. This is the authoritative signal
+    # the cheap perceptual gate cannot give: the gate over-fires, the model is
+    # the arbiter. Drives both what gets stored as a change point and what is
+    # spoken aloud. Defaults True for backward compatibility (mock/tests).
+    changed: bool = True
     low_confidence: bool = False
     latency_ms: int = 0
     model: str = "unknown"

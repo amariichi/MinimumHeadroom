@@ -23,6 +23,8 @@ Then point the vision-worker at it:
   ... ./scripts/run-vision-worker.sh
 
 POST /alert  body {"text": "...", "watch": "コップ"}  -> speaks "コップが見えました。"
+POST /alert  body {"text": "...", "watch": "change"} -> speaks `text` verbatim
+             (ambient change-narration; the line is already a full sentence)
 POST /say    body {"text": "任意の文"}                -> speaks the text verbatim
 """
 
@@ -119,7 +121,13 @@ class Handler(BaseHTTPRequestHandler):
             text = (data.get("text") or "").strip()
         else:  # /alert (default): build a Japanese phrase from the watch label
             watch = (data.get("watch") or "").strip()
-            text = f"{watch}が見えました。" if watch else (data.get("text") or "").strip()
+            if watch == "change":
+                # Ambient change-narration: the vision-worker already put the full
+                # spoken line in `text` (a scene description, not a keyword), so
+                # speak it verbatim instead of "<watch>が見えました".
+                text = (data.get("text") or "").strip()
+            else:
+                text = f"{watch}が見えました。" if watch else (data.get("text") or "").strip()
 
         if not text:
             return self._json(400, {"ok": False, "error": "empty_text"})

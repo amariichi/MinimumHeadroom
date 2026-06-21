@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import threading
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
@@ -24,13 +25,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .alerts import build_alert_sink, make_alert_text
+from .alerts import AsyncAlertSink, ChangeNarrator, build_alert_sink, make_alert_text
 from .capture import build_capture_source
 from .config import load_settings
 from .db import VisionDB
 from .model_client import build_model_client
 from .perception import PerceptionLoop, decide_start
 from .pipeline import build_pipeline
+from .situation import compose_situation
 from .store import FrameStore
 from .vram import free_vram_mb
 from .vram import model_healthy as vram_model_healthy
@@ -50,24 +52,49 @@ class WatchIn(BaseModel):
     kind: Literal["keyword", "enum"] = "keyword"
 
 
+class NarrateIn(BaseModel):
+    on: bool
+
+
 def create_app() -> FastAPI:
     settings = load_settings()
     db = VisionDB(settings.db_path)
     store = FrameStore(settings.cache_dir, thumb_max=settings.thumb_max)
     model_client = build_model_client(settings)
     registry = WatchRegistry()
-    sink = build_alert_sink(settings)
+    # Deliver alerts off the perception loop: the bridge round-trip + TTS synth
+    # is slow, and doing it inline stalls observation (the cause of the laggy,
+    # sporadic ambient narration). Only wrap when a real voice webhook is active.
+    raw_sink = build_alert_sink(settings)
+    sink = (
+        AsyncAlertSink(raw_sink)
+        if settings.alert_enabled and settings.alert_webhook
+        else raw_sink
+    )
+    narrator = ChangeNarrator(
+        sink,
+        enabled=settings.narrate_changes,
+        min_interval_s=settings.narrate_min_interval_ms / 1000.0,
+    )
 
     def _on_observation(obs) -> None:
         for fired in registry.evaluate(obs):
             sink.notify(make_alert_text(fired, obs), fired.name)
+        narrator.consider(obs)
 
     pipeline = build_pipeline(settings, db, store, model_client, on_observation=_on_observation)
 
     pipeline_lock = threading.Lock()
     capture_source = build_capture_source(settings)
     perception = (
-        PerceptionLoop(pipeline, capture_source, settings.capture_interval_ms, pipeline_lock)
+        PerceptionLoop(
+            pipeline,
+            capture_source,
+            settings.capture_interval_ms,
+            pipeline_lock,
+            idle_interval_ms=settings.idle_interval_ms,
+            burst_frames=settings.burst_frames,
+        )
         if capture_source is not None
         else None
     )
@@ -78,6 +105,7 @@ def create_app() -> FastAPI:
     app.state.pipeline = pipeline
     app.state.watches = registry
     app.state.perception = perception
+    app.state.narrator = narrator
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -121,6 +149,30 @@ def create_app() -> FastAPI:
     @app.get("/metrics")
     def metrics() -> dict:
         return {"counts": db.counts(), "pipeline": pipeline.stats.as_dict()}
+
+    @app.get("/situation")
+    def situation() -> dict:
+        """Cheap, read-only situational digest for the conversational LLM.
+
+        Returns what the camera sees now, how long that view has been stable,
+        and a multi-resolution history. Runs no vision model, so it is safe to
+        read on every conversational turn. `summaries` is empty until the
+        hierarchical summary layer (M2/M3) is active."""
+        observing = perception.is_running() if perception is not None else False
+        last_observed_at = (
+            perception.last_observed_at if perception is not None else None
+        )
+        digest = compose_situation(
+            now=datetime.now(timezone.utc),
+            observing=observing,
+            latest=db.latest(),
+            last_change_at=pipeline.last_change_at,
+            last_observed_at=last_observed_at,
+            recent=db.recent_changes(settings.situation_recent_n),
+            summaries=[],
+        )
+        digest["disclaimer"] = DISCLAIMER
+        return digest
 
     @app.post("/ingest")
     async def ingest(image: UploadFile = File(...)) -> dict:
@@ -193,6 +245,17 @@ def create_app() -> FastAPI:
             perception.stop()
         return {"running": False}
 
+    @app.post("/perception/narrate")
+    def perception_narrate(body: NarrateIn) -> dict:
+        """Turn spoken change-narration on/off at runtime (ambient mode). Only has
+        an audible effect when the alert webhook is configured."""
+        narrator.enabled = body.on
+        return {
+            "narrate": narrator.enabled,
+            "voice_wired": settings.alert_enabled and bool(settings.alert_webhook),
+            "disclaimer": DISCLAIMER,
+        }
+
     @app.get("/perception/status")
     def perception_status() -> dict:
         running = perception.is_running() if perception is not None else False
@@ -218,6 +281,8 @@ def create_app() -> FastAPI:
             "free_vram_mb": free,
             "needed_vram_mb": settings.model_vram_mb,
             "capability": capability,
+            "narrate": narrator.enabled,
+            "voice_wired": settings.alert_enabled and bool(settings.alert_webhook),
         }
 
     @app.post("/watches")
