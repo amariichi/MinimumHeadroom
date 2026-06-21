@@ -346,6 +346,22 @@ async function serveStaticFile(request, response, staticDir) {
   }
 
   const requestPath = pathname === '/' ? '/index.html' : pathname;
+  if (requestPath === '/vendor/three.module.js') {
+    const vendorPath = path.resolve(staticDir, '../../node_modules/three/build/three.module.js');
+    try {
+      const content = await readFile(vendorPath);
+      response.writeHead(200, {
+        'content-type': MIME_TYPES.get('.js'),
+        'cache-control': 'no-store'
+      });
+      response.end(content);
+    } catch {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('Not found\n');
+    }
+    return;
+  }
+
   const normalized = path.normalize(requestPath);
   const rootPath = path.resolve(staticDir);
   const filePath = path.resolve(rootPath, `.${normalized}`);
