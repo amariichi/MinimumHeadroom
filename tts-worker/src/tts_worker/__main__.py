@@ -10,6 +10,7 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from .capture import AnomalyCapture
 from .engine import EngineMetadata, TtsEngine
 from .kokoro_engine import KokoroEngine, resolve_model_paths
 from .playback import PlaybackEngine, encode_wav_base64
@@ -61,6 +62,7 @@ class WorkerRuntime:
     self.browser_audio_enabled = self.audio_target in ('browser', 'both')
     self.remote_prefetch_ms = resolve_remote_prefetch_ms(os.environ.get('MH_TTS_REMOTE_PREFETCH_MS')) if self.audio_target == 'browser' else 0
     self.playback = PlaybackEngine(allow_local_output=self.audio_target in ('local', 'both'))
+    self.capture = AnomalyCapture.from_env()
 
     self.latest_generation = -1
     self.current_task: Optional[asyncio.Task[None]] = None
@@ -357,6 +359,26 @@ class WorkerRuntime:
       )
       self._clear_current(generation)
       return
+
+    if self.capture.enabled:
+      # Capture-only diagnostics: never alters playback. Runs off-loop so the
+      # rare anomaly write does not stall the event loop. Wrapped internally so
+      # a capture failure can never break this utterance.
+      await asyncio.to_thread(
+        self.capture.maybe_capture,
+        text=request.text,
+        prepared_text=prepared_text,
+        audio=audio,
+        sample_rate=sample_rate,
+        context={
+          'session_id': session_id,
+          'utterance_id': utterance_id,
+          'generation': generation,
+          'message_id': request.message_id,
+          'engine': getattr(getattr(self.engine, 'metadata', None), 'engine', None),
+          'voice': request.speaker or getattr(getattr(self.engine, 'metadata', None), 'voice', None),
+        },
+      )
 
     if is_stale():
       self.writer.event(
