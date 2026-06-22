@@ -35,7 +35,10 @@ curl -s "$BASE/healthz"
 ## Endpoints
 
 ```bash
-curl -s -X POST "$BASE/capture" -o /tmp/now.jpg   # Mode A: grab ONE fresh frame now (no GPU)
+curl -s "$BASE/situation"                  # situational digest: now + how long stable + tiered history (NO GPU)
+curl -s "$BASE/situation?format=text"      # the same digest as a compact Japanese text block
+curl -s -X POST "$BASE/look"               # "what do you see right now?": fresh frame, run the model, return its description
+curl -s -X POST "$BASE/capture" -o /tmp/now.jpg   # Mode A: grab ONE fresh frame now (no GPU; read it yourself)
 curl -s "$BASE/latest"            # most recent stored observation (incl. frame_id)
 curl -s "$BASE/previous"          # the one before that
 curl -s "$BASE/diffs?n=50"        # rolling window of recent change observations
@@ -56,6 +59,32 @@ Each observation looks like:
 ```
 
 `low_confidence: true` means treat the text as especially unreliable — fetch the frame.
+
+## Staying in sync with the camera (the situational digest)
+
+So a spoken conversation stays coherent, the camera and you must share the same
+picture of "now". `GET /situation` gives you that in one cheap, read-only call
+that runs **no** model (safe to read on every turn): the current scene, how many
+seconds it has been **stable** (unchanged), the recent raw changes, and a
+multi-resolution history — recent detail plus progressively coarser summaries
+(`直近` ≈ 10 min, `1時間`, `6時間`, `1日`). The coarser summaries are produced by
+condensing text during idle moments and cached, so reading is always free.
+
+- Use `GET /situation` (or `?format=text` for a ready-to-read block) whenever the
+  user refers to what is around them, what is on screen, "now", or "how long has
+  it been like this" / "what changed earlier". You can answer from the digest
+  without taking a fresh picture.
+- This digest can also be **auto-injected** into your context every turn (Design
+  B) via `scripts/situation-context-hook.sh` wired as a `UserPromptSubmit` hook
+  (set `MH_SITUATION_INJECT=1`). When that is on, you already have the current
+  situation each turn and need not call anything.
+- For a deliberate fresh look — "what do you see **right now**?" — use
+  `POST /look`: it grabs one frame and runs the model immediately, returning its
+  description (bypassing the change-gate so you always get a fresh answer). For
+  accuracy-sensitive reads, still fetch the full frame and read it yourself.
+
+Always relay the safety boundary when relevant; the digest text already carries a
+short disclaimer.
 
 ## Two ways to use the camera
 

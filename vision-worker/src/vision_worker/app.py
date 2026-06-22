@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
@@ -32,7 +32,7 @@ from .db import VisionDB
 from .model_client import build_model_client
 from .perception import PerceptionLoop, decide_start
 from .pipeline import build_pipeline
-from .situation import compose_situation
+from .situation import compose_situation, render_situation_text
 from .store import FrameStore
 from .summarize import build_summarizer, situation_summaries
 from .vram import free_vram_mb
@@ -153,13 +153,14 @@ def create_app() -> FastAPI:
         return {"counts": db.counts(), "pipeline": pipeline.stats.as_dict()}
 
     @app.get("/situation")
-    def situation() -> dict:
+    def situation(format: str = "json"):
         """Cheap, read-only situational digest for the conversational LLM.
 
         Returns what the camera sees now, how long that view has been stable,
-        and a multi-resolution history. Runs no vision model, so it is safe to
-        read on every conversational turn. `summaries` is empty until the
-        hierarchical summary layer (M2/M3) is active."""
+        and a multi-resolution history (tiered summaries). Runs no vision model,
+        so it is safe to read on every conversational turn. With `?format=text`
+        it returns a compact Japanese text block ready to inject into the
+        conversational agent's context (Design B)."""
         now = datetime.now(timezone.utc)
         observing = perception.is_running() if perception is not None else False
         last_observed_at = (
@@ -185,8 +186,39 @@ def create_app() -> FastAPI:
             and stable >= settings.idle_interval_ms / 1000.0
         )
         digest["summaries"] = situation_summaries(db, summarizer, now, idle=idle)
+        if format == "text":
+            return PlainTextResponse(render_situation_text(digest))
         digest["disclaimer"] = DISCLAIMER
         return digest
+
+    @app.post("/look")
+    def look(store: int = 0):
+        """On-demand fresh look ("what do you see right now?"): grab one frame
+        and run the vision model on it NOW, returning the description. Unlike the
+        ambient loop this bypasses the change-gate and always describes, so a
+        direct question always gets a fresh answer. With store=1 it also commits
+        the frame through the pipeline (so it joins the rolling memory)."""
+        if capture_source is None:
+            raise HTTPException(status_code=503, detail="no camera configured (set VISION_CAMERA_URL)")
+        try:
+            frame = capture_source.capture()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"camera capture failed: {exc}") from exc
+        if not frame:
+            raise HTTPException(status_code=503, detail="camera returned no frame")
+        obs = model_client.observe(frame, None)
+        if store:
+            with pipeline_lock:
+                pipeline.process_frame(frame)
+        return {
+            "overview": obs.overview,
+            "ocr_full": obs.ocr_full,
+            "is_text": obs.is_text,
+            "low_confidence": obs.low_confidence,
+            "model": obs.model,
+            "latency_ms": obs.latency_ms,
+            "disclaimer": DISCLAIMER,
+        }
 
     @app.post("/ingest")
     async def ingest(image: UploadFile = File(...)) -> dict:

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from .model_client import looks_like_no_change
+
 
 def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt is not None else None
@@ -107,3 +109,68 @@ def compose_situation(
         "recent": recent_out,
         "summaries": summaries,
     }
+
+
+#: How a summarized tier is labelled in the rendered text block (by coarseness).
+_TIER_LABELS = {1: "直近", 2: "1時間", 3: "6時間", 4: "1日"}
+
+#: Kept short so it costs few tokens when injected on every conversational turn.
+_TEXT_DISCLAIMER = "（情報提供のみ・安全用途不可）"
+
+
+def humanize_seconds(seconds: int | None) -> str:
+    """A compact Japanese duration: 約40秒 / 約3分 / 約2時間 / 約1日."""
+    if seconds is None:
+        return "不明"
+    if seconds < 90:
+        return f"約{seconds}秒"
+    minutes = seconds // 60
+    if minutes < 90:
+        return f"約{minutes}分"
+    hours = minutes // 60
+    if hours < 36:
+        return f"約{hours}時間"
+    return f"約{hours // 24}日"
+
+
+def render_situation_text(digest: dict) -> str:
+    """Render the situation digest as a compact Japanese text block.
+
+    This is what gets injected into the conversational LLM's context each turn
+    (Design B) so its understanding never drifts from the camera. Deliberately
+    terse to keep the per-turn token cost tiny.
+    """
+    current = digest.get("current")
+    if not current:
+        return f"[カメラ] まだ観測がありません。{_TEXT_DISCLAIMER}"
+
+    observing = digest.get("observing")
+    head = "観測中" if observing else "観測停止中"
+    stable = humanize_seconds(current.get("stable_seconds"))
+    lines = [f"[カメラの状況] {head}"]
+    overview = current.get("overview") or "(不明)"
+    line = f"現在: {overview}（{stable} 変化なし）"
+    if current.get("is_text") and current.get("ocr"):
+        line += f" / 表示テキスト: {current['ocr']}"
+    lines.append(line)
+
+    recent = digest.get("recent") or []
+    if recent:
+        # Skip baseline / "nothing changed" markers — they are not real changes
+        # and only add noise to the injected context.
+        changes = [
+            r["change"]
+            for r in recent
+            if r.get("change") and not looks_like_no_change(r["change"])
+        ][:3]
+        if changes:
+            lines.append("直近の変化: " + " / ".join(changes))
+
+    for s in digest.get("summaries") or []:
+        label = _TIER_LABELS.get(s.get("level"), f"L{s.get('level')}")
+        text = (s.get("text") or "").strip()
+        if text:
+            lines.append(f"{label}: {text}")
+
+    lines.append(_TEXT_DISCLAIMER)
+    return "\n".join(lines)

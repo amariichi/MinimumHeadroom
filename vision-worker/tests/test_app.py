@@ -70,6 +70,31 @@ def test_situation_reports_current_after_ingest(tmp_path, monkeypatch, make_fram
     assert body["recent"][0]["overview"] == body["current"]["overview"]
 
 
+def test_situation_text_format(tmp_path, monkeypatch, make_frame):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/ingest", files={"image": ("f.jpg", make_frame(0x0F0F), "image/jpeg")})
+    resp = client.get("/situation?format=text")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "[カメラの状況]" in resp.text
+    assert "現在:" in resp.text
+
+
+def test_look_returns_description(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_FRAME_DIR", _fixtures_dir())
+    client = _client(tmp_path, monkeypatch)
+    body = client.post("/look").json()
+    assert "overview" in body and body["overview"]
+    assert "safety" in body["disclaimer"].lower()
+
+
+def test_look_503_without_camera(tmp_path, monkeypatch):
+    monkeypatch.delenv("VISION_FRAME_DIR", raising=False)
+    monkeypatch.delenv("VISION_CAMERA_URL", raising=False)
+    client = _client(tmp_path, monkeypatch)
+    assert client.post("/look").status_code == 503
+
+
 def test_watch_registration_includes_disclaimer(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     resp = client.post("/watches", json={"name": "red light", "rule": "red", "kind": "keyword"})

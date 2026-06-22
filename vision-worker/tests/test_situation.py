@@ -6,7 +6,11 @@ from vision_worker.db import VisionDB
 from vision_worker.gate import ChangeGate
 from vision_worker.model_client import MockModelClient
 from vision_worker.pipeline import Pipeline
-from vision_worker.situation import compose_situation
+from vision_worker.situation import (
+    compose_situation,
+    humanize_seconds,
+    render_situation_text,
+)
 from vision_worker.store import FrameStore
 
 UTC = timezone.utc
@@ -118,6 +122,69 @@ def test_recent_is_shaped_to_at_overview_change():
         {"at": "t2", "overview": "o2", "change": "c2"},
         {"at": "t1", "overview": "o1", "change": "c1"},
     ]
+
+
+def test_humanize_seconds():
+    assert humanize_seconds(None) == "不明"
+    assert humanize_seconds(40) == "約40秒"
+    assert humanize_seconds(200) == "約3分"
+    assert humanize_seconds(7200) == "約2時間"
+    assert humanize_seconds(3 * 86400) == "約3日"
+
+
+def test_render_text_empty():
+    out = render_situation_text({"current": None, "observing": False})
+    assert "まだ観測がありません" in out
+    assert "安全用途不可" in out
+
+
+def test_render_text_full():
+    digest = {
+        "observing": True,
+        "current": {"overview": "机に本とノートPC", "is_text": False, "ocr": "", "stable_seconds": 40},
+        "recent": [
+            {"at": "t2", "overview": "o2", "change": "マグカップが片付けられた"},
+            {"at": "t1", "overview": "o1", "change": "人の手が伸びてきた"},
+        ],
+        "summaries": [
+            {"level": 1, "text": "本とPCが置かれた"},
+            {"level": 2, "text": "朝の作業が続いた"},
+        ],
+    }
+    out = render_situation_text(digest)
+    assert "観測中" in out
+    assert "机に本とノートPC" in out
+    assert "約40秒 変化なし" in out
+    assert "マグカップが片付けられた" in out
+    assert "直近: 本とPCが置かれた" in out  # tier-1 label
+    assert "1時間: 朝の作業が続いた" in out  # tier-2 label
+    assert "安全用途不可" in out
+
+
+def test_render_text_filters_baseline_marker():
+    digest = {
+        "observing": True,
+        "current": {"overview": "壁", "is_text": False, "ocr": "", "stable_seconds": 10},
+        "recent": [
+            {"at": "t2", "overview": "o2", "change": "最初のフレームです。"},
+            {"at": "t1", "overview": "o1", "change": "人が現れた"},
+        ],
+        "summaries": [],
+    }
+    out = render_situation_text(digest)
+    assert "最初のフレーム" not in out
+    assert "人が現れた" in out
+
+
+def test_render_text_includes_ocr_when_text():
+    digest = {
+        "observing": True,
+        "current": {"overview": "ホワイトボード", "is_text": True, "ocr": "9:00 会議", "stable_seconds": 5},
+        "recent": [],
+        "summaries": [],
+    }
+    out = render_situation_text(digest)
+    assert "表示テキスト: 9:00 会議" in out
 
 
 def test_pipeline_commit_sets_last_change_at_and_drives_stable_seconds(tmp_path, make_frame):
