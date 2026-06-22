@@ -219,6 +219,41 @@ class VisionDB:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def summaries_between(self, level: int, start_iso: str, end_iso: str) -> list[dict]:
+        """Summaries of a tier whose period_start is in [start_iso, end_iso).
+
+        The input a higher tier consolidates: e.g. the hour tier (level 2) reads
+        the ~six ten-minute (level 1) summaries inside its hour. Newest first.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT level, period_start, period_end, text, source_count, created_at"
+                " FROM summaries WHERE level = ? AND period_start >= ? AND period_start < ?"
+                " ORDER BY period_start DESC",
+                (level, start_iso, end_iso),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def prune_summaries(self, level: int, keep: int) -> None:
+        """Keep only the `keep` most recent summaries (by period_start) of a tier."""
+        with self._conn() as conn:
+            ids = [
+                r["id"]
+                for r in conn.execute(
+                    "SELECT id FROM summaries WHERE level = ?"
+                    " ORDER BY period_start DESC LIMIT ?",
+                    (level, keep),
+                ).fetchall()
+            ]
+            if ids:
+                placeholders = ",".join("?" * len(ids))
+                conn.execute(
+                    f"DELETE FROM summaries WHERE level = ? AND id NOT IN ({placeholders})",
+                    (level, *ids),
+                )
+            else:
+                conn.execute("DELETE FROM summaries WHERE level = ?", (level,))
+
     def search(self, query: str, limit: int = 50) -> list[dict]:
         like = f"%{query}%"
         with self._conn() as conn:

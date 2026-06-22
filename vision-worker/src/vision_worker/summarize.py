@@ -23,14 +23,31 @@ The read itself never blocks on the model, and perception is never starved.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-#: Tier-1 band geometry. "Recent" (the last few minutes) stays raw in the
-#: digest's `recent` list; tier 1 is the first *summarized* band behind it,
-#: covering [now-10min, now-3min] aligned to whole minutes so repeated reads
-#: within the same minute resolve to the same cache key.
-T1_LAG_MIN = 3
-T1_SPAN_MIN = 7  # 10 - 3
+#: The pyramidal tier ladder. "Recent" (the last few minutes of raw change
+#: events) stays verbatim in the digest's `recent` list — that is tier 0. Behind
+#: it, history is consolidated into fixed, non-overlapping, epoch-aligned
+#: wall-clock buckets, each tier coarser than the last. A tier is built by
+#: summarizing the tier directly below it (tier 1 summarizes raw changes; tier 2
+#: summarizes the ~six tier-1 summaries inside its hour; and so on), so every
+#: summarization step has only a handful of short inputs regardless of how much
+#: happened — the round-robin / RRDtool consolidation pattern.
+TIER_BUCKETS: dict[int, timedelta] = {
+    1: timedelta(minutes=10),
+    2: timedelta(hours=1),
+    3: timedelta(hours=6),
+    4: timedelta(days=1),
+}
+MAX_LEVEL = max(TIER_BUCKETS)
+
+#: How many summaries to retain per tier. Each cap comfortably exceeds the reach
+#: of the tier above (which consolidates the previous bucket), so a higher tier
+#: never finds its inputs already pruned: tier 2 (hourly) needs ~6 tier-1 of the
+#: last <2 h (keep 12); tier 3 (6 h) needs ~6 tier-2 of the last <12 h (keep 26);
+#: tier 4 (daily) needs ~4 tier-3 of the last <2 d (keep 12). Beyond the tier-4
+#: horizon (~2 weeks) everything is dropped (a long-term diary is out of scope).
+TIER_RETENTION: dict[int, int] = {1: 12, 2: 26, 3: 12, 4: 14}
 
 _INSTRUCTION_JA = (
     "次の時系列の変化ログを、1〜2文の自然な日本語で要約してください。"
@@ -38,15 +55,27 @@ _INSTRUCTION_JA = (
 )
 
 
-def floor_minute(dt: datetime) -> datetime:
-    return dt.replace(second=0, microsecond=0)
+def bucket_start(t: datetime, bucket: timedelta) -> datetime:
+    """Epoch-aligned floor of `t` to the bucket grid (UTC).
+
+    Epoch-based flooring aligns 10-min buckets to :00/:10/…, hour buckets to the
+    top of the hour, 6-hour buckets to 00/06/12/18 UTC, and day buckets to UTC
+    midnight — with no daylight-saving hazards since everything is UTC.
+    """
+    secs = bucket.total_seconds()
+    floored = (int(t.timestamp()) // int(secs)) * int(secs)
+    return datetime.fromtimestamp(floored, tz=timezone.utc)
 
 
-def t1_band(now: datetime) -> tuple[datetime, datetime]:
-    """The [now-10min, now-3min] tier-1 window, aligned to whole minutes."""
-    end = floor_minute(now) - timedelta(minutes=T1_LAG_MIN)
-    start = end - timedelta(minutes=T1_SPAN_MIN)
-    return start, end
+def tier_band(now: datetime, level: int) -> tuple[datetime, datetime]:
+    """The newest *closed* bucket for `level`: [start, end) with end <= now.
+
+    The currently-open bucket is `[bucket_start(now), …)`; the newest closed one
+    ends exactly where the open one begins, so it is always fully in the past.
+    """
+    bucket = TIER_BUCKETS[level]
+    open_start = bucket_start(now, bucket)
+    return open_start - bucket, open_start
 
 
 def _change_text(c: dict) -> str:
@@ -183,44 +212,66 @@ def _entry(level: int, start_iso: str, end_iso: str, text: str, count: int, *, p
     }
 
 
-def situation_summaries(db, summarizer: Summarizer, now: datetime, *, idle: bool) -> list[dict]:
-    """Build the `summaries` list for GET /situation (tier 1 only in M2).
+def _sources_for(db, level: int, start_iso: str, end_iso: str) -> list[dict]:
+    """The inputs a tier consolidates, normalised to change-record shape.
 
-    Returns the cached LLM summary for the tier-1 band if present; otherwise the
-    instant extractive summary, and — only when the scene is idle — schedules the
-    LLM summary to be computed and cached in the background. An empty band (no
-    changes 3-10 minutes ago) yields no entry.
+    Tier 1 reads the raw change observations in its band; every higher tier reads
+    the summaries of the tier directly below it, presented as `change_from_prev`
+    text so the same `extractive_summary`/`Summarizer` code handles both.
     """
-    start, end = t1_band(now)
+    if level <= 1:
+        return db.changes_between(start_iso, end_iso)
+    rows = db.summaries_between(level - 1, start_iso, end_iso)
+    return [{"created_at": r["period_start"], "change_from_prev": r["text"]} for r in rows]
+
+
+def _consolidate_tier(db, summarizer: Summarizer, now: datetime, level: int, *, idle: bool) -> dict | None:
+    """Newest-closed summary entry for one tier (cached LLM, else instant
+    extractive), scheduling the LLM job when idle+uncached. None when the band
+    has no source content yet."""
+    start, end = tier_band(now, level)
     start_iso, end_iso = start.isoformat(), end.isoformat()
 
-    cached = db.get_summary(1, start_iso)
+    cached = db.get_summary(level, start_iso)
     if cached:
-        return [
-            _entry(
-                1,
-                cached["period_start"],
-                cached["period_end"],
-                cached["text"],
-                cached["source_count"],
-                pending=False,
-            )
-        ]
+        return _entry(
+            level, cached["period_start"], cached["period_end"],
+            cached["text"], cached["source_count"], pending=False,
+        )
 
-    changes = db.changes_between(start_iso, end_iso)
-    if not changes:
-        return []
+    sources = _sources_for(db, level, start_iso, end_iso)
+    if not sources:
+        return None
 
     pending = summarizer.enabled and idle
     if pending:
         summarizer.schedule(
-            db,
-            level=1,
-            period_start_iso=start_iso,
-            period_end_iso=end_iso,
-            changes=changes,
+            db, level=level, period_start_iso=start_iso,
+            period_end_iso=end_iso, changes=sources,
         )
-    return [_entry(1, start_iso, end_iso, extractive_summary(changes), len(changes), pending=pending)]
+    return _entry(level, start_iso, end_iso, extractive_summary(sources), len(sources), pending=pending)
+
+
+def situation_summaries(db, summarizer: Summarizer, now: datetime, *, idle: bool) -> list[dict]:
+    """Build the `summaries` list for GET /situation: the newest closed summary
+    of each populated tier (1 = ~10 min, 2 = hour, 3 = 6 h, 4 = day), coarsest
+    history furthest back.
+
+    For each tier it returns the cached LLM summary if present, else an instant
+    extractive summary, and — only while the scene is idle — schedules the LLM
+    summary to be computed and cached off the request thread. The read never
+    blocks on the model. While idle it also prunes each tier to its retention
+    cap so the table stays bounded over a long run.
+    """
+    out: list[dict] = []
+    for level in range(1, MAX_LEVEL + 1):
+        entry = _consolidate_tier(db, summarizer, now, level, idle=idle)
+        if entry is not None:
+            out.append(entry)
+    if idle:
+        for level, keep in TIER_RETENTION.items():
+            db.prune_summaries(level, keep)
+    return out
 
 
 def build_summarizer(settings) -> Summarizer:

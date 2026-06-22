@@ -6,13 +6,22 @@ from datetime import datetime, timedelta, timezone
 from vision_worker.db import VisionDB
 from vision_worker.records import Observation
 from vision_worker.summarize import (
+    MAX_LEVEL,
     Summarizer,
+    bucket_start,
     extractive_summary,
     situation_summaries,
-    t1_band,
+    tier_band,
 )
 
 UTC = timezone.utc
+
+# A fixed reference time with clean tier alignment, used across the ladder tests:
+#   T1 (10 min) closed band -> [08:10, 08:20)
+#   T2 (1 h)    closed band -> [07:00, 08:00)
+#   T3 (6 h)    closed band -> [00:00, 06:00)
+#   T4 (1 day)  closed band -> [2026-06-21 00:00, 2026-06-22 00:00)
+NOW = datetime(2026, 6, 22, 8, 25, 30, tzinfo=UTC)
 
 
 # ---- extractive_summary (pure, model-free) ---------------------------------
@@ -45,19 +54,14 @@ def test_extractive_multiple_spans_endpoints():
 
 def test_summarizer_disabled_uses_extractive():
     s = Summarizer(base_url="http://unused", model_name="m", enabled=False)
-    changes = [{"change_from_prev": "本が置かれた"}]
-    assert s.summarize(changes) == "本が置かれた"
+    assert s.summarize([{"change_from_prev": "本が置かれた"}]) == "本が置かれた"
 
 
 def test_summarizer_falls_back_when_endpoint_unreachable():
     # Port 1 refuses instantly; the LLM call fails and we degrade to extractive
     # rather than raising — a read must never fail because the model is down.
     s = Summarizer(base_url="http://127.0.0.1:1/v1", model_name="m", timeout=1.0)
-    changes = [
-        {"change_from_prev": "本が置かれた"},
-        {"change_from_prev": "スマホが置かれた"},
-    ]
-    out = s.summarize(changes)
+    out = s.summarize([{"change_from_prev": "本が置かれた"}, {"change_from_prev": "スマホが置かれた"}])
     assert out.startswith("2件の変化")
 
 
@@ -71,42 +75,67 @@ def test_summarizer_empty_changes_is_blank():
 
 def test_summary_upsert_get_and_recent(tmp_path):
     db = VisionDB(str(tmp_path / "v.db"))
-    db.upsert_summary(1, "2026-06-21T12:00:00+00:00", "2026-06-21T12:07:00+00:00", "要約A", 3)
+    db.upsert_summary(1, "2026-06-21T12:00:00+00:00", "2026-06-21T12:10:00+00:00", "要約A", 3)
     got = db.get_summary(1, "2026-06-21T12:00:00+00:00")
-    assert got["text"] == "要約A"
-    assert got["source_count"] == 3
-    # Upsert replaces in place (same level+period_start), not duplicates.
-    db.upsert_summary(1, "2026-06-21T12:00:00+00:00", "2026-06-21T12:07:00+00:00", "要約B", 5)
+    assert got["text"] == "要約A" and got["source_count"] == 3
+    db.upsert_summary(1, "2026-06-21T12:00:00+00:00", "2026-06-21T12:10:00+00:00", "要約B", 5)
     got2 = db.get_summary(1, "2026-06-21T12:00:00+00:00")
-    assert got2["text"] == "要約B"
-    assert got2["source_count"] == 5
-    db.upsert_summary(1, "2026-06-21T12:10:00+00:00", "2026-06-21T12:17:00+00:00", "要約C", 1)
-    recent = db.recent_summaries(1, 10)
-    assert [r["text"] for r in recent] == ["要約C", "要約B"]  # newest period first
+    assert got2["text"] == "要約B" and got2["source_count"] == 5  # replaced in place
+    db.upsert_summary(1, "2026-06-21T12:10:00+00:00", "2026-06-21T12:20:00+00:00", "要約C", 1)
+    assert [r["text"] for r in db.recent_summaries(1, 10)] == ["要約C", "要約B"]
 
 
-def _insert_change(db: VisionDB, overview: str, change: str) -> None:
-    fid = db.insert_frame(
-        datetime.now(UTC).isoformat(), "h", str("/tmp/none.jpg"), None, 64, 64
-    )
-    db.insert_observation(
-        fid,
-        Observation(is_text=False, ocr_full="", overview=overview, change_from_prev=change),
-    )
-
-
-def test_changes_between_filters_by_time(tmp_path):
+def test_summaries_between_filters_level_and_time(tmp_path):
     db = VisionDB(str(tmp_path / "v.db"))
-    _insert_change(db, "now-a", "変化A")
-    now = datetime.now(UTC)
-    # A window around now finds it; a window 3-10 min ago does not.
-    near = db.changes_between((now - timedelta(minutes=1)).isoformat(), (now + timedelta(minutes=1)).isoformat())
-    far = db.changes_between((now - timedelta(minutes=10)).isoformat(), (now - timedelta(minutes=3)).isoformat())
-    assert len(near) == 1
-    assert far == []
+    db.upsert_summary(1, "2026-06-22T07:10:00+00:00", "2026-06-22T07:20:00+00:00", "a", 1)
+    db.upsert_summary(1, "2026-06-22T07:30:00+00:00", "2026-06-22T07:40:00+00:00", "b", 1)
+    db.upsert_summary(1, "2026-06-22T08:10:00+00:00", "2026-06-22T08:20:00+00:00", "c", 1)  # outside
+    db.upsert_summary(2, "2026-06-22T07:00:00+00:00", "2026-06-22T08:00:00+00:00", "lvl2", 1)  # wrong level
+    got = db.summaries_between(1, "2026-06-22T07:00:00+00:00", "2026-06-22T08:00:00+00:00")
+    assert [r["text"] for r in got] == ["b", "a"]  # newest first, c & lvl2 excluded
 
 
-# ---- situation_summaries orchestration -------------------------------------
+def test_prune_summaries_keeps_newest(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    for i in range(10):
+        db.upsert_summary(1, f"2026-06-22T07:{i:02d}:00+00:00", f"2026-06-22T07:{i:02d}:30+00:00", f"s{i}", 1)
+    db.prune_summaries(1, 3)
+    kept = [r["period_start"] for r in db.recent_summaries(1, 50)]
+    assert kept == ["2026-06-22T07:09:00+00:00", "2026-06-22T07:08:00+00:00", "2026-06-22T07:07:00+00:00"]
+
+
+# ---- tier band geometry -----------------------------------------------------
+
+
+def test_tier_band_alignment():
+    assert tier_band(NOW, 1) == (datetime(2026, 6, 22, 8, 10, tzinfo=UTC), datetime(2026, 6, 22, 8, 20, tzinfo=UTC))
+    assert tier_band(NOW, 2) == (datetime(2026, 6, 22, 7, 0, tzinfo=UTC), datetime(2026, 6, 22, 8, 0, tzinfo=UTC))
+    assert tier_band(NOW, 3) == (datetime(2026, 6, 22, 0, 0, tzinfo=UTC), datetime(2026, 6, 22, 6, 0, tzinfo=UTC))
+    assert tier_band(NOW, 4) == (datetime(2026, 6, 21, 0, 0, tzinfo=UTC), datetime(2026, 6, 22, 0, 0, tzinfo=UTC))
+
+
+def test_bucket_start_aligns_to_grid():
+    assert bucket_start(NOW, timedelta(hours=6)) == datetime(2026, 6, 22, 6, 0, tzinfo=UTC)
+    assert bucket_start(NOW, timedelta(days=1)) == datetime(2026, 6, 22, 0, 0, tzinfo=UTC)
+
+
+# ---- helpers for orchestration tests ---------------------------------------
+
+
+def _insert_change_at(db: VisionDB, created_at_iso: str, overview: str, change: str) -> None:
+    """Insert a change observation with an explicit created_at (the public API
+    stamps 'now', so tests write the row directly to control the time band)."""
+    with db._conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO frames(captured_at, phash, full_path, thumb_path, width, height)"
+            " VALUES(?, ?, ?, ?, ?, ?)",
+            (created_at_iso, "h", "/tmp/none.jpg", None, 64, 64),
+        )
+        conn.execute(
+            "INSERT INTO observations(frame_id, is_text, ocr_full, overview, change_from_prev,"
+            " model, latency_ms, low_confidence, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cur.lastrowid, 0, "", overview, change, "test", 0, 0, created_at_iso),
+        )
 
 
 class _FakeSummarizer(Summarizer):
@@ -119,52 +148,93 @@ class _FakeSummarizer(Summarizer):
         return "LLMによる要約"
 
 
-def _now_ahead(minutes: int) -> datetime:
-    # A synthetic 'now' N minutes ahead so just-inserted rows land in the
-    # tier-1 [now-10, now-3] band without fabricating backdated timestamps.
-    return datetime.now(UTC) + timedelta(minutes=minutes)
+# ---- situation_summaries orchestration -------------------------------------
 
 
-def test_situation_summaries_empty_band_returns_nothing(tmp_path):
+def test_no_closed_band_content_returns_nothing(tmp_path):
     db = VisionDB(str(tmp_path / "v.db"))
-    _insert_change(db, "x", "変化X")  # at real now
-    # Band 3-10 min behind a 'now' that is only +1 min ahead excludes it.
-    out = situation_summaries(db, _FakeSummarizer(), _now_ahead(1), idle=True)
-    assert out == []
+    # A change in the *open* tier-1 bucket (08:20-08:30) is not in any closed band.
+    _insert_change_at(db, "2026-06-22T08:24:00+00:00", "x", "変化X")
+    assert situation_summaries(db, _FakeSummarizer(), NOW, idle=True) == []
 
 
-def test_situation_summaries_not_idle_returns_extractive_only(tmp_path):
+def test_tier1_not_idle_returns_extractive_only(tmp_path):
     db = VisionDB(str(tmp_path / "v.db"))
-    _insert_change(db, "a", "本が置かれた")
-    _insert_change(db, "b", "スマホが置かれた")
-    out = situation_summaries(db, _FakeSummarizer(), _now_ahead(6), idle=False)
-    assert len(out) == 1
-    assert out[0]["level"] == 1
+    _insert_change_at(db, "2026-06-22T08:12:00+00:00", "a", "本が置かれた")
+    _insert_change_at(db, "2026-06-22T08:15:00+00:00", "b", "スマホが置かれた")
+    out = situation_summaries(db, _FakeSummarizer(), NOW, idle=False)
+    assert len(out) == 1 and out[0]["level"] == 1
     assert out[0]["pending_llm"] is False
     assert out[0]["text"].startswith("2件の変化")
-    # Not idle => no LLM job scheduled => nothing cached.
-    start, _ = t1_band(_now_ahead(6))
+    # Not idle => no LLM scheduled => nothing cached.
+    start, _ = tier_band(NOW, 1)
     assert db.get_summary(1, start.isoformat()) is None
 
 
-def test_situation_summaries_idle_schedules_llm_and_caches(tmp_path):
+def test_tier1_idle_schedules_llm_and_caches(tmp_path):
     db = VisionDB(str(tmp_path / "v.db"))
-    _insert_change(db, "a", "本が置かれた")
-    _insert_change(db, "b", "スマホが置かれた")
-    now = _now_ahead(6)
-    out = situation_summaries(db, _FakeSummarizer(), now, idle=True)
+    _insert_change_at(db, "2026-06-22T08:12:00+00:00", "a", "本が置かれた")
+    _insert_change_at(db, "2026-06-22T08:15:00+00:00", "b", "スマホが置かれた")
+    out = situation_summaries(db, _FakeSummarizer(), NOW, idle=True)
     assert out[0]["pending_llm"] is True
     assert out[0]["text"].startswith("2件の変化")  # instant extractive first
 
-    start, _ = t1_band(now)
-    # The background job upserts the LLM summary shortly after.
+    start, _ = tier_band(NOW, 1)
     deadline = time.time() + 3.0
     while time.time() < deadline and db.get_summary(1, start.isoformat()) is None:
         time.sleep(0.02)
     cached = db.get_summary(1, start.isoformat())
     assert cached is not None and cached["text"] == "LLMによる要約"
 
-    # The next read returns the cached LLM summary, not the extractive one.
-    out2 = situation_summaries(db, _FakeSummarizer(), now, idle=True)
-    assert out2[0]["text"] == "LLMによる要約"
-    assert out2[0]["pending_llm"] is False
+    out2 = situation_summaries(db, _FakeSummarizer(), NOW, idle=True)
+    lvl1 = [e for e in out2 if e["level"] == 1][0]
+    assert lvl1["text"] == "LLMによる要約" and lvl1["pending_llm"] is False
+
+
+def test_tier2_consolidates_tier1_summaries(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    # Three tier-1 summaries inside the closed tier-2 (hour) band [07:00, 08:00).
+    db.upsert_summary(1, "2026-06-22T07:10:00+00:00", "2026-06-22T07:20:00+00:00", "本が置かれた", 2)
+    db.upsert_summary(1, "2026-06-22T07:30:00+00:00", "2026-06-22T07:40:00+00:00", "PCが開かれた", 1)
+    db.upsert_summary(1, "2026-06-22T07:50:00+00:00", "2026-06-22T08:00:00+00:00", "人が現れた", 1)
+    out = situation_summaries(db, _FakeSummarizer(), NOW, idle=False)
+    lvl2 = [e for e in out if e["level"] == 2]
+    assert len(lvl2) == 1
+    assert lvl2[0]["source_count"] == 3
+    assert lvl2[0]["text"].startswith("3件の変化")  # extractive over the 3 lower summaries
+    assert lvl2[0]["period_start"] == "2026-06-22T07:00:00+00:00"
+
+
+def test_tier3_consolidates_tier2_and_tier4_consolidates_tier3(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    # tier-2 summaries inside the closed tier-3 band [00:00, 06:00)
+    db.upsert_summary(2, "2026-06-22T03:00:00+00:00", "2026-06-22T04:00:00+00:00", "朝の活動", 4)
+    db.upsert_summary(2, "2026-06-22T04:00:00+00:00", "2026-06-22T05:00:00+00:00", "片付け", 2)
+    # tier-3 summaries inside the closed tier-4 band [06-21 00:00, 06-22 00:00)
+    db.upsert_summary(3, "2026-06-21T06:00:00+00:00", "2026-06-21T12:00:00+00:00", "昼の様子", 5)
+    db.upsert_summary(3, "2026-06-21T12:00:00+00:00", "2026-06-21T18:00:00+00:00", "夕方の様子", 3)
+    out = situation_summaries(db, _FakeSummarizer(), NOW, idle=False)
+    levels = {e["level"]: e for e in out}
+    assert 3 in levels and levels[3]["source_count"] == 2
+    assert 4 in levels and levels[4]["source_count"] == 2
+    assert levels[4]["period_start"] == "2026-06-21T00:00:00+00:00"
+
+
+def test_full_ladder_returns_one_entry_per_populated_tier(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    _insert_change_at(db, "2026-06-22T08:12:00+00:00", "a", "本が置かれた")  # T1 raw
+    db.upsert_summary(1, "2026-06-22T07:10:00+00:00", "2026-06-22T07:20:00+00:00", "x", 1)  # -> T2
+    db.upsert_summary(2, "2026-06-22T03:00:00+00:00", "2026-06-22T04:00:00+00:00", "y", 1)  # -> T3
+    db.upsert_summary(3, "2026-06-21T06:00:00+00:00", "2026-06-21T12:00:00+00:00", "z", 1)  # -> T4
+    out = situation_summaries(db, _FakeSummarizer(), NOW, idle=False)
+    assert [e["level"] for e in out] == [1, 2, 3, 4]
+    assert MAX_LEVEL == 4
+
+
+def test_retention_prunes_when_idle(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    # 20 tier-1 summaries; retention cap for tier 1 is 12.
+    for i in range(20):
+        db.upsert_summary(1, f"2026-06-22T05:{i:02d}:00+00:00", f"2026-06-22T05:{i:02d}:30+00:00", f"s{i}", 1)
+    situation_summaries(db, _FakeSummarizer(), NOW, idle=True)
+    assert len(db.recent_summaries(1, 100)) == 12
