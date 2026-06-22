@@ -166,6 +166,9 @@ def create_app() -> FastAPI:
         last_observed_at = (
             perception.last_observed_at if perception is not None else None
         )
+        # The camera is "stale" if no fresh frame has arrived for several poll
+        # cycles while the loop is meant to be observing (unplugged/unreachable).
+        stale_after_s = max(15.0, 3 * settings.idle_interval_ms / 1000.0)
         digest = compose_situation(
             now=now,
             observing=observing,
@@ -174,6 +177,7 @@ def create_app() -> FastAPI:
             last_observed_at=last_observed_at,
             recent=db.recent_changes(settings.situation_recent_n),
             summaries=[],
+            stale_after_s=stale_after_s,
         )
         # "Idle" = the loop is running and the scene has held still at least one
         # slow-poll cycle (not mid-burst). Summarization (the LLM text call) is
@@ -329,6 +333,7 @@ def create_app() -> FastAPI:
             "capability": capability,
             "narrate": narrator.enabled,
             "voice_wired": settings.alert_enabled and bool(settings.alert_webhook),
+            "last_error": perception.last_error if perception is not None else None,
         }
 
     @app.post("/watches")

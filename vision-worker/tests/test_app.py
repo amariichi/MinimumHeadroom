@@ -64,8 +64,11 @@ def test_situation_reports_current_after_ingest(tmp_path, monkeypatch, make_fram
     body = client.get("/situation").json()
     assert body["current"] is not None
     assert body["current"]["overview"]  # non-empty
-    # Not observing via the loop here, so stable_seconds may be 0+ but present.
-    assert isinstance(body["current"]["stable_seconds"], int)
+    # Ingested via /ingest, not the perception loop, so there is no confirmed
+    # observation timestamp -> stable_seconds is null (we don't claim stability
+    # we never watched) and the camera is not flagged stale.
+    assert body["current"]["stable_seconds"] is None
+    assert body["current"]["stale"] is False
     assert len(body["recent"]) == 1
     assert body["recent"][0]["overview"] == body["current"]["overview"]
 

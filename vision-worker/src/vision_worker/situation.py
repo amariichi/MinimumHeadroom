@@ -45,6 +45,7 @@ def compose_situation(
     last_observed_at: datetime | None,
     recent: list[dict],
     summaries: list[dict] | None = None,
+    stale_after_s: float = 30.0,
 ) -> dict:
     """Assemble the situation digest.
 
@@ -52,13 +53,16 @@ def compose_situation(
     running. `latest` is `VisionDB.latest()` (or None when nothing seen yet).
     `last_change_at`/`last_observed_at` are the in-memory perception timestamps;
     either may be None right after a restart. `recent` is `recent_changes(n)`
-    (newest first). `summaries` are the tiered digests (empty until M2).
+    (newest first). `summaries` are the tiered digests.
 
-    `stable_seconds` is how long the current scene has held. The reference clock
-    is `now` while the loop is observing (so the value grows smoothly on each
-    re-read of a still scene, and over-claims by at most one poll interval), but
-    falls back to `last_observed_at` when the loop is stopped so we never claim
-    stability for a period we did not actually watch.
+    `stable_seconds` is *confirmed* stability: it is measured from the last
+    actual observation (`last_observed_at`), so it stops growing the instant
+    frames stop arriving — a disconnected camera or a stopped loop never inflates
+    it. Without any observation this session it is `null` rather than a
+    misleading large number derived from a stale database row. `stale` is true
+    when the loop is supposedly observing but no fresh frame has arrived for
+    longer than `stale_after_s` (the camera is unreachable), so a reader knows
+    the figures are not currently live.
     """
     summaries = list(summaries or [])
     if latest is None:
@@ -71,18 +75,21 @@ def compose_situation(
         }
 
     # When the current scene began. Prefer the in-memory commit time; fall back
-    # to the latest row's created_at so a freshly-restarted worker still reports
-    # a sane (conservative) duration instead of nothing.
+    # to the latest row's created_at so a freshly-restarted worker still knows
+    # when the scene last changed.
     changed_at = last_change_at or _parse_iso(latest.get("created_at"))
 
-    if observing or last_observed_at is None:
-        reference = now
-    else:
-        reference = last_observed_at
-
+    confirmed_age_seconds: int | None = None
     stable_seconds: int | None = None
-    if changed_at is not None:
-        stable_seconds = max(0, int((reference - changed_at).total_seconds()))
+    if last_observed_at is not None:
+        confirmed_age_seconds = max(0, int((now - last_observed_at).total_seconds()))
+        if changed_at is not None:
+            stable_seconds = max(0, int((last_observed_at - changed_at).total_seconds()))
+    stale = bool(
+        observing
+        and confirmed_age_seconds is not None
+        and confirmed_age_seconds > stale_after_s
+    )
 
     current = {
         "overview": latest.get("overview", ""),
@@ -90,7 +97,9 @@ def compose_situation(
         "ocr": latest.get("ocr_full", ""),
         "changed_at": _iso(changed_at),
         "confirmed_at": _iso(last_observed_at),
+        "confirmed_age_seconds": confirmed_age_seconds,
         "stable_seconds": stable_seconds,
+        "stale": stale,
     }
 
     recent_out = [
@@ -145,11 +154,25 @@ def render_situation_text(digest: dict) -> str:
         return f"[カメラ] まだ観測がありません。{_TEXT_DISCLAIMER}"
 
     observing = digest.get("observing")
-    head = "観測中" if observing else "観測停止中"
-    stable = humanize_seconds(current.get("stable_seconds"))
+    stale = current.get("stale")
+    if stale:
+        head = "⚠カメラ応答なし"
+    elif observing:
+        head = "観測中"
+    else:
+        head = "観測停止中"
     lines = [f"[カメラの状況] {head}"]
+
     overview = current.get("overview") or "(不明)"
-    line = f"現在: {overview}（{stable} 変化なし）"
+    stable_seconds = current.get("stable_seconds")
+    if stale:
+        age = humanize_seconds(current.get("confirmed_age_seconds"))
+        line = f"現在: {overview}（最終確認 {age}前、カメラ応答なし）"
+    elif stable_seconds is not None:
+        line = f"現在: {overview}（{humanize_seconds(stable_seconds)} 変化なし）"
+    else:
+        # No live observation (e.g. on-demand only / loop not running).
+        line = f"現在: {overview}（最後に見えた様子）"
     if current.get("is_text") and current.get("ocr"):
         line += f" / 表示テキスト: {current['ocr']}"
     lines.append(line)

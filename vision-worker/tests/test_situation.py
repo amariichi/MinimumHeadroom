@@ -73,8 +73,10 @@ def test_stable_seconds_freezes_at_last_look_when_not_observing():
 
 
 def test_changed_at_falls_back_to_db_created_at_after_restart():
-    # After a restart, in-memory last_change_at is None; the digest derives the
-    # change time from the latest DB row so stable_seconds is still sane.
+    # After a restart, in-memory last_change_at is None; the digest still derives
+    # the change time from the latest DB row. But with no observation yet this
+    # session (last_observed_at None), stable_seconds is null — we cannot honestly
+    # claim a confirmed-stable duration from a stale DB row.
     created = datetime(2026, 6, 21, 11, 59, 0, tzinfo=UTC)
     latest = {"overview": "x", "is_text": False, "ocr_full": "", "created_at": created.isoformat()}
     digest = compose_situation(
@@ -86,7 +88,38 @@ def test_changed_at_falls_back_to_db_created_at_after_restart():
         recent=[],
     )
     assert digest["current"]["changed_at"] == created.isoformat()
-    assert digest["current"]["stable_seconds"] == 20
+    assert digest["current"]["stable_seconds"] is None
+
+
+def test_stale_when_observing_but_camera_silent():
+    # Loop says it is observing, but no fresh frame has arrived for 220s: the
+    # camera is unreachable. stable_seconds must FREEZE at the last confirmation
+    # (80s), not keep growing toward 300s, and `stale` flags it.
+    changed_at = datetime(2026, 6, 21, 12, 0, 0, tzinfo=UTC)
+    last_look = changed_at + timedelta(seconds=80)
+    now = changed_at + timedelta(seconds=300)
+    latest = {"overview": "x", "is_text": False, "ocr_full": "", "created_at": changed_at.isoformat()}
+    digest = compose_situation(
+        now=now, observing=True, latest=latest,
+        last_change_at=changed_at, last_observed_at=last_look, recent=[], stale_after_s=30,
+    )
+    c = digest["current"]
+    assert c["stale"] is True
+    assert c["stable_seconds"] == 80  # frozen at last confirmation, not 300
+    assert c["confirmed_age_seconds"] == 220
+
+
+def test_not_stale_when_recently_confirmed():
+    changed_at = datetime(2026, 6, 21, 12, 0, 0, tzinfo=UTC)
+    last_look = changed_at + timedelta(seconds=40)
+    now = last_look + timedelta(seconds=5)
+    latest = {"overview": "x", "is_text": False, "ocr_full": "", "created_at": changed_at.isoformat()}
+    digest = compose_situation(
+        now=now, observing=True, latest=latest,
+        last_change_at=changed_at, last_observed_at=last_look, recent=[], stale_after_s=30,
+    )
+    assert digest["current"]["stale"] is False
+    assert digest["current"]["stable_seconds"] == 40
 
 
 def test_stable_seconds_never_negative():
@@ -174,6 +207,19 @@ def test_render_text_filters_baseline_marker():
     out = render_situation_text(digest)
     assert "最初のフレーム" not in out
     assert "人が現れた" in out
+
+
+def test_render_text_stale_camera_does_not_claim_stable():
+    digest = {
+        "observing": True,
+        "current": {"overview": "机", "is_text": False, "ocr": "",
+                    "stable_seconds": 80, "confirmed_age_seconds": 220, "stale": True},
+        "recent": [],
+        "summaries": [],
+    }
+    out = render_situation_text(digest)
+    assert "カメラ応答なし" in out
+    assert "変化なし" not in out  # must not falsely claim a live stable duration
 
 
 def test_render_text_includes_ocr_when_text():
