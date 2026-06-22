@@ -1,23 +1,21 @@
 ---
 name: atoms3r-vision
-description: Query the AtomS3R-M12 camera's rolling visual memory — what the camera sees now or saw recently, OCR of a document in view, and registering simple spoken visual alerts. For accurate reads, fetch the full-resolution frame and read it directly.
+description: The AtomS3R-M12 camera as a hands-free ambient scene companion — what it sees now, how long it's been stable, what changed recently, a one-shot "what do you see?", and spoken visual alerts. Its fixed soft lens reads only large text/signs, NOT fine print; route documents/labels/homework to the phone-camera path instead.
 ---
 
-# AtomS3R-M12 Vision Memory
+# AtomS3R-M12 Vision — ambient scene companion
 
-Use this skill when the user asks about what the camera is **currently** or was **recently** seeing, wants you to **read/solve** something visible in the camera (a workbook problem, a sign, a screen), or wants to **register a spoken alert** ("tell me if you see a red light").
+Use this skill when the user asks what the camera is **currently** or was **recently** seeing, asks **"what do you see?"** about the scene around them, wants to know **how long** things have looked the same or **what changed earlier**, or wants to **register a spoken alert** ("tell me if you see a red light").
 
-The camera (an AtomS3R-M12 kit) streams frames to a local service, `vision-worker`, which keeps a small rolling memory: the latest observation, the previous one, and roughly the last 50 *changes*. Each observation has a fast OCR transcription (`ocr_full`), a one-line `overview`, and a one-line `change_from_prev`. The original full-resolution frames are stored on disk and retrievable by id.
+The camera (an AtomS3R-M12 kit) streams frames to a local service, `vision-worker`, which keeps a small rolling memory: the latest observation, the previous one, and roughly the last 50 *changes*, plus progressively coarser time-tier summaries. Each observation has a one-line `overview`, a one-line `change_from_prev`, and an `ocr_full` (text the model could read). Frames are stored on disk and retrievable by id.
 
-## ⚠️ Accuracy: the stored text is an index, not the answer
+## ⚠️ What the M12 can and cannot read
 
-`ocr_full` comes from a fast vision model and may be imperfect. **For any accuracy-sensitive request** (solving a problem, reading fine print, transcribing exactly), do **not** answer from `ocr_full`. Instead:
+The M12 has a **fixed, soft (slightly out-of-focus) wide lens** and streams a small VGA frame to stay mobile-frugal. It is good at **scenes and objects** (a desk, a person, a door, a box, big signage) and can read **large text only** (a sign, a big label, a slide heading) into `ocr_full`. It **cannot** reliably read fine print: documents, book pages, homework problems, small labels, screens of dense text.
 
-1. find the relevant observation (it carries a `frame_id`),
-2. download the full-resolution frame: `GET /frame/{frame_id}`,
-3. **read that image with your own vision**, then answer.
-
-Use `ocr_full`/`overview` only to locate the right frame and for quick "what's there?" answers.
+- For **scene / object / "what's around me"** questions → this skill is the right tool.
+- For **fine reading** (documents, labels, homework, dense screens) → do **not** use the M12; route the user to the **phone-camera path** instead (a separate capability). Say so plainly rather than returning an unreliable transcription.
+- `ocr_full` is reliable only for large text; treat it as a hint, never as an exact transcription. Fetching the full stored frame (`GET /frame/{id}`) lets you look yourself, but the lens is still soft — it does not turn the M12 into a document scanner. `full`-resolution capture is **not** worth the bandwidth and does not sharpen the soft optics.
 
 ## ⚠️ Safety boundary
 
@@ -42,7 +40,7 @@ curl -s -X POST "$BASE/capture" -o /tmp/now.jpg   # Mode A: grab ONE fresh frame
 curl -s "$BASE/latest"            # most recent stored observation (incl. frame_id)
 curl -s "$BASE/previous"          # the one before that
 curl -s "$BASE/diffs?n=50"        # rolling window of recent change observations
-curl -s "$BASE/search?q=problem"  # substring search over OCR text + overview
+curl -s "$BASE/search?q=mug"      # substring search over overview + any read text
 curl -s "$BASE/frame/12" -o /tmp/frame.jpg   # original full-resolution stored JPEG by id
 curl -s "$BASE/metrics"           # counts + pipeline stats
 curl -s -X POST "$BASE/perception/start"   # Mode B: start continuous watching (gated; see below)
@@ -53,12 +51,12 @@ curl -s "$BASE/perception/status"          # running? locked? capability?
 Each observation looks like:
 
 ```json
-{"frame_id": 12, "is_text": true, "overview": "a workbook page",
- "ocr_full": "Problem 12. ...", "change_from_prev": "page turned to problem 12",
+{"frame_id": 12, "is_text": false, "overview": "a desk with a book and a mug",
+ "ocr_full": "", "change_from_prev": "a mug was placed on the desk",
  "low_confidence": false, "captured_at": "2026-..."}
 ```
 
-`low_confidence: true` means treat the text as especially unreliable — fetch the frame.
+`low_confidence: true` means treat the observation as especially unreliable. `is_text`/`ocr_full` are populated only when large, legible text fills the frame; for ordinary scenes `ocr_full` is empty.
 
 ## Staying in sync with the camera (the situational digest)
 
@@ -91,26 +89,32 @@ short disclaimer.
 
 ## Two ways to use the camera
 
-- **Mode A — on-demand (default).** The user asks about what they are pointing
-  at right now ("read this", "explain problem 14"). Grab one fresh frame and read
-  it yourself. No continuous loop, no GPU; the camera only "looks" when asked.
+- **Mode A — on-demand (default).** The user asks what's in front of them right
+  now ("what's on the desk?", "what do you see?"). Take one fresh look. No
+  continuous loop; the camera only "looks" when asked.
 - **Mode B — continuous watching.** Ambient monitoring ("tell me if you see a red
   light"). Start a background loop. Needs the GPU model and is gated (see below).
 
 ## Recipes
 
-**"Can you read problem 14 / explain what I'm pointing at?"** (Mode A — primary)
+**"What do you see right now? / What's on the desk?"** (Mode A — primary)
 
 ```bash
-curl -s -X POST "$BASE/capture?full=1" -o /tmp/now.jpg
+curl -s -X POST "$BASE/look"   # fresh frame, model describes it now; joins memory
 ```
-Then **read `/tmp/now.jpg` with your own vision** and answer from the actual
-image. This is the most accurate path; do not rely on stored OCR text.
+Answer from the returned `overview`. For a closer look at a *scene* you can also
+grab the frame and view it yourself (`POST /capture -o /tmp/now.jpg`), but
+remember the lens is soft — this is not for fine reading.
+
+**"Can you read this document / problem / label?"** (fine reading)
+
+The M12 cannot do this reliably (soft fixed lens). Tell the user to use the
+**phone-camera path** for fine reading rather than returning a guess.
 
 **"What is the camera seeing right now?"** (quick, if a loop is already running)
 
 ```bash
-curl -s "$BASE/latest"     # otherwise use /capture and look yourself
+curl -s "$BASE/situation"     # current scene + how long stable; or /latest, or /look
 ```
 
 **"What has changed recently?"** (needs Mode B running)
@@ -154,5 +158,5 @@ state before acting.
   ```bash
   curl -s "$BASE/latest" | python3 -c "import sys,json;print(json.load(sys.stdin)['frame_id'])"
   ```
-- If `/healthz` is unreachable, the camera stack is not running; tell the user how to start it (`./scripts/run-vision-worker.sh`, plus the diffusiongemma backend for real OCR) rather than guessing.
-- This skill is read-only except for `POST /watches`.
+- If `/healthz` is unreachable, the camera stack is not running; tell the user how to start it (`./scripts/run-vision-worker.sh`, plus the diffusiongemma backend for model-based scene description) rather than guessing.
+- Mostly read-only, but note the writes: `POST /look` (default) and Mode B commit observations to the rolling memory, `GET /situation` caches tier summaries, and `POST /watches` registers an alert.
