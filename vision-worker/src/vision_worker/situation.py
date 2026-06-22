@@ -91,6 +91,14 @@ def compose_situation(
         and confirmed_age_seconds > stale_after_s
     )
 
+    # How long ago the shown scene is — when we last had eyes on it (a Mode B
+    # confirmation, else when the change / one-shot was committed). Lets a reader
+    # say "last seen 3 minutes / 2 hours / 1 day ago" for a non-live scene.
+    as_of_ref = last_observed_at or changed_at
+    as_of_age_seconds = (
+        max(0, int((now - as_of_ref).total_seconds())) if as_of_ref is not None else None
+    )
+
     current = {
         "overview": latest.get("overview", ""),
         "is_text": bool(latest.get("is_text", False)),
@@ -98,6 +106,7 @@ def compose_situation(
         "changed_at": _iso(changed_at),
         "confirmed_at": _iso(last_observed_at),
         "confirmed_age_seconds": confirmed_age_seconds,
+        "as_of_age_seconds": as_of_age_seconds,
         "stable_seconds": stable_seconds,
         "stale": stale,
     }
@@ -155,6 +164,12 @@ def render_situation_text(digest: dict) -> str:
 
     observing = digest.get("observing")
     stale = current.get("stale")
+    stable_seconds = current.get("stable_seconds")
+    # "Live" means we are continuously observing and a fresh frame confirmed the
+    # scene moments ago. Anything else is the LAST SEEN scene, labelled as such
+    # with how long ago it was — so the reader never mistakes old for current.
+    live = bool(observing) and not stale and stable_seconds is not None
+
     if stale:
         head = "⚠カメラ応答なし"
     elif observing:
@@ -164,15 +179,17 @@ def render_situation_text(digest: dict) -> str:
     lines = [f"[カメラの状況] {head}"]
 
     overview = current.get("overview") or "(不明)"
-    stable_seconds = current.get("stable_seconds")
-    if stale:
-        age = humanize_seconds(current.get("confirmed_age_seconds"))
-        line = f"現在: {overview}（最終確認 {age}前、カメラ応答なし）"
-    elif stable_seconds is not None:
+    if live:
         line = f"現在: {overview}（{humanize_seconds(stable_seconds)} 変化なし）"
     else:
-        # No live observation (e.g. on-demand only / loop not running).
-        line = f"現在: {overview}（最後に見えた様子）"
+        parts = []
+        age = current.get("as_of_age_seconds")
+        if age is not None:
+            parts.append(f"{humanize_seconds(age)}前")
+        if stale:
+            parts.append("カメラ応答なし")
+        paren = f"（{'、'.join(parts)}）" if parts else ""
+        line = f"最後に見えた光景: {overview}{paren}"
     if current.get("is_text") and current.get("ocr"):
         line += f" / 表示テキスト: {current['ocr']}"
     lines.append(line)

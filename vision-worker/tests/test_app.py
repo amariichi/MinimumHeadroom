@@ -80,7 +80,8 @@ def test_situation_text_format(tmp_path, monkeypatch, make_frame):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/plain")
     assert "[カメラの状況]" in resp.text
-    assert "現在:" in resp.text
+    # Ingested (no live loop) -> shown as the last-seen scene, not "現在".
+    assert "最後に見えた光景:" in resp.text
 
 
 def test_look_returns_description(tmp_path, monkeypatch):
@@ -89,6 +90,25 @@ def test_look_returns_description(tmp_path, monkeypatch):
     body = client.post("/look").json()
     assert "overview" in body and body["overview"]
     assert "safety" in body["disclaimer"].lower()
+
+
+def test_look_stores_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_FRAME_DIR", _fixtures_dir())
+    client = _client(tmp_path, monkeypatch)
+    before = client.get("/metrics").json()["counts"]["observations"]
+    client.post("/look")  # default store=1 -> joins the timeline
+    after = client.get("/metrics").json()["counts"]["observations"]
+    assert after == before + 1
+
+
+def test_look_store_0_is_ephemeral(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_FRAME_DIR", _fixtures_dir())
+    client = _client(tmp_path, monkeypatch)
+    before = client.get("/metrics").json()["counts"]["observations"]
+    body = client.post("/look?store=0").json()
+    after = client.get("/metrics").json()["counts"]["observations"]
+    assert body["overview"]  # still answers
+    assert after == before  # but stores nothing
 
 
 def test_look_503_without_camera(tmp_path, monkeypatch):

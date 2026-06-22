@@ -37,7 +37,7 @@ curl -s "$BASE/healthz"
 ```bash
 curl -s "$BASE/situation"                  # situational digest: now + how long stable + tiered history (NO GPU)
 curl -s "$BASE/situation?format=text"      # the same digest as a compact Japanese text block
-curl -s -X POST "$BASE/look"               # "what do you see right now?": fresh frame, run the model, return its description
+curl -s -X POST "$BASE/look"               # "what do you see right now?": fresh frame, run the model, return its description (stores to the shared timeline by default; add ?store=0 for an ephemeral peek)
 curl -s -X POST "$BASE/capture" -o /tmp/now.jpg   # Mode A: grab ONE fresh frame now (no GPU; read it yourself)
 curl -s "$BASE/latest"            # most recent stored observation (incl. frame_id)
 curl -s "$BASE/previous"          # the one before that
@@ -79,9 +79,12 @@ condensing text during idle moments and cached, so reading is always free.
   (set `MH_SITUATION_INJECT=1`). When that is on, you already have the current
   situation each turn and need not call anything.
 - For a deliberate fresh look — "what do you see **right now**?" — use
-  `POST /look`: it grabs one frame and runs the model immediately, returning its
-  description (bypassing the change-gate so you always get a fresh answer). For
-  accuracy-sensitive reads, still fetch the full frame and read it yourself.
+  `POST /look`: it grabs one frame, runs the model immediately, returns its
+  description, and (by default) commits it to the shared rolling memory so the
+  one-shot joins the same timeline as the ambient loop — keeping your memory and
+  the camera's in step. An unchanged scene adds no duplicate. Pass `?store=0`
+  for a purely ephemeral peek. For accuracy-sensitive reads, still fetch the full
+  frame and read it yourself.
 
 Always relay the safety boundary when relevant; the digest text already carries a
 short disclaimer.

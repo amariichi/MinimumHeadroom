@@ -213,13 +213,31 @@ def test_render_text_stale_camera_does_not_claim_stable():
     digest = {
         "observing": True,
         "current": {"overview": "机", "is_text": False, "ocr": "",
-                    "stable_seconds": 80, "confirmed_age_seconds": 220, "stale": True},
+                    "stable_seconds": 80, "confirmed_age_seconds": 220,
+                    "as_of_age_seconds": 220, "stale": True},
         "recent": [],
         "summaries": [],
     }
     out = render_situation_text(digest)
+    assert "最後に見えた光景" in out  # not "現在"
     assert "カメラ応答なし" in out
+    assert "前" in out  # how long ago we last saw it
     assert "変化なし" not in out  # must not falsely claim a live stable duration
+
+
+def test_render_text_last_seen_includes_age_when_not_live():
+    # Loop stopped; the digest must say it's the LAST SEEN scene and how old.
+    digest = {
+        "observing": False,
+        "current": {"overview": "机に本", "is_text": False, "ocr": "",
+                    "stable_seconds": None, "as_of_age_seconds": 7200, "stale": False},
+        "recent": [],
+        "summaries": [],
+    }
+    out = render_situation_text(digest)
+    assert "観測停止中" in out
+    assert "最後に見えた光景: 机に本" in out
+    assert "約2時間前" in out
 
 
 def test_render_text_includes_ocr_when_text():

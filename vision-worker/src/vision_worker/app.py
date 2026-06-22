@@ -196,12 +196,15 @@ def create_app() -> FastAPI:
         return digest
 
     @app.post("/look")
-    def look(store: int = 0):
+    def look(store: int = 1):
         """On-demand fresh look ("what do you see right now?"): grab one frame
-        and run the vision model on it NOW, returning the description. Unlike the
-        ambient loop this bypasses the change-gate and always describes, so a
-        direct question always gets a fresh answer. With store=1 it also commits
-        the frame through the pipeline (so it joins the rolling memory)."""
+        and run the vision model on it NOW, returning the description, and (by
+        default) commit it to the rolling memory so on-demand looks join the same
+        timeline the conversational agent and the ambient loop share. Storing goes
+        through the normal pipeline, so an unchanged scene adds no duplicate row.
+        Pass store=0 for a purely ephemeral peek (no GPU-side commit, no memory).
+        A deliberate question always gets a fresh answer even if the scene matched
+        the last stored one."""
         if capture_source is None:
             raise HTTPException(status_code=503, detail="no camera configured (set VISION_CAMERA_URL)")
         try:
@@ -210,10 +213,14 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=502, detail=f"camera capture failed: {exc}") from exc
         if not frame:
             raise HTTPException(status_code=503, detail="camera returned no frame")
-        obs = model_client.observe(frame, None)
+        committed = None
         if store:
             with pipeline_lock:
-                pipeline.process_frame(frame)
+                committed = pipeline.process_frame(frame)
+        # Reuse the committed observation when the frame was a real change (one
+        # model call); otherwise describe a fresh frame so the answer is never
+        # empty just because nothing changed since the last stored frame.
+        obs = committed if committed is not None else model_client.observe(frame, None)
         return {
             "overview": obs.overview,
             "ocr_full": obs.ocr_full,
