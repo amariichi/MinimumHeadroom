@@ -4,6 +4,7 @@ from vision_worker.model_client import (
     INSTRUCTION,
     RESPONSE_SCHEMA,
     MockModelClient,
+    compose_correction_advisory,
     compose_instruction,
     looks_like_no_change,
 )
@@ -46,6 +47,23 @@ def test_looks_like_no_change_detects_en_and_ja():
     assert not looks_like_no_change("手が動いたが大きな変化はない。")
     assert not looks_like_no_change("本が追加されたが配置に変化はない。")
     assert not looks_like_no_change("A hand moved but no significant change.")
+
+
+def test_correction_advisory_empty_when_none_or_blank():
+    assert compose_correction_advisory(None) == ""
+    assert compose_correction_advisory("   ") == ""
+
+
+def test_correction_advisory_includes_text_and_over_anchor_guardrails():
+    out = compose_correction_advisory("赤信号に見えるのは救急車の赤色灯")
+    assert "赤信号に見えるのは救急車の赤色灯" in out
+    assert "may be stale" in out
+    # Must keep the model reporting reality, so the note cannot, by itself,
+    # make it report "no change" forever.
+    assert "do not let this" in out
+    assert "suppress a genuine change" in out
+    # It is a separate appended block, not a replacement of prior state.
+    assert out.startswith("\n\n")
 
 
 def test_mock_first_frame_is_not_a_change(make_frame):

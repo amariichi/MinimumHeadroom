@@ -113,6 +113,28 @@ def compose_instruction(output_lang: str = "en") -> str:
         )
     return INSTRUCTION
 
+
+def compose_correction_advisory(correction: str | None) -> str:
+    """A separate, over-anchor-resistant advisory for an active human correction.
+
+    Returns "" when there is none. The block is appended AFTER the previous-state
+    text (never merged into it, so `prev.overview` is untouched) and explicitly
+    tells the model to keep reporting what it actually sees and not to suppress a
+    genuine change — so feeding the note back to the captioner cannot, on its own,
+    make it report "no change" forever. The scene-bound expiry in corrections.py
+    remains the independent guard if the model over-trusts the note. Opt-in via
+    VISION_CORRECTION_TO_MODEL (off by default).
+    """
+    text = (correction or "").strip()
+    if not text:
+        return ""
+    return (
+        "\n\nHuman note (may be stale): " + text + " "
+        "Report exactly what you SEE now and whether it changed; do not let this "
+        "note suppress a genuine change or describe something that is no longer visible."
+    )
+
+
 #: JSON schema used for vLLM guided decoding when VISION_GUIDED_DECODING=1.
 RESPONSE_SCHEMA = {
     "type": "object",
@@ -130,7 +152,9 @@ RESPONSE_SCHEMA = {
 class VisionModelClient(Protocol):
     name: str
 
-    def observe(self, frame_jpeg: bytes, prev: PrevState | None) -> Observation:
+    def observe(
+        self, frame_jpeg: bytes, prev: PrevState | None, correction: str | None = None
+    ) -> Observation:
         ...
 
 
@@ -145,7 +169,10 @@ class MockModelClient:
 
     name = "mock"
 
-    def observe(self, frame_jpeg: bytes, prev: PrevState | None) -> Observation:
+    def observe(
+        self, frame_jpeg: bytes, prev: PrevState | None, correction: str | None = None
+    ) -> Observation:
+        # The mock ignores corrections; the advisory only shapes the real VLM.
         started = time.time()
         digest = format(average_hash(frame_jpeg, 8), "016x")
         is_text = text_likeness(frame_jpeg) > 0.6
@@ -206,7 +233,9 @@ class DiffusionGemmaClient:
         self.timeout = timeout
         self.instruction = compose_instruction(output_lang)
 
-    def observe(self, frame_jpeg: bytes, prev: PrevState | None) -> Observation:
+    def observe(
+        self, frame_jpeg: bytes, prev: PrevState | None, correction: str | None = None
+    ) -> Observation:
         import base64
 
         import httpx
@@ -219,11 +248,12 @@ class DiffusionGemmaClient:
                 f"Previous overview: {prev.overview}\n"
                 f"Previous text: {prev.ocr_full}"
             )
+        advisory = compose_correction_advisory(correction)
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": f"{self.instruction}\n\n{prev_text}"},
+                    {"type": "text", "text": f"{self.instruction}\n\n{prev_text}{advisory}"},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{b64}"},

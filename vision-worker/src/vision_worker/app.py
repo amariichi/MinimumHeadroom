@@ -140,6 +140,20 @@ def create_app() -> FastAPI:
             drift_threshold=settings.correction_hash_drift,
         )
 
+    def _correction_advisory() -> str | None:
+        """The freshest active correction text to advise the VLM with (M5b).
+
+        None unless VISION_CORRECTION_TO_MODEL is on and a correction is live, so
+        the captioner is biased only when explicitly opted in."""
+        if not settings.correction_to_model:
+            return None
+        active = _active_corrections(datetime.now(timezone.utc))
+        return active[0]["text"] if active else None
+
+    # The loop runs the model via the pipeline; give it the advisory provider so
+    # an active correction can reach the captioner itself when opted in.
+    pipeline.correction_provider = _correction_advisory
+
     @app.get("/healthz")
     def healthz() -> dict:
         return {

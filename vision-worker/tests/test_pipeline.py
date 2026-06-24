@@ -30,7 +30,7 @@ class _UniqueModel:
 
     name = "unique-stub"
 
-    def observe(self, frame_jpeg: bytes, prev) -> Observation:
+    def observe(self, frame_jpeg: bytes, prev, correction=None) -> Observation:
         token = uuid.uuid4().hex
         return Observation(
             is_text=True,
@@ -114,7 +114,7 @@ class _ScriptedModel:
         self.scripted = list(scripted)
         self.i = 0
 
-    def observe(self, frame_jpeg: bytes, prev):
+    def observe(self, frame_jpeg: bytes, prev, correction=None):
         ocr, is_text = self.scripted[self.i]
         self.i += 1
         return Observation(
@@ -167,7 +167,7 @@ class _ChangedModel:
         self.verdicts = list(verdicts)
         self.i = 0
 
-    def observe(self, frame_jpeg: bytes, prev) -> Observation:
+    def observe(self, frame_jpeg: bytes, prev, correction=None) -> Observation:
         changed = self.verdicts[self.i]
         self.i += 1
         token = uuid.uuid4().hex
@@ -217,3 +217,55 @@ def test_on_observation_callback_fires_on_commit(tmp_path, make_frame):
     pipeline.process_frame(make_frame(0x0F0F))
     assert len(seen) == 1
     assert seen[0].overview.startswith("text document")
+
+
+class _RecordingModel:
+    """Model stub that records the `correction` advisory passed to observe."""
+
+    name = "recording"
+
+    def __init__(self):
+        self.seen = []
+
+    def observe(self, frame_jpeg, prev, correction=None) -> Observation:
+        self.seen.append(correction)
+        token = uuid.uuid4().hex
+        return Observation(
+            is_text=False,
+            ocr_full="",
+            overview=token[:8],
+            changed=True,
+            change_from_prev="changed",
+            low_confidence=False,
+            latency_ms=1,
+            model=self.name,
+        )
+
+
+def _recording_pipeline(model, tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    store = FrameStore(str(tmp_path / "cache"))
+    return Pipeline(db, store, _AlwaysChanged(), model)
+
+
+def test_correction_advisory_passed_to_model_when_provider_set(tmp_path, make_scene):
+    model = _RecordingModel()
+    pipeline = _recording_pipeline(model, tmp_path)
+    pipeline.correction_provider = lambda: "救急車の赤色灯"
+    pipeline.process_frame(make_scene(1))
+    assert model.seen[-1] == "救急車の赤色灯"
+
+
+def test_no_advisory_without_provider(tmp_path, make_scene):
+    model = _RecordingModel()
+    pipeline = _recording_pipeline(model, tmp_path)
+    pipeline.process_frame(make_scene(1))
+    assert model.seen[-1] is None
+
+
+def test_advisory_none_when_provider_returns_none(tmp_path, make_scene):
+    model = _RecordingModel()
+    pipeline = _recording_pipeline(model, tmp_path)
+    pipeline.correction_provider = lambda: None
+    pipeline.process_frame(make_scene(1))
+    assert model.seen[-1] is None

@@ -78,6 +78,10 @@ class Pipeline:
         # corrections to the live scene so one can be retired once the view
         # drifts, independent of what the model narrates (see corrections.py).
         self.last_visual_hash: int | None = None
+        # Optional callable returning the active human-correction text to feed the
+        # VLM as a "may be stale" advisory (M5b, opt-in). Set post-construction by
+        # the app; None means no advisory. Called once per frame that runs the model.
+        self.correction_provider: Callable[[], str | None] | None = None
         # Open voting window for the current not-yet-committed scene:
         self._pending: list[tuple[Observation, bytes]] = []
 
@@ -132,12 +136,15 @@ class Pipeline:
         # Reuse the gate's own avg-hash (real ChangeGate exposes it); tolerate a
         # gate double that doesn't, leaving the anchor hash unavailable.
         self.last_visual_hash = getattr(self.gate, "last_hash", None)
+        # Active human correction to advise the VLM with (M5b, opt-in). Computed
+        # now so it reflects this frame's hash/scene; None unless wired + active.
+        advisory = self.correction_provider() if self.correction_provider is not None else None
 
         if changed:
             # The scene changed: commit whatever window was still open, then
             # open a fresh window for the new scene.
             committed = self.flush()
-            obs = self.model_client.observe(frame_jpeg, self._prev)
+            obs = self.model_client.observe(frame_jpeg, self._prev, correction=advisory)
             self._pending = [(obs, frame_jpeg)]
             if len(self._pending) >= self.vote_k:
                 return self.flush() or committed
@@ -145,7 +152,7 @@ class Pipeline:
 
         # Steady scene: add a vote if a window is open and not yet full.
         if self._pending and len(self._pending) < self.vote_k:
-            obs = self.model_client.observe(frame_jpeg, self._prev)
+            obs = self.model_client.observe(frame_jpeg, self._prev, correction=advisory)
             self._pending.append((obs, frame_jpeg))
             if len(self._pending) >= self.vote_k:
                 return self.flush()
