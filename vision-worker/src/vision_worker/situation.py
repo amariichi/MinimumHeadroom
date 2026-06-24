@@ -151,12 +151,20 @@ def humanize_seconds(seconds: int | None) -> str:
     return f"約{hours // 24}日"
 
 
-def render_situation_text(digest: dict) -> str:
+def render_situation_text(digest: dict, corrections: list[dict] | None = None) -> str:
     """Render the situation digest as a compact Japanese text block.
 
     This is what gets injected into the conversational LLM's context each turn
     (Design B) so its understanding never drifts from the camera. Deliberately
     terse to keep the per-turn token cost tiny.
+
+    `corrections` are the still-active human corrections (from
+    `corrections.active_corrections`, newest first). When present they are
+    rendered right after the current-scene line so the LLM weighs the human
+    note against what the camera reports and stops repeating a misread. While
+    the camera is unreachable (`stale`) the note cannot be re-verified, so it is
+    flagged as unconfirmed; near the end of its lifetime a re-confirmation nudge
+    is added so the LLM can ask the user before it lapses (M5c).
     """
     current = digest.get("current")
     if not current:
@@ -193,6 +201,24 @@ def render_situation_text(digest: dict) -> str:
     if current.get("is_text") and current.get("ocr"):
         line += f" / 表示テキスト: {current['ocr']}"
     lines.append(line)
+
+    # Human corrections, scene-bound. Rendered right after the current scene so
+    # the LLM weighs them against it. The freshest one or two only, to stay terse.
+    active = corrections or []
+    if active:
+        unverified = bool(stale)
+        nudge = False
+        for c in active[:2]:
+            text = (c.get("text") or "").strip()
+            if not text:
+                continue
+            age = humanize_seconds(c.get("age_seconds"))
+            suffix = "・カメラ応答なし・未確認" if unverified else "・現シーン限定"
+            lines.append(f"[人の補足] {text}（{age}前にユーザーが訂正{suffix}）")
+            if c.get("stale_soon") and not unverified:
+                nudge = True
+        if nudge:
+            lines.append("（↑まだ有効か、必要ならユーザーに確認してください）")
 
     recent = digest.get("recent") or []
     if recent:

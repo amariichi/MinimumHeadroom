@@ -251,6 +251,64 @@ def test_render_text_includes_ocr_when_text():
     assert "表示テキスト: 9:00 会議" in out
 
 
+def test_render_text_shows_active_correction():
+    digest = {
+        "observing": True,
+        "current": {"overview": "赤信号らしき光", "is_text": False, "ocr": "",
+                    "stable_seconds": 12, "stale": False},
+        "recent": [],
+        "summaries": [],
+    }
+    corrections = [
+        {"text": "赤信号に見えるのは救急車の赤色灯", "age_seconds": 8, "stale_soon": False}
+    ]
+    out = render_situation_text(digest, corrections=corrections)
+    assert "[人の補足] 赤信号に見えるのは救急車の赤色灯" in out
+    assert "現シーン限定" in out
+    assert "確認してください" not in out  # not stale_soon -> no nudge
+
+
+def test_render_text_correction_nudge_when_stale_soon():
+    digest = {
+        "observing": True,
+        "current": {"overview": "x", "is_text": False, "ocr": "",
+                    "stable_seconds": 100, "stale": False},
+        "recent": [],
+        "summaries": [],
+    }
+    corrections = [{"text": "救急車の赤色灯", "age_seconds": 100, "stale_soon": True}]
+    out = render_situation_text(digest, corrections=corrections)
+    assert "[人の補足] 救急車の赤色灯" in out
+    assert "確認してください" in out
+
+
+def test_render_text_correction_flagged_unverified_when_camera_stale():
+    digest = {
+        "observing": True,
+        "current": {"overview": "机", "is_text": False, "ocr": "",
+                    "stable_seconds": 80, "confirmed_age_seconds": 220,
+                    "as_of_age_seconds": 220, "stale": True},
+        "recent": [],
+        "summaries": [],
+    }
+    corrections = [{"text": "救急車の赤色灯", "age_seconds": 30, "stale_soon": True}]
+    out = render_situation_text(digest, corrections=corrections)
+    assert "[人の補足] 救急車の赤色灯" in out
+    assert "カメラ応答なし・未確認" in out
+    assert "確認してください" not in out  # nudge suppressed while unverifiable
+
+
+def test_render_text_no_correction_line_without_corrections():
+    digest = {
+        "observing": True,
+        "current": {"overview": "机", "is_text": False, "ocr": "",
+                    "stable_seconds": 5, "stale": False},
+        "recent": [],
+        "summaries": [],
+    }
+    assert "[人の補足]" not in render_situation_text(digest)
+
+
 def test_pipeline_commit_sets_last_change_at_and_drives_stable_seconds(tmp_path, make_frame):
     # The plan's M1 acceptance: build a pipeline, commit one observation, advance
     # a fake clock, and assert stable_seconds grows off the real last_change_at.

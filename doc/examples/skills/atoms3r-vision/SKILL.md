@@ -46,6 +46,10 @@ curl -s "$BASE/metrics"           # counts + pipeline stats
 curl -s -X POST "$BASE/perception/start"   # Mode B: start continuous watching (gated; see below)
 curl -s -X POST "$BASE/perception/stop"    # Mode B: stop continuous watching
 curl -s "$BASE/perception/status"          # running? locked? capability?
+curl -s -X POST "$BASE/correction" -H 'Content-Type: application/json' \
+  -d '{"text":"赤信号に見えるのは救急車の赤色灯"}'             # correct a camera misread (see below)
+curl -s "$BASE/corrections"                # list still-active corrections
+curl -s -X DELETE "$BASE/corrections"      # clear all corrections
 ```
 
 Each observation looks like:
@@ -133,6 +137,30 @@ curl -s -X POST "$BASE/perception/start"
 Relay the returned safety disclaimer. **"Stop watching"** → `POST /perception/stop`.
 **"Are you watching?"** → `GET /perception/status`.
 
+## When the user corrects what the camera reported
+
+The camera and the model perceive one-directionally: they describe the scene, you
+read it, but your conversation never flows back to them. So if the model mislabels
+something (classic case: it calls an ambulance's flashing red beacon a "red
+traffic light") and you relay it, the user's correction ("no, that's an
+ambulance") would otherwise be lost — the digest keeps re-asserting the misread
+every turn. **Post the correction back** so the digest stops repeating it:
+
+```bash
+curl -s -X POST "$BASE/correction" -H 'Content-Type: application/json' \
+  -d '{"text":"赤信号に見えるのは救急車の赤色灯"}'
+```
+
+The note is **bound to the current scene** and retires itself automatically once
+the scene changes, the view drifts, or a short cap (~2 min, `VISION_CORRECTION_TTL_S`)
+elapses — so it can never haunt an unrelated later scene. After posting, the
+injected digest carries a `[人の補足] …` line until it lapses; when that line
+shows `まだ有効か…確認してください`, ask the user whether the correction still
+holds and re-post it if so. Do this whenever the user contradicts a camera-derived
+statement; you can pass an explicit `ttl_s` to shorten or extend a one-off note.
+`POST /correction` returns **409** if nothing has been observed yet (no scene to
+attach to) — take a look first.
+
 ## Controlling Mode B (the gating policy)
 
 `POST /perception/start` returns `started: true/false`. When false, `reason`
@@ -159,4 +187,4 @@ state before acting.
   curl -s "$BASE/latest" | python3 -c "import sys,json;print(json.load(sys.stdin)['frame_id'])"
   ```
 - If `/healthz` is unreachable, the camera stack is not running; tell the user how to start it (`./scripts/run-vision-worker.sh`, plus the diffusiongemma backend for model-based scene description) rather than guessing.
-- Mostly read-only, but note the writes: `POST /look` (default) and Mode B commit observations to the rolling memory, `GET /situation` caches tier summaries, and `POST /watches` registers an alert.
+- Mostly read-only, but note the writes: `POST /look` (default) and Mode B commit observations to the rolling memory, `GET /situation` caches tier summaries, `POST /watches` registers an alert, and `POST /correction` records a scene-bound human correction (kept in memory only; dropped on restart).

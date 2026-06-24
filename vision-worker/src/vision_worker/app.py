@@ -9,12 +9,16 @@ Stable endpoints (consumed by the agent skill and the alert layer):
   GET  /frame/{id}         original full-resolution JPEG for accurate re-reads
   GET  /metrics            counts + pipeline statistics
   POST /ingest             accept one frame (multipart "image") for processing
+  POST /correction         record a human correction bound to the current scene
+  GET  /corrections        list still-active human corrections
+  DELETE /corrections      clear all human corrections
   POST /watches            register an alert watch (alerting itself is M5)
   GET  /watches            list registered watches
 """
 
 from __future__ import annotations
 
+import itertools
 import os
 import threading
 from datetime import datetime, timezone
@@ -28,6 +32,7 @@ from . import __version__
 from .alerts import AsyncAlertSink, ChangeNarrator, build_alert_sink, make_alert_text
 from .capture import build_capture_source
 from .config import load_settings
+from .corrections import active_corrections, make_correction
 from .db import VisionDB
 from .model_client import build_model_client
 from .perception import PerceptionLoop, decide_start
@@ -55,6 +60,12 @@ class WatchIn(BaseModel):
 
 class NarrateIn(BaseModel):
     on: bool
+
+
+class CorrectionIn(BaseModel):
+    text: str = Field(min_length=1)
+    # Optional override of the wall-clock cap; falls back to VISION_CORRECTION_TTL_S.
+    ttl_s: float | None = None
 
 
 def create_app() -> FastAPI:
@@ -108,6 +119,26 @@ def create_app() -> FastAPI:
     app.state.watches = registry
     app.state.perception = perception
     app.state.narrator = narrator
+
+    # Human corrections live only in memory: a correction is a claim about the
+    # live scene, so a restart (which has not re-observed it) should drop them
+    # rather than re-apply a stale note. Guarded by a lock because FastAPI runs
+    # sync endpoints in a threadpool.
+    corrections: list[dict] = []
+    corrections_lock = threading.Lock()
+    correction_seq = itertools.count(1)
+    app.state.corrections = corrections
+
+    def _active_corrections(now: datetime) -> list[dict]:
+        with corrections_lock:
+            snapshot = list(corrections)
+        return active_corrections(
+            snapshot,
+            now=now,
+            current_change_at=pipeline.last_change_at,
+            current_hash=pipeline.last_visual_hash,
+            drift_threshold=settings.correction_hash_drift,
+        )
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -190,9 +221,19 @@ def create_app() -> FastAPI:
             and stable >= settings.idle_interval_ms / 1000.0
         )
         digest["summaries"] = situation_summaries(db, summarizer, now, idle=idle)
+        active = _active_corrections(now)
         if format == "text":
-            return PlainTextResponse(render_situation_text(digest))
+            return PlainTextResponse(render_situation_text(digest, corrections=active))
         digest["disclaimer"] = DISCLAIMER
+        digest["corrections"] = [
+            {
+                "id": c["id"],
+                "text": c["text"],
+                "age_seconds": c["age_seconds"],
+                "stale_soon": c["stale_soon"],
+            }
+            for c in active
+        ]
         return digest
 
     @app.post("/look")
@@ -342,6 +383,74 @@ def create_app() -> FastAPI:
             "voice_wired": settings.alert_enabled and bool(settings.alert_webhook),
             "last_error": perception.last_error if perception is not None else None,
         }
+
+    @app.post("/correction")
+    def add_correction(body: CorrectionIn) -> dict:
+        """Record a human correction of what the camera reported, bound to the
+        CURRENT scene.
+
+        The conversational LLM posts here when the user corrects a camera-derived
+        claim (for example: "that's not a red light, it's an ambulance"). The note
+        is anchored to the live scene and retired automatically once the scene
+        changes, the view drifts, or its cap elapses, so it can never haunt an
+        unrelated scene. Rejected with 409 when nothing has been observed yet:
+        there is no scene to attach the note to, and it could then only be expired
+        by the wall-clock cap, defeating the scene-bound design."""
+        if pipeline.last_change_at is None:
+            raise HTTPException(
+                status_code=409,
+                detail="no live scene to attach a correction to (nothing observed yet)",
+            )
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="empty correction text")
+        now = datetime.now(timezone.utc)
+        ttl = body.ttl_s if (body.ttl_s and body.ttl_s > 0) else settings.correction_ttl_s
+        rec = make_correction(
+            correction_id=next(correction_seq),
+            text=text,
+            now=now,
+            anchor_change_at=pipeline.last_change_at,
+            anchor_hash=pipeline.last_visual_hash,
+            ttl_s=ttl,
+        )
+        with corrections_lock:
+            corrections.append(rec)
+            # Keep only the newest N active notes.
+            overflow = len(corrections) - settings.correction_max
+            if overflow > 0:
+                del corrections[:overflow]
+        return {
+            "recorded": {"id": rec["id"], "text": rec["text"]},
+            "ttl_s": ttl,
+            "disclaimer": DISCLAIMER,
+        }
+
+    @app.get("/corrections")
+    def list_corrections() -> dict:
+        now = datetime.now(timezone.utc)
+        active = _active_corrections(now)
+        with corrections_lock:
+            total = len(corrections)
+        return {
+            "active": [
+                {
+                    "id": c["id"],
+                    "text": c["text"],
+                    "age_seconds": c["age_seconds"],
+                    "stale_soon": c["stale_soon"],
+                }
+                for c in active
+            ],
+            "total_stored": total,
+        }
+
+    @app.delete("/corrections")
+    def clear_corrections() -> dict:
+        with corrections_lock:
+            n = len(corrections)
+            corrections.clear()
+        return {"cleared": n}
 
     @app.post("/watches")
     def add_watch(watch: WatchIn) -> dict:

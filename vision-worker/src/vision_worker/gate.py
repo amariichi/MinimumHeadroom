@@ -58,6 +58,15 @@ class ChangeGate:
         return self._steady_count >= self._steady_frames
 
     @property
+    def last_hash(self) -> int | None:
+        """The integer average-hash of the most recently gated frame.
+
+        Reused by the pipeline to anchor human corrections to the live scene
+        without hashing the frame a second time.
+        """
+        return self._last_hash
+
+    @property
     def last_hash_hex(self) -> str | None:
         if self._last_hash is None:
             return None

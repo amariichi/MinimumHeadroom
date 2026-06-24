@@ -69,6 +69,10 @@ class Settings:
     situation_recent_n: int  # how many raw recent changes GET /situation returns
     summary_enabled: bool  # build hierarchical summaries (reuses the loaded VLM)
     summary_max_tokens: int  # output cap for one summarization call
+    correction_ttl_s: float  # human-correction wall-clock cap (last-resort expiry)
+    correction_hash_drift: int  # avg-hash Hamming distance that retires a correction
+    correction_max: int  # how many active corrections to keep (newest wins)
+    correction_to_model: bool  # feed active corrections into the VLM prompt (M5b, opt-in)
 
 
 def load_settings() -> Settings:
@@ -109,4 +113,8 @@ def load_settings() -> Settings:
         situation_recent_n=_int("VISION_SITUATION_RECENT_N", 8),
         summary_enabled=_bool("VISION_SUMMARY_ENABLED", True),
         summary_max_tokens=_int("VISION_SUMMARY_MAX_TOKENS", 80),
+        correction_ttl_s=_float("VISION_CORRECTION_TTL_S", 120.0),
+        correction_hash_drift=_int("VISION_CORRECTION_HASH_DRIFT", 8),
+        correction_max=_int("VISION_CORRECTION_MAX", 3),
+        correction_to_model=_bool("VISION_CORRECTION_TO_MODEL", False),
     )

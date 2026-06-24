@@ -73,6 +73,11 @@ class Pipeline:
         # scene has held since this moment. None until the first commit; on a
         # fresh restart the digest falls back to the latest DB row's created_at.
         self.last_change_at: datetime | None = None
+        # Perceptual (average) hash of the most recent processed frame, taken
+        # from the gate's own computation (no second hash). Anchors human
+        # corrections to the live scene so one can be retired once the view
+        # drifts, independent of what the model narrates (see corrections.py).
+        self.last_visual_hash: int | None = None
         # Open voting window for the current not-yet-committed scene:
         self._pending: list[tuple[Observation, bytes]] = []
 
@@ -124,6 +129,9 @@ class Pipeline:
     def process_frame(self, frame_jpeg: bytes, captured_at: str | None = None) -> Observation | None:
         self.stats.frames_seen += 1
         changed = self.gate.is_changed(frame_jpeg)
+        # Reuse the gate's own avg-hash (real ChangeGate exposes it); tolerate a
+        # gate double that doesn't, leaving the anchor hash unavailable.
+        self.last_visual_hash = getattr(self.gate, "last_hash", None)
 
         if changed:
             # The scene changed: commit whatever window was still open, then

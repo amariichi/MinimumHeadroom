@@ -126,6 +126,41 @@ def test_watch_registration_includes_disclaimer(tmp_path, monkeypatch):
     assert "safety" in body["disclaimer"].lower()
 
 
+def test_correction_rejected_before_any_observation(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    resp = client.post("/correction", json={"text": "救急車の赤色灯"})
+    assert resp.status_code == 409  # no live scene to attach to
+
+
+def test_correction_roundtrip_and_scene_change_expiry(tmp_path, monkeypatch, make_frame):
+    client = _client(tmp_path, monkeypatch)
+    # A first frame gives a committed scene the correction can anchor to.
+    client.post("/ingest", files={"image": ("f.jpg", make_frame(0x0F0F), "image/jpeg")})
+
+    posted = client.post("/correction", json={"text": "赤信号に見えるのは救急車の赤色灯"})
+    assert posted.status_code == 200
+    assert posted.json()["recorded"]["text"] == "赤信号に見えるのは救急車の赤色灯"
+
+    # The injected digest now carries the human note and one active correction.
+    text = client.get("/situation?format=text").text
+    assert "[人の補足] 赤信号に見えるのは救急車の赤色灯" in text
+    assert len(client.get("/corrections").json()["active"]) == 1
+
+    # A clearly different frame commits a scene change -> the note is retired.
+    client.post("/ingest", files={"image": ("g.jpg", make_frame(0xF0F0), "image/jpeg")})
+    text2 = client.get("/situation?format=text").text
+    assert "[人の補足]" not in text2
+    assert client.get("/corrections").json()["active"] == []
+
+
+def test_correction_delete_clears(tmp_path, monkeypatch, make_frame):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/ingest", files={"image": ("f.jpg", make_frame(0x0F0F), "image/jpeg")})
+    client.post("/correction", json={"text": "x"})
+    assert client.delete("/corrections").json()["cleared"] >= 1
+    assert client.get("/corrections").json()["active"] == []
+
+
 def _fixtures_dir() -> str:
     return os.path.join(os.path.dirname(__file__), "fixtures", "frames")
 
