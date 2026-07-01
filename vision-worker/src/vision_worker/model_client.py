@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import time
 from typing import Protocol
 
@@ -225,6 +226,7 @@ class DiffusionGemmaClient:
         guided: bool = False,
         timeout: float = 60.0,
         output_lang: str = "en",
+        debug_prompt: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
@@ -232,6 +234,7 @@ class DiffusionGemmaClient:
         self.guided = guided
         self.timeout = timeout
         self.instruction = compose_instruction(output_lang)
+        self.debug_prompt = debug_prompt
 
     def observe(
         self, frame_jpeg: bytes, prev: PrevState | None, correction: str | None = None
@@ -249,11 +252,15 @@ class DiffusionGemmaClient:
                 f"Previous text: {prev.ocr_full}"
             )
         advisory = compose_correction_advisory(correction)
+        prompt_text = f"{self.instruction}\n\n{prev_text}{advisory}"
+        if self.debug_prompt:
+            print("[vision-worker] VISION_DEBUG_PROMPT request text:", file=sys.stderr)
+            print(prompt_text, file=sys.stderr, flush=True)
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": f"{self.instruction}\n\n{prev_text}{advisory}"},
+                    {"type": "text", "text": prompt_text},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
@@ -307,5 +314,6 @@ def build_model_client(settings: Settings) -> VisionModelClient:
             model_name=settings.model_name,
             guided=settings.guided_decoding,
             output_lang=settings.output_lang,
+            debug_prompt=settings.debug_prompt,
         )
     return MockModelClient()

@@ -73,6 +73,7 @@ class Settings:
     correction_hash_drift: int  # avg-hash Hamming distance that retires a correction
     correction_max: int  # how many active corrections to keep (newest wins)
     correction_to_model: bool  # feed active corrections into the VLM prompt (M5b, opt-in)
+    debug_prompt: bool  # log outbound VLM prompt text for live validation/debugging
 
 
 def load_settings() -> Settings:
@@ -117,4 +118,5 @@ def load_settings() -> Settings:
         correction_hash_drift=_int("VISION_CORRECTION_HASH_DRIFT", 8),
         correction_max=_int("VISION_CORRECTION_MAX", 3),
         correction_to_model=_bool("VISION_CORRECTION_TO_MODEL", False),
+        debug_prompt=_bool("VISION_DEBUG_PROMPT", False),
     )

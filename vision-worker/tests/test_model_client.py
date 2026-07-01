@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from vision_worker.model_client import (
+    DiffusionGemmaClient,
     INSTRUCTION,
     RESPONSE_SCHEMA,
     MockModelClient,
@@ -9,6 +10,25 @@ from vision_worker.model_client import (
     looks_like_no_change,
 )
 from vision_worker.records import PrevState
+
+
+class _Response:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"is_text": false, "ocr_full": "", "overview": "机の上の赤い物", '
+                            '"changed": false, "change_from_prev": "変化はありません"}'
+                        )
+                    }
+                }
+            ]
+        }
 
 
 def test_default_is_english_base_instruction():
@@ -64,6 +84,38 @@ def test_correction_advisory_includes_text_and_over_anchor_guardrails():
     assert "suppress a genuine change" in out
     # It is a separate appended block, not a replacement of prior state.
     assert out.startswith("\n\n")
+
+
+def test_diffusiongemma_debug_prompt_logs_outbound_text(monkeypatch, capsys, make_scene):
+    seen = {}
+
+    def fake_post(url, json, timeout):
+        seen["url"] = url
+        seen["prompt"] = json["messages"][0]["content"][0]["text"]
+        seen["timeout"] = timeout
+        return _Response()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = DiffusionGemmaClient(
+        "http://model/v1",
+        "test-model",
+        output_lang="ja",
+        debug_prompt=True,
+    )
+    client.observe(
+        make_scene(3),
+        PrevState(ocr_full="", overview="赤信号のような赤い光"),
+        correction="赤く見えるものは信号ではなく救急車の赤色灯",
+    )
+
+    err = capsys.readouterr().err
+    assert seen["url"] == "http://model/v1/chat/completions"
+    assert "Previous overview: 赤信号のような赤い光" in seen["prompt"]
+    assert "Human note (may be stale): 赤く見えるものは信号ではなく救急車の赤色灯" in seen["prompt"]
+    assert "VISION_DEBUG_PROMPT request text" in err
+    assert "Human note (may be stale): 赤く見えるものは信号ではなく救急車の赤色灯" in err
 
 
 def test_mock_first_frame_is_not_a_change(make_frame):
