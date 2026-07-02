@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
+from typing import Callable
 
 
 def decide_start(
@@ -87,6 +88,7 @@ class PerceptionLoop:
         *,
         idle_interval_ms: int | None = None,
         burst_frames: int = 0,
+        idle_callback: Callable[[], None] | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._capture = capture_source
@@ -99,6 +101,7 @@ class PerceptionLoop:
         # Start responsive: spend the first frames at the active cadence.
         self._burst_left = self._burst_frames
         self._lock = lock  # shared with /ingest so pipeline state stays single-writer
+        self._idle_callback = idle_callback
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self.frames = 0
@@ -145,4 +148,13 @@ class PerceptionLoop:
                 idle_s=self._idle_interval,
                 burst_frames=self._burst_frames,
             )
+            if (
+                self._idle_callback is not None
+                and not committed
+                and wait_s == self._idle_interval
+            ):
+                try:
+                    self._idle_callback()
+                except Exception as exc:  # noqa: BLE001 - keep perception alive
+                    self.last_error = str(exc)
             self._stop.wait(wait_s)

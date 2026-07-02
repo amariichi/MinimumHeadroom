@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from .records import Observation
@@ -272,24 +272,90 @@ class VisionDB:
             ).fetchone()
             return row["full_path"] if row else None
 
-    def prune(self, max_changes: int = 50) -> list[tuple[str | None, str | None]]:
+    def _unconsolidated_t1_observation_ids(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        now: datetime,
+        bucket: timedelta,
+        retention_bands: int,
+    ) -> set[int]:
+        open_start = datetime.fromtimestamp(
+            (int(now.timestamp()) // int(bucket.total_seconds())) * int(bucket.total_seconds()),
+            tz=timezone.utc,
+        )
+        protected: set[int] = set()
+        end = open_start
+        for _ in range(max(0, retention_bands)):
+            start = end - bucket
+            start_iso, end_iso = start.isoformat(), end.isoformat()
+            cached = conn.execute(
+                "SELECT 1 FROM summaries WHERE level = 1 AND period_start = ?",
+                (start_iso,),
+            ).fetchone()
+            if cached is None:
+                rows = conn.execute(
+                    "SELECT id FROM observations WHERE created_at >= ? AND created_at < ?",
+                    (start_iso, end_iso),
+                ).fetchall()
+                protected.update(int(r["id"]) for r in rows)
+            end = start
+        return protected
+
+    def prune(
+        self,
+        max_changes: int = 50,
+        *,
+        protect_unconsolidated_t1: bool = True,
+        now: datetime | None = None,
+        t1_bucket: timedelta = timedelta(minutes=10),
+        t1_retention_bands: int = 12,
+        hard_limit: int = 500,
+    ) -> list[tuple[str | None, str | None]]:
         """Keep only the most recent `max_changes` observations.
+
+        When `protect_unconsolidated_t1` is true, older rows in closed tier-1
+        bands without a cached summary are kept so background consolidation can
+        still build the digest after a silent busy period. `hard_limit` bounds
+        total observation growth if the summarizer stays unhealthy for a long run.
 
         Returns the (full_path, thumb_path) pairs of frames that became orphaned
         so the caller can delete them from disk.
         """
         with self._conn() as conn:
-            keep = [
+            keep_ids = {
                 r["id"]
                 for r in conn.execute(
                     "SELECT id FROM observations ORDER BY id DESC LIMIT ?",
                     (max_changes,),
                 ).fetchall()
-            ]
-            if keep:
-                placeholders = ",".join("?" * len(keep))
+            }
+            if protect_unconsolidated_t1:
+                keep_ids.update(
+                    self._unconsolidated_t1_observation_ids(
+                        conn,
+                        now=now or datetime.now(timezone.utc),
+                        bucket=t1_bucket,
+                        retention_bands=t1_retention_bands,
+                    )
+                )
+            if hard_limit > 0 and len(keep_ids) > hard_limit:
+                rows = conn.execute(
+                    "SELECT id FROM observations ORDER BY id DESC"
+                ).fetchall()
+                trimmed: set[int] = set()
+                for row in rows:
+                    row_id = int(row["id"])
+                    if row_id in keep_ids:
+                        trimmed.add(row_id)
+                        if len(trimmed) >= hard_limit:
+                            break
+                keep_ids = trimmed
+            if keep_ids:
+                placeholders = ",".join("?" * len(keep_ids))
                 conn.execute(
-                    f"DELETE FROM observations WHERE id NOT IN ({placeholders})", keep
+                    f"DELETE FROM observations WHERE id NOT IN ({placeholders})",
+                    tuple(keep_ids),
                 )
             else:
                 conn.execute("DELETE FROM observations")

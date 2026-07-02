@@ -39,7 +39,7 @@ from .perception import PerceptionLoop, decide_start
 from .pipeline import build_pipeline
 from .situation import compose_situation, render_situation_text
 from .store import FrameStore
-from .summarize import build_summarizer, situation_summaries
+from .summarize import build_summarizer, consolidate_closed_bands, situation_summaries
 from .vram import free_vram_mb
 from .vram import model_healthy as vram_model_healthy
 from .watches import Watch, WatchRegistry
@@ -97,6 +97,9 @@ def create_app() -> FastAPI:
     pipeline = build_pipeline(settings, db, store, model_client, on_observation=_on_observation)
     summarizer = build_summarizer(settings)
 
+    def _consolidate_when_idle() -> None:
+        consolidate_closed_bands(db, summarizer, datetime.now(timezone.utc))
+
     pipeline_lock = threading.Lock()
     capture_source = build_capture_source(settings)
     perception = (
@@ -107,6 +110,7 @@ def create_app() -> FastAPI:
             pipeline_lock,
             idle_interval_ms=settings.idle_interval_ms,
             burst_frames=settings.burst_frames,
+            idle_callback=_consolidate_when_idle,
         )
         if capture_source is not None
         else None

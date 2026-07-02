@@ -9,6 +9,8 @@ from vision_worker.summarize import (
     MAX_LEVEL,
     Summarizer,
     bucket_start,
+    closed_bands,
+    consolidate_closed_bands,
     extractive_summary,
     situation_summaries,
     tier_band,
@@ -238,3 +240,88 @@ def test_retention_prunes_when_idle(tmp_path):
         db.upsert_summary(1, f"2026-06-22T05:{i:02d}:00+00:00", f"2026-06-22T05:{i:02d}:30+00:00", f"s{i}", 1)
     situation_summaries(db, _FakeSummarizer(), NOW, idle=True)
     assert len(db.recent_summaries(1, 100)) == 12
+
+
+
+def _join_threads(threads):
+    for thread in threads:
+        thread.join(timeout=3.0)
+        assert not thread.is_alive()
+
+
+def test_closed_bands_returns_retention_horizon_newest_first():
+    bands = closed_bands(NOW, 1, n=3)
+    assert bands == [
+        (datetime(2026, 6, 22, 8, 10, tzinfo=UTC), datetime(2026, 6, 22, 8, 20, tzinfo=UTC)),
+        (datetime(2026, 6, 22, 8, 0, tzinfo=UTC), datetime(2026, 6, 22, 8, 10, tzinfo=UTC)),
+        (datetime(2026, 6, 22, 7, 50, tzinfo=UTC), datetime(2026, 6, 22, 8, 0, tzinfo=UTC)),
+    ]
+
+
+def test_background_consolidation_schedules_uncached_bands_for_all_tiers(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    _insert_change_at(db, "2026-06-22T08:12:00+00:00", "a", "本が置かれた")
+    db.upsert_summary(1, "2026-06-22T07:10:00+00:00", "2026-06-22T07:20:00+00:00", "本が置かれた", 2)
+    db.upsert_summary(1, "2026-06-22T07:30:00+00:00", "2026-06-22T07:40:00+00:00", "PCが開かれた", 1)
+    db.upsert_summary(2, "2026-06-22T03:00:00+00:00", "2026-06-22T04:00:00+00:00", "朝の活動", 4)
+    db.upsert_summary(2, "2026-06-22T04:00:00+00:00", "2026-06-22T05:00:00+00:00", "片付け", 2)
+    db.upsert_summary(3, "2026-06-21T06:00:00+00:00", "2026-06-21T12:00:00+00:00", "昼の様子", 5)
+    db.upsert_summary(3, "2026-06-21T12:00:00+00:00", "2026-06-21T18:00:00+00:00", "夕方の様子", 3)
+
+    _join_threads(consolidate_closed_bands(db, _FakeSummarizer(), NOW))
+
+    assert db.get_summary(1, "2026-06-22T08:10:00+00:00")["text"] == "LLMによる要約"
+    assert db.get_summary(2, "2026-06-22T07:00:00+00:00")["text"] == "LLMによる要約"
+    assert db.get_summary(3, "2026-06-22T00:00:00+00:00")["text"] == "LLMによる要約"
+    assert db.get_summary(4, "2026-06-21T00:00:00+00:00")["text"] == "LLMによる要約"
+
+
+def test_background_consolidation_caches_extractive_fallback_when_model_down(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    _insert_change_at(db, "2026-06-22T08:12:00+00:00", "a", "本が置かれた")
+    _insert_change_at(db, "2026-06-22T08:15:00+00:00", "b", "スマホが置かれた")
+    down = Summarizer(base_url="http://127.0.0.1:1/v1", model_name="m", timeout=0.1)
+
+    _join_threads(consolidate_closed_bands(db, down, NOW))
+
+    cached = db.get_summary(1, "2026-06-22T08:10:00+00:00")
+    assert cached is not None
+    assert cached["text"].startswith("2件の変化")
+    assert cached["source_count"] == 2
+
+
+def test_prune_preserves_unconsolidated_t1_inputs_until_background_summary(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    start = datetime(2026, 6, 22, 8, 0, tzinfo=UTC)
+    for i in range(120):
+        at = start + timedelta(seconds=15 * i)
+        _insert_change_at(db, at.isoformat(), f"scene-{i}", f"変化{i}")
+        db.prune(max_changes=50, now=at, hard_limit=500)
+
+    now = datetime(2026, 6, 22, 8, 35, tzinfo=UTC)
+    for minute in (0, 10, 20):
+        band_start = datetime(2026, 6, 22, 8, minute, tzinfo=UTC)
+        band_end = band_start + timedelta(minutes=10)
+        assert len(db.changes_between(band_start.isoformat(), band_end.isoformat())) == 40
+
+    _join_threads(consolidate_closed_bands(db, _FakeSummarizer(), now))
+
+    for minute in (0, 10, 20):
+        band_start = datetime(2026, 6, 22, 8, minute, tzinfo=UTC)
+        cached = db.get_summary(1, band_start.isoformat())
+        assert cached is not None
+        assert cached["source_count"] == 40
+    assert db.counts()["observations"] == 120
+
+    db.prune(max_changes=50, now=now, hard_limit=500)
+    assert db.counts()["observations"] == 50
+
+
+def test_prune_hard_limit_bounds_unhealthy_summarizer_growth(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    start = datetime(2026, 6, 22, 8, 0, tzinfo=UTC)
+    for i in range(80):
+        at = start + timedelta(seconds=15 * i)
+        _insert_change_at(db, at.isoformat(), f"scene-{i}", f"変化{i}")
+    db.prune(max_changes=10, now=datetime(2026, 6, 22, 8, 25, tzinfo=UTC), hard_limit=60)
+    assert db.counts()["observations"] == 60

@@ -85,3 +85,48 @@ def test_loop_start_and_stop():
     assert was_running is True
     assert loop.is_running() is False
     assert pipeline.n >= 1
+
+
+
+class _NoCommitPipeline:
+    def process_frame(self, frame):
+        return None
+
+
+class _CommitPipeline:
+    def process_frame(self, frame):
+        return object()
+
+
+def test_idle_callback_runs_on_idle_iteration():
+    calls = []
+    loop = PerceptionLoop(
+        _NoCommitPipeline(),
+        _FakeCapture(),
+        interval_ms=10,
+        lock=threading.Lock(),
+        idle_interval_ms=10,
+        burst_frames=0,
+        idle_callback=lambda: calls.append("idle"),
+    )
+    loop.start()
+    time.sleep(0.05)
+    loop.stop()
+    assert calls
+
+
+def test_idle_callback_not_run_on_committed_iteration():
+    calls = []
+    loop = PerceptionLoop(
+        _CommitPipeline(),
+        _FakeCapture(),
+        interval_ms=10,
+        lock=threading.Lock(),
+        idle_interval_ms=10,
+        burst_frames=0,
+        idle_callback=lambda: calls.append("idle"),
+    )
+    loop.start()
+    time.sleep(0.05)
+    loop.stop()
+    assert calls == []

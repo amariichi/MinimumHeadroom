@@ -54,6 +54,7 @@ class Pipeline:
         gate: ChangeGate,
         model_client: VisionModelClient,
         max_changes: int = 50,
+        prune_hard_limit: int = 500,
         dedup_threshold: float = 0.92,
         vote_k: int = 1,
         on_observation: Callable[[Observation], None] | None = None,
@@ -63,6 +64,7 @@ class Pipeline:
         self.gate = gate
         self.model_client = model_client
         self.max_changes = max_changes
+        self.prune_hard_limit = prune_hard_limit
         self.dedup_threshold = dedup_threshold
         self.vote_k = max(1, vote_k)
         self.on_observation = on_observation
@@ -111,7 +113,9 @@ class Pipeline:
         )
         self.db.insert_observation(frame_id, obs)
         self._prev = PrevState(obs.ocr_full, obs.overview)
-        for removed_full, removed_thumb in self.db.prune(self.max_changes):
+        for removed_full, removed_thumb in self.db.prune(
+            self.max_changes, hard_limit=self.prune_hard_limit
+        ):
             self.store.remove(removed_full, removed_thumb)
         self.stats.observations_written += 1
         # Mark the start of the now-current scene so stable_seconds resets here.

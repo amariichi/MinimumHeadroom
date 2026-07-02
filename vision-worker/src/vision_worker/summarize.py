@@ -78,6 +78,19 @@ def tier_band(now: datetime, level: int) -> tuple[datetime, datetime]:
     return open_start - bucket, open_start
 
 
+def closed_bands(now: datetime, level: int, n: int | None = None) -> list[tuple[datetime, datetime]]:
+    """Closed buckets for `level` within its retention horizon, newest first."""
+    bucket = TIER_BUCKETS[level]
+    keep = TIER_RETENTION[level] if n is None else n
+    end = bucket_start(now, bucket)
+    bands = []
+    for _ in range(max(0, keep)):
+        start = end - bucket
+        bands.append((start, end))
+        end = start
+    return bands
+
+
 def _change_text(c: dict) -> str:
     return (c.get("change_from_prev") or c.get("overview") or "").strip()
 
@@ -230,6 +243,19 @@ def _consolidate_tier(db, summarizer: Summarizer, now: datetime, level: int, *, 
     extractive), scheduling the LLM job when idle+uncached. None when the band
     has no source content yet."""
     start, end = tier_band(now, level)
+    return _consolidate_band(db, summarizer, level, start, end, idle=idle)
+
+
+def _consolidate_band(
+    db,
+    summarizer: Summarizer,
+    level: int,
+    start: datetime,
+    end: datetime,
+    *,
+    idle: bool,
+) -> dict | None:
+    """Summary entry for one specific closed band."""
     start_iso, end_iso = start.isoformat(), end.isoformat()
 
     cached = db.get_summary(level, start_iso)
@@ -250,6 +276,36 @@ def _consolidate_tier(db, summarizer: Summarizer, now: datetime, level: int, *, 
             period_end_iso=end_iso, changes=sources,
         )
     return _entry(level, start_iso, end_iso, extractive_summary(sources), len(sources), pending=pending)
+
+
+def consolidate_closed_bands(db, summarizer: Summarizer, now: datetime) -> list[threading.Thread]:
+    """Schedule uncached closed bands across the tier ladder, independent of reads.
+
+    This is the background path used by the perception loop while idle. It only
+    schedules work; `Summarizer.schedule` dedupes in-flight jobs and performs the
+    normal LLM-or-extractive-fallback upsert off-thread.
+    """
+    threads: list[threading.Thread] = []
+    for level in range(1, MAX_LEVEL + 1):
+        for start, end in closed_bands(now, level):
+            start_iso, end_iso = start.isoformat(), end.isoformat()
+            if db.get_summary(level, start_iso):
+                continue
+            sources = _sources_for(db, level, start_iso, end_iso)
+            if not sources:
+                continue
+            thread = summarizer.schedule(
+                db,
+                level=level,
+                period_start_iso=start_iso,
+                period_end_iso=end_iso,
+                changes=sources,
+            )
+            if thread is not None:
+                threads.append(thread)
+    for level, keep in TIER_RETENTION.items():
+        db.prune_summaries(level, keep)
+    return threads
 
 
 def situation_summaries(db, summarizer: Summarizer, now: datetime, *, idle: bool) -> list[dict]:
