@@ -28,23 +28,30 @@ class NetworkCaptureSource:
         *,
         resolver: Callable[[], str | None] | None = None,
         rediscover_after_failures: int = 5,
+        auth_token: str | None = None,
     ) -> None:
         self.url = url
         self.timeout = timeout
         self.resolver = resolver
         self.rediscover_after_failures = max(1, rediscover_after_failures)
         self._consecutive_failures = 0
+        # The firmware's /snapshot requires the provisioned device token; sent
+        # as X-Headroom-Auth so discovery-resolved URLs stay token-free.
+        self.auth_token = (auth_token or "").strip() or None
         # Degrees counterclockwise to rotate each frame. The AtomS3R-M12 held
         # USB-port-down delivers a frame rotated 90deg from upright (the sensor
         # already undoes the left-right mirror via hmirror, but cannot rotate),
         # so the consumer rotates it here. Normalised to {0, 90, 180, 270}.
         self.rotate_ccw = rotate_ccw % 360
 
+    def _headers(self) -> dict[str, str]:
+        return {"X-Headroom-Auth": self.auth_token} if self.auth_token else {}
+
     def capture(self) -> bytes | None:
         import httpx
 
         try:
-            resp = httpx.get(self.url, timeout=self.timeout)
+            resp = httpx.get(self.url, timeout=self.timeout, headers=self._headers())
             resp.raise_for_status()
         except Exception:
             self._consecutive_failures += 1
@@ -53,7 +60,7 @@ class NetworkCaptureSource:
                 self._consecutive_failures = 0
                 if new_url and new_url != self.url:
                     self.url = new_url
-                    resp = httpx.get(self.url, timeout=self.timeout)
+                    resp = httpx.get(self.url, timeout=self.timeout, headers=self._headers())
                     resp.raise_for_status()
                     return self._rotate(resp.content)
             raise
@@ -102,6 +109,7 @@ def build_capture_source(settings) -> CaptureSource | None:
     device_id = getattr(settings, "camera_resolve_device_id", None)
     if device_id:
         resolver = lambda: resolve_device_url(device_id, "/snapshot", refresh=True)
+    auth_token = getattr(settings, "camera_auth_token", None)
 
     if settings.camera_url and not is_auto(settings.camera_url):
         return NetworkCaptureSource(
@@ -109,6 +117,7 @@ def build_capture_source(settings) -> CaptureSource | None:
             rotate_ccw=getattr(settings, "camera_rotate", 0),
             resolver=resolver,
             rediscover_after_failures=getattr(settings, "camera_rediscover_after_failures", 5),
+            auth_token=auth_token,
         )
     if resolver is not None and (settings.camera_url is None or is_auto(settings.camera_url)):
         return NetworkCaptureSource(
@@ -116,6 +125,7 @@ def build_capture_source(settings) -> CaptureSource | None:
             rotate_ccw=getattr(settings, "camera_rotate", 0),
             resolver=resolver,
             rediscover_after_failures=getattr(settings, "camera_rediscover_after_failures", 5),
+            auth_token=auth_token,
         )
     if settings.frame_dir:
         return DirectoryCaptureSource(settings.frame_dir)

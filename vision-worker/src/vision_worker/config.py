@@ -52,6 +52,7 @@ class Settings:
     camera_url: str | None
     camera_rotate: int  # degrees CCW applied to network frames (M12 USB-down = 90)
     camera_resolve_device_id: str | None  # re-resolve snapshot URL after failures
+    camera_auth_token: str | None  # X-Headroom-Auth for /snapshot (device token)
     camera_rediscover_after_failures: int
     capture_interval_ms: int  # ACTIVE/burst cadence (fast, just after a change)
     idle_interval_ms: int  # slow cadence when the scene is static (fewer fetches)
@@ -99,6 +100,7 @@ def load_settings() -> Settings:
         camera_url=os.getenv("VISION_CAMERA_URL") or None,
         camera_rotate=_int("VISION_CAMERA_ROTATE", 90),
         camera_resolve_device_id=os.getenv("VISION_CAMERA_RESOLVE_DEVICE_ID") or None,
+        camera_auth_token=(os.getenv("VISION_CAMERA_AUTH_TOKEN") or os.getenv("MH_FACE_AUTH_TOKEN") or None),
         camera_rediscover_after_failures=_int("VISION_CAMERA_REDISCOVER_AFTER_FAILURES", 5),
         capture_interval_ms=_int("VISION_CAPTURE_INTERVAL_MS", 1500),
         idle_interval_ms=_int("VISION_IDLE_INTERVAL_MS", 5000),

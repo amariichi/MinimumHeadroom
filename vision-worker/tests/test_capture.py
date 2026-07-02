@@ -45,7 +45,7 @@ def test_network_capture_source_reresolves_after_failures(monkeypatch):
 
     calls: list[str] = []
 
-    def fake_get(url: str, timeout: float):
+    def fake_get(url: str, timeout: float, headers=None):
         calls.append(url)
         if url == "http://old.invalid/snapshot":
             return Response(b"", ok=False)
@@ -75,3 +75,33 @@ def test_network_capture_source_reresolves_after_failures(monkeypatch):
         "http://new.invalid/snapshot",
     ]
     assert src.url == "http://new.invalid/snapshot"
+
+
+def test_network_capture_sends_auth_header(monkeypatch):
+    from vision_worker.capture import NetworkCaptureSource
+
+    seen = {}
+
+    class _Resp:
+        content = b"jpegbytes"
+
+        def raise_for_status(self):
+            return None
+
+    class _Httpx:
+        @staticmethod
+        def get(url, timeout=None, headers=None):
+            seen["url"] = url
+            seen["headers"] = headers or {}
+            return _Resp()
+
+    import vision_worker.capture as capture_mod
+    monkeypatch.setitem(__import__("sys").modules, "httpx", _Httpx)
+
+    src = NetworkCaptureSource("http://cam.example/snapshot", auth_token="tok-123")
+    assert src.capture() == b"jpegbytes"
+    assert seen["headers"].get("X-Headroom-Auth") == "tok-123"
+
+    src_plain = NetworkCaptureSource("http://cam.example/snapshot")
+    src_plain.capture()
+    assert "X-Headroom-Auth" not in (seen["headers"] or {})
