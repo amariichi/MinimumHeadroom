@@ -2,7 +2,7 @@
 # Launch a coding agent in Real Minimum Headroom (RMH) voice-first mode.
 #
 # Usage:
-#   start-rmh.sh --agent {claude|codex|agy} [--model <id>] [extra args passed to the CLI]
+#   start-rmh.sh --agent {claude|codex|agy} [--model <id>] [--with-vision] [extra args passed to the CLI]
 #
 # Required runtime: the minimum-headroom operator stack must already be running
 # (face-app on FACE_WS_URL, AtomS3R bridge alive). This script does not start
@@ -62,6 +62,7 @@ done
 : "${RMH_DEFAULT_MODEL_CODEX:=gpt-5-mini}"
 # agy has no --model flag; it reads ~/.gemini/antigravity-cli/settings.json. Document only.
 : "${RMH_DEFAULT_MODEL_AGY_HINT:=gemini-flash-latest}"
+: "${RMH_WITH_VISION:=0}"
 
 # Runtime workdir for generated configs (machine-local, not committed).
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/rmh-voice-mode/$$"
@@ -79,6 +80,7 @@ while [[ $# -gt 0 ]]; do
     --agent=*) AGENT="${1#*=}"; shift ;;
     --model) MODEL="$2"; shift 2 ;;
     --model=*) MODEL="${1#*=}"; shift ;;
+    --with-vision) RMH_WITH_VISION=1; shift ;;
     -h|--help)
       sed -n '2,12p' "$0"
       exit 0
@@ -105,6 +107,13 @@ render() {
 }
 
 export MH_FACE_AGENT_ID MH_FACE_AGENT_LABEL MH_FACE_SESSION_ID MH_REPO_ROOT FACE_WS_URL MH_HOOK_SUPPRESS_EVENTS
+
+if [[ "${RMH_WITH_VISION:-0}" == "1" ]]; then
+  echo "[start-rmh] starting vision backend (may take a few minutes on cold start)" >&2
+  if ! "$MH_REPO_ROOT/scripts/run-vision-stack.sh"; then
+    echo "[start-rmh] warning: vision backend unavailable; continuing without vision." >&2
+  fi
+fi
 
 # --- Per-agent launch -------------------------------------------------------
 case "$AGENT" in

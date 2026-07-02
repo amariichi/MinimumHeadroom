@@ -28,15 +28,53 @@ Optional flags:
 ```bash
 start-rmh.sh --agent claude --model sonnet           # heavier model for a hard task
 start-rmh.sh --agent codex  --model gpt-5            # override the default light model
+start-rmh.sh --agent codex  --with-vision            # start/reuse the M12 vision backend first
 start-rmh.sh --agent codex  -- exec "fix the failing test"   # extra args after -- pass through
 ```
+
+## Vision backend (AtomS3R-M12 + diffusiongemma)
+
+`--with-vision` starts or reuses the M12 camera backend before the agent CLI opens. You can also set `RMH_WITH_VISION=1` for the same behavior:
+
+```bash
+RMH_WITH_VISION=1 $REPO/examples/rmh-voice-mode/start-rmh.sh --agent codex
+```
+
+Prerequisites:
+
+1. AtomS3R-M12 firmware is flashed, connected to Wi-Fi, and provisioned against the same `face-app`.
+2. `~/.config/minimum-headroom.env` exists and contains `MH_FACE_AUTH_TOKEN`.
+3. A GPU is available and the diffusiongemma weights are already set up with `scripts/setup-vllm-diffusiongemma.sh`.
+
+Cold-boot sequence:
+
+1. Start the operator stack once:
+
+   ```bash
+   $REPO/scripts/run-operator-once.sh
+   ```
+
+   If the operator stack already exists, restart it in place instead:
+
+   ```bash
+   $REPO/scripts/restart-operator-stack-in-place.sh
+   ```
+
+2. Launch the voice-mode CLI and include the vision backend:
+
+   ```bash
+   $REPO/examples/rmh-voice-mode/start-rmh.sh --agent codex --with-vision
+   ```
+
+The vision startup path calls `scripts/run-vision-stack.sh` synchronously. A cold diffusiongemma/vLLM load can take several minutes; if the vision backend fails to become available, the launcher prints a warning and continues into voice mode without vision. For detailed vision-worker environment variables, see `vision-worker/README.md`.
 
 ## What the script does
 
 1. Resolves `MH_REPO_ROOT` from its own location (override with `MH_REPO_ROOT=...`).
 2. Exports `MH_FACE_AGENT_ID=__operator__`, `MH_FACE_SESSION_ID=operator`, `FACE_WS_URL`, so the MCP server can auto-fill `agent_id` / `session_id` on every `face_say` / `face_event` / `face_ping`.
-3. Renders per-CLI runtime config from `templates/` into a temporary runtime directory (`$XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/`) — never written into the repo. Codex gets MCP + hook config; Claude and agy get MCP config, with agy hooks handled as a one-time Antigravity setup because the hook file is shared with the user's other customizations.
-4. Launches the chosen CLI from this directory, so the agent picks up the voice-first rules in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`.
+3. When `--with-vision` or `RMH_WITH_VISION=1` is set, runs `scripts/run-vision-stack.sh` before launching the CLI.
+4. Renders per-CLI runtime config from `templates/` into a temporary runtime directory (`$XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/`) — never written into the repo. Codex gets MCP + hook config; Claude and agy get MCP config, with agy hooks handled as a one-time Antigravity setup because the hook file is shared with the user's other customizations.
+5. Launches the chosen CLI from this directory, so the agent picks up the voice-first rules in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`.
 
 For agy, the script renders the minimum-headroom plugin from `templates/antigravity-plugin/` into a per-launch temp dir (with `MH_REPO_ROOT` resolved) and runs `agy plugin install` on it. The plugin is installed idempotently into `~/.gemini/antigravity-cli/plugins/minimum-headroom/`, so re-launches simply overwrite the previous install. Hooks are NOT touched: Antigravity hook configuration is shared with the user's other customizations. Use `doc/examples/antigravity/hooks.json`, or merge `doc/examples/antigravity/settings-hooks.snippet.json` into `~/.gemini/settings.json` if your installed agy build does not load plugin hooks. See `doc/examples/antigravity/README.md` for details.
 
