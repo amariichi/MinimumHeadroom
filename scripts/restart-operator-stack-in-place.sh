@@ -12,6 +12,7 @@ STACK_CMD_SET=0
 FACE_UI_MODE=""
 FACE_AUDIO_TARGET="${MH_FACE_AUDIO_TARGET:-browser}"
 KOKORO_VOICE="${MH_KOKORO_VOICE:-}"
+CAPTURE_ANOMALY="${MH_TTS_CAPTURE_ANOMALY:-}"
 ASR_BASE_URL=""
 OPERATOR_FACE_AGENT_ID="${MH_OPERATOR_FACE_AGENT_ID:-__operator__}"
 OPERATOR_FACE_AGENT_LABEL="${MH_OPERATOR_FACE_AGENT_LABEL:-Operator}"
@@ -74,6 +75,8 @@ Options:
 
 Environment:
   MH_KOKORO_VOICE=<voice> Kokoro voice override, for example jf_alpha or af_heart.
+  MH_TTS_CAPTURE_ANOMALY=1  Save a WAV+JSON sample whenever a synthesized TTS
+                            utterance looks noise-like (capture-only diagnostic; off by default).
 
 Examples:
   ./scripts/restart-operator-stack-in-place.sh
@@ -224,6 +227,9 @@ fi
 if [[ -n "$KOKORO_VOICE" ]]; then
   append_env "MH_KOKORO_VOICE" "$KOKORO_VOICE"
 fi
+if [[ -n "$CAPTURE_ANOMALY" ]]; then
+  append_env "MH_TTS_CAPTURE_ANOMALY" "$CAPTURE_ANOMALY"
+fi
 if [[ -n "$ASR_BASE_URL" ]]; then
   append_env "MH_OPERATOR_ASR_BASE_URL" "$ASR_BASE_URL"
 fi
@@ -243,6 +249,9 @@ echo "[restart-operator-stack] MH_BRIDGE_TMUX_PANE=${agent_pane}"
 echo "[restart-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${OPERATOR_FACE_AGENT_ID}"
 if [[ -n "$KOKORO_VOICE" ]]; then
   echo "[restart-operator-stack] MH_KOKORO_VOICE=${KOKORO_VOICE}"
+fi
+if [[ -n "$CAPTURE_ANOMALY" ]]; then
+  echo "[restart-operator-stack] MH_TTS_CAPTURE_ANOMALY=${CAPTURE_ANOMALY}"
 fi
 
 if [[ -n "${TMUX:-}" ]]; then

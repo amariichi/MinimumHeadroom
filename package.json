@@ -23,5 +23,8 @@
     "tts-worker:smoke": "./scripts/run-tts-worker.sh --smoke",
     "atoms3r:bridge": "node scripts/atoms3r-http-bridge.mjs",
     "test": "node --test"
+  },
+  "dependencies": {
+    "three": "0.161.0"
   }
 }
