@@ -363,8 +363,15 @@ def create_app() -> FastAPI:
                 committed = pipeline.process_frame(frame)
         # Reuse the committed observation when the frame was a real change (one
         # model call); otherwise describe a fresh frame so the answer is never
-        # empty just because nothing changed since the last stored frame.
-        obs = committed if committed is not None else model_client.observe(frame, None)
+        # empty just because nothing changed since the last stored frame. With
+        # VISION_VOTE_K > 1, process_frame may have already spent one model call
+        # on a pending vote window; the second call is accepted here because
+        # /look must always return a fresh answer to the deliberate user request.
+        obs = (
+            committed
+            if committed is not None
+            else model_client.observe(frame, None, correction=_correction_advisory())
+        )
         return {
             "overview": obs.overview,
             "ocr_full": obs.ocr_full,

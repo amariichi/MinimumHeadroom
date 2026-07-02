@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from vision_worker.records import Observation
 from vision_worker.summarize import Summarizer, consolidate_closed_bands
 
 UTC = timezone.utc
@@ -204,6 +205,47 @@ def test_look_store_0_is_ephemeral(tmp_path, monkeypatch):
     after = client.get("/metrics").json()["counts"]["observations"]
     assert body["overview"]  # still answers
     assert after == before  # but stores nothing
+
+
+class _CapturingModelClient:
+    name = "capture-correction"
+
+    def __init__(self) -> None:
+        self.corrections: list[str | None] = []
+
+    def observe(self, frame_jpeg, prev, correction=None) -> Observation:
+        self.corrections.append(correction)
+        return Observation(
+            is_text=False,
+            ocr_full="",
+            overview="机に赤い光",
+            change_from_prev="赤い光が見える",
+            changed=True,
+            model=self.name,
+        )
+
+
+def test_look_fallback_passes_active_correction_advisory(tmp_path, monkeypatch, make_frame):
+    monkeypatch.setenv("VISION_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("VISION_DB_PATH", str(tmp_path / "v.db"))
+    monkeypatch.setenv("VISION_FRAME_DIR", _fixtures_dir())
+    monkeypatch.setenv("VISION_CORRECTION_TO_MODEL", "1")
+    model = _CapturingModelClient()
+
+    import vision_worker.app as app_mod
+
+    monkeypatch.setattr(app_mod, "build_model_client", lambda settings: model)
+    client = TestClient(app_mod.create_app())
+
+    client.post("/ingest", files={"image": ("f.jpg", make_frame(0x0F0F), "image/jpeg")})
+    posted = client.post("/correction", json={"text": "赤く見えるものは救急車の赤色灯"})
+    assert posted.status_code == 200
+    model.corrections.clear()
+
+    body = client.post("/look?store=0").json()
+
+    assert body["overview"] == "机に赤い光"
+    assert model.corrections == ["赤く見えるものは救急車の赤色灯"]
 
 
 def test_look_503_without_camera(tmp_path, monkeypatch):
