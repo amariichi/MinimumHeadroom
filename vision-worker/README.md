@@ -11,8 +11,10 @@ bundled `MockModelClient` runs the whole pipeline and the test suite without a
 GPU. The real model (`nvidia/diffusiongemma-26B-A4B-it-NVFP4` via an
 OpenAI-compatible vLLM endpoint) is wired in milestone M2.
 
-See the full design in
-[`.agent/execplans/atoms3r-m12-vision-memory.md`](../.agent/execplans/atoms3r-m12-vision-memory.md).
+See the public guide in
+[`doc/guides/m12-vision.md`](../doc/guides/m12-vision.md). Detailed ExecPlans
+under `.agent/execplans/` are local-only and may not be available to repository
+readers.
 
 ## Run (mock backend, no GPU)
 
