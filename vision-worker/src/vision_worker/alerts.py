@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Callable, Protocol
 
 from .config import Settings
@@ -39,6 +40,24 @@ class RecordingAlertSink:
 
     def notify(self, text: str, watch_name: str) -> None:
         self.events.append((watch_name, text))
+
+
+class LastSpokenAlertSink:
+    """Records the most recent line handed to the voice sink, then forwards it."""
+
+    def __init__(
+        self,
+        target: "AlertSink",
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.target = target
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self.last_spoken: tuple[str, datetime] | None = None
+
+    def notify(self, text: str, watch_name: str) -> None:
+        self.last_spoken = (text, self._clock())
+        self.target.notify(text, watch_name)
 
 
 class WebhookAlertSink:

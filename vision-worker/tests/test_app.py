@@ -93,6 +93,7 @@ def test_situation_empty_before_any_observation(tmp_path, monkeypatch):
     assert body["current"] is None
     assert body["recent"] == []
     assert body["summaries"] == []
+    assert body["last_narration"] is None
     assert "safety" in body["disclaimer"].lower()
 
 
@@ -137,6 +138,32 @@ def test_situation_text_since_returns_watermark_and_presence_line(tmp_path, monk
     assert "詳細はGET /situation" in second.text
     assert "[カメラの状況" not in second.text
     assert len(second.text.splitlines()) == 1
+
+
+def test_situation_json_includes_last_narration_shape(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    before = datetime.now(UTC)
+    client.app.state.last_spoken_alerts.notify("本が置かれました", "change")
+
+    body = client.get("/situation").json()
+
+    last = body["last_narration"]
+    assert last["text"] == "本が置かれました"
+    assert datetime.fromisoformat(last["at"]) >= before
+    assert isinstance(last["age_seconds"], int)
+    assert last["age_seconds"] >= 0
+
+
+def test_situation_text_since_escalates_for_last_narration(tmp_path, monkeypatch, make_frame):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/ingest", files={"image": ("f.jpg", make_frame(0x0F0F), "image/jpeg")})
+    watermark = client.get("/situation", params={"format": "text"}).headers["x-situation-watermark"]
+
+    client.app.state.last_spoken_alerts.notify("机に本が置かれました", "change")
+
+    resp = client.get("/situation", params={"format": "text", "since": watermark})
+    assert "[カメラの状況" in resp.text
+    assert "カメラの発話: 「机に本が置かれました」" in resp.text
 
 
 def test_situation_text_since_escalates_for_active_correction(tmp_path, monkeypatch, make_frame):

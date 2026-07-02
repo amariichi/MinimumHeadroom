@@ -30,7 +30,13 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .alerts import AsyncAlertSink, ChangeNarrator, build_alert_sink, make_alert_text
+from .alerts import (
+    AsyncAlertSink,
+    ChangeNarrator,
+    LastSpokenAlertSink,
+    build_alert_sink,
+    make_alert_text,
+)
 from .capture import build_capture_source
 from .config import load_settings
 from .corrections import make_correction, partition_corrections
@@ -99,10 +105,11 @@ def create_app() -> FastAPI:
     # is slow, and doing it inline stalls observation (the cause of the laggy,
     # sporadic ambient narration). Only wrap when a real voice webhook is active.
     raw_sink = build_alert_sink(settings)
+    last_spoken_sink = LastSpokenAlertSink(raw_sink)
     sink = (
-        AsyncAlertSink(raw_sink)
+        AsyncAlertSink(last_spoken_sink)
         if settings.alert_enabled and settings.alert_webhook
-        else raw_sink
+        else last_spoken_sink
     )
     narrator = ChangeNarrator(
         sink,
@@ -144,6 +151,7 @@ def create_app() -> FastAPI:
     app.state.watches = registry
     app.state.perception = perception
     app.state.narrator = narrator
+    app.state.last_spoken_alerts = last_spoken_sink
 
     # Human corrections live only in memory: a correction is a claim about the
     # live scene, so a restart (which has not re-observed it) should drop them
@@ -180,6 +188,16 @@ def create_app() -> FastAPI:
                         c.get("lifetime_seconds"),
                     )
             return active
+
+    def _last_narration(now: datetime) -> dict | None:
+        last = last_spoken_sink.last_spoken
+        if last is None:
+            return None
+        text, at = last
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        age_seconds = max(0, int((now - at).total_seconds()))
+        return {"text": text, "at": at.isoformat(), "age_seconds": age_seconds}
 
     def _correction_advisory() -> str | None:
         """The freshest active correction text to advise the VLM with (M5b).
@@ -284,6 +302,7 @@ def create_app() -> FastAPI:
             and stable >= settings.idle_interval_ms / 1000.0
         )
         digest["summaries"] = situation_summaries(db, summarizer, now, idle=idle)
+        digest["last_narration"] = _last_narration(now)
         active = _active_corrections(now)
         state_token = situation_state_token(digest)
         state_changed_at = app.state.situation_state_changed_at

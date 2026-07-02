@@ -192,6 +192,7 @@ _T1_RENDER_LIMIT = 3
 
 #: Kept short so it costs few tokens when injected on every conversational turn.
 _TEXT_DISCLAIMER = "（情報提供のみ・安全用途不可）"
+_NARRATION_RECENT_SECONDS = 5 * 60
 
 
 def humanize_seconds(seconds: int | None) -> str:
@@ -328,6 +329,13 @@ def render_situation_text(digest: dict, corrections: list[dict] | None = None) -
                 nudge = True
         if nudge:
             lines.append("（↑まだ有効か、必要ならユーザーに確認してください）")
+
+    narration = digest.get("last_narration")
+    if isinstance(narration, dict):
+        spoken_text = (narration.get("text") or "").strip()
+        age_seconds = narration.get("age_seconds")
+        if spoken_text and age_seconds is not None and age_seconds < _NARRATION_RECENT_SECONDS:
+            lines.append(f"カメラの発話: 「{spoken_text}」（{humanize_seconds(age_seconds)}前）")
 
     recent = digest.get("recent") or []
     if recent:

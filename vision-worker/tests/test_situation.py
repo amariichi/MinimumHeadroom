@@ -343,6 +343,44 @@ def test_render_text_no_correction_line_without_corrections():
     assert "[人の補足]" not in render_situation_text(digest)
 
 
+def test_render_text_shows_recent_last_narration():
+    digest = {
+        "observing": True,
+        "current": {"overview": "机", "is_text": False, "ocr": "",
+                    "stable_seconds": 5, "stale": False},
+        "recent": [],
+        "summaries": [],
+        "last_narration": {"text": "本が置かれました", "age_seconds": 120},
+    }
+    out = render_situation_text(digest)
+    assert "カメラの発話: 「本が置かれました」（約2分前）" in out
+
+
+def test_render_text_omits_old_last_narration():
+    digest = {
+        "observing": True,
+        "current": {"overview": "机", "is_text": False, "ocr": "",
+                    "stable_seconds": 5, "stale": False},
+        "recent": [],
+        "summaries": [],
+        "last_narration": {"text": "古い発話", "age_seconds": 301},
+    }
+    assert "カメラの発話" not in render_situation_text(digest)
+
+
+def test_presence_line_omits_last_narration():
+    now = _local_dt(12, 34)
+    digest = {
+        "now": now.isoformat(),
+        "observing": True,
+        "current": {"overview": "机", "stable_seconds": 60, "stale": False},
+        "last_narration": {"text": "本が置かれました", "age_seconds": 1},
+    }
+    out = render_situation_presence_line(digest)
+    assert "カメラの発話" not in out
+    assert "本が置かれました" not in out
+
+
 def test_pipeline_commit_sets_last_change_at_and_drives_stable_seconds(tmp_path, make_frame):
     # The plan's M1 acceptance: build a pipeline, commit one observation, advance
     # a fake clock, and assert stable_seconds grows off the real last_change_at.

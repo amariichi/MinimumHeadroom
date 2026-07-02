@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timezone
 
 from vision_worker.alerts import (
     AsyncAlertSink,
     ChangeNarrator,
+    LastSpokenAlertSink,
     RecordingAlertSink,
     make_change_text,
 )
@@ -47,6 +49,31 @@ def test_enabled_narrator_speaks_the_change():
     narrator = ChangeNarrator(sink, enabled=True, min_interval_s=0.0)
     assert narrator.consider(_obs(change="a mug appeared")) is True
     assert sink.events == [("change", "a mug appeared")]
+
+
+def test_last_spoken_sink_records_named_watch_alert_with_utc_timestamp():
+    spoken_at = datetime(2026, 6, 21, 12, 0, tzinfo=timezone.utc)
+    target = RecordingAlertSink()
+    sink = LastSpokenAlertSink(target, clock=lambda: spoken_at)
+
+    sink.notify("Heads up: red light.", "red light")
+
+    assert sink.last_spoken == ("Heads up: red light.", spoken_at)
+    assert target.events == [("red light", "Heads up: red light.")]
+
+
+def test_narrator_records_last_spoken_only_when_it_fires():
+    spoken_at = datetime(2026, 6, 21, 12, 1, tzinfo=timezone.utc)
+    target = RecordingAlertSink()
+    sink = LastSpokenAlertSink(target, clock=lambda: spoken_at)
+    narrator = ChangeNarrator(sink, enabled=True, min_interval_s=0.0)
+
+    assert narrator.consider(_obs(change="a book moved")) is True
+    assert sink.last_spoken == ("a book moved", spoken_at)
+
+    assert narrator.consider(_obs(change="no significant change", changed=False)) is False
+    assert sink.last_spoken == ("a book moved", spoken_at)
+    assert target.events == [("change", "a book moved")]
 
 
 def test_low_confidence_is_not_narrated():
