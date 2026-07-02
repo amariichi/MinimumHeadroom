@@ -9,7 +9,9 @@ from vision_worker.pipeline import Pipeline
 from vision_worker.situation import (
     compose_situation,
     humanize_seconds,
+    render_situation_presence_line,
     render_situation_text,
+    salience_reasons,
 )
 from vision_worker.store import FrameStore
 
@@ -365,3 +367,75 @@ def test_pipeline_commit_sets_last_change_at_and_drives_stable_seconds(tmp_path,
 
     assert stable_after(3) == 3
     assert stable_after(11) == 11
+
+
+def _local_dt(hour: int = 12, minute: int = 34) -> datetime:
+    return datetime(2026, 6, 21, hour, minute, 0, tzinfo=datetime.now().astimezone().tzinfo)
+
+
+def test_render_presence_line_is_one_line_with_absolute_time():
+    now = _local_dt(12, 34)
+    digest = {
+        "now": now.isoformat(),
+        "observing": True,
+        "current": {
+            "overview": "机の上の本",
+            "is_text": False,
+            "ocr": "",
+            "stable_seconds": 12 * 60,
+            "stale": False,
+        },
+        "recent": [],
+        "summaries": [],
+    }
+    out = render_situation_presence_line(digest)
+    assert out == "[カメラ 12:34] 机の上の本（約12分変化なし・詳細はGET /situation）"
+    assert "\n" not in out
+
+
+def test_render_full_block_header_has_absolute_time():
+    now = _local_dt(12, 34)
+    digest = {
+        "now": now.isoformat(),
+        "observing": True,
+        "current": {"overview": "机", "is_text": False, "ocr": "", "stable_seconds": 10},
+        "recent": [],
+        "summaries": [],
+    }
+    assert render_situation_text(digest).splitlines()[0] == "[カメラの状況 12:34] 観測中"
+
+
+def test_salience_reasons_scene_change_after_watermark():
+    since = _local_dt(12, 0)
+    digest = {
+        "current": {"changed_at": (since + timedelta(seconds=1)).isoformat()},
+        "observing": True,
+    }
+    assert salience_reasons(digest, since=since) == ["scene_change"]
+
+
+def test_salience_reasons_active_correction_even_without_new_change():
+    since = _local_dt(12, 0)
+    digest = {"current": {"changed_at": (since - timedelta(seconds=1)).isoformat()}}
+    reasons = salience_reasons(digest, since=since, corrections=[{"text": "救急車"}])
+    assert reasons == ["correction"]
+
+
+def test_salience_reasons_observing_stale_state_flip():
+    since = _local_dt(12, 0)
+    digest = {"current": {"changed_at": (since - timedelta(seconds=1)).isoformat()}}
+    reasons = salience_reasons(
+        digest,
+        since=since,
+        state_changed_at=since + timedelta(seconds=1),
+    )
+    assert reasons == ["state"]
+
+
+def test_salience_reasons_future_last_narration_field():
+    since = _local_dt(12, 0)
+    digest = {
+        "current": {"changed_at": (since - timedelta(seconds=1)).isoformat()},
+        "last_narration": {"text": "机に本があります", "at": (since + timedelta(seconds=1)).isoformat()},
+    }
+    assert salience_reasons(digest, since=since) == ["narration"]

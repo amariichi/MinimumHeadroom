@@ -38,7 +38,13 @@ from .db import VisionDB
 from .model_client import build_model_client
 from .perception import PerceptionLoop, decide_start
 from .pipeline import build_pipeline
-from .situation import compose_situation, render_situation_text
+from .situation import (
+    compose_situation,
+    render_situation_presence_line,
+    render_situation_text,
+    salience_reasons,
+    situation_state_token,
+)
 from .store import FrameStore
 from .summarize import build_summarizer, consolidate_closed_bands, situation_summaries
 from .vram import free_vram_mb
@@ -149,6 +155,8 @@ def create_app() -> FastAPI:
     correction_retirements = {"change": 0, "drift": 0, "ttl": 0}
     app.state.corrections = corrections
     app.state.correction_retirements = correction_retirements
+    app.state.situation_state_token = None
+    app.state.situation_state_changed_at = None
 
     def _active_corrections(now: datetime) -> list[dict]:
         with corrections_lock:
@@ -239,7 +247,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/situation")
-    def situation(format: str = "json"):
+    def situation(format: str = "json", since: str | None = None):
         """Cheap, read-only situational digest for the conversational LLM.
 
         Returns what the camera sees now, how long that view has been stable,
@@ -277,8 +285,29 @@ def create_app() -> FastAPI:
         )
         digest["summaries"] = situation_summaries(db, summarizer, now, idle=idle)
         active = _active_corrections(now)
+        state_token = situation_state_token(digest)
+        state_changed_at = app.state.situation_state_changed_at
+        if app.state.situation_state_token is None:
+            app.state.situation_state_token = state_token
+        elif app.state.situation_state_token != state_token:
+            app.state.situation_state_token = state_token
+            app.state.situation_state_changed_at = now
+            state_changed_at = now
+
         if format == "text":
-            return PlainTextResponse(render_situation_text(digest, corrections=active))
+            watermark = now.isoformat()
+            since_dt = _parse_iso(since)
+            reasons = salience_reasons(
+                digest,
+                since=since_dt,
+                corrections=active,
+                state_changed_at=state_changed_at,
+            )
+            if since_dt is not None and not reasons:
+                text = render_situation_presence_line(digest)
+            else:
+                text = render_situation_text(digest, corrections=active)
+            return PlainTextResponse(text, headers={"X-Situation-Watermark": watermark})
         digest["disclaimer"] = DISCLAIMER
         digest["corrections"] = [
             {

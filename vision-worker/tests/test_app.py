@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -115,9 +117,39 @@ def test_situation_text_format(tmp_path, monkeypatch, make_frame):
     resp = client.get("/situation?format=text")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/plain")
-    assert "[カメラの状況]" in resp.text
+    assert "[カメラの状況" in resp.text
     # Ingested (no live loop) -> shown as the last-seen scene, not "現在".
     assert "最後に見えた光景:" in resp.text
+
+
+def test_situation_text_since_returns_watermark_and_presence_line(tmp_path, monkeypatch, make_frame):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/ingest", files={"image": ("f.jpg", make_frame(0x0F0F), "image/jpeg")})
+
+    first = client.get("/situation", params={"format": "text"})
+    watermark = first.headers.get("x-situation-watermark")
+    assert watermark
+    assert "[カメラの状況" in first.text
+
+    second = client.get("/situation", params={"format": "text", "since": watermark})
+    assert second.headers.get("x-situation-watermark")
+    assert second.text.startswith("[カメラ ")
+    assert "詳細はGET /situation" in second.text
+    assert "[カメラの状況" not in second.text
+    assert len(second.text.splitlines()) == 1
+
+
+def test_situation_text_since_escalates_for_active_correction(tmp_path, monkeypatch, make_frame):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/ingest", files={"image": ("f.jpg", make_frame(0x0F0F), "image/jpeg")})
+    watermark = client.get("/situation", params={"format": "text"}).headers["x-situation-watermark"]
+
+    posted = client.post("/correction", json={"text": "赤信号に見えるのは救急車の赤色灯"})
+    assert posted.status_code == 200
+
+    resp = client.get("/situation", params={"format": "text", "since": watermark})
+    assert "[カメラの状況" in resp.text
+    assert "[人の補足] 赤信号に見えるのは救急車の赤色灯" in resp.text
 
 
 def test_look_returns_description(tmp_path, monkeypatch):
@@ -303,3 +335,48 @@ def test_perception_locked_refuses(tmp_path, monkeypatch):
     assert started["started"] is False
     assert started["reason"] == "locked"
     assert client.get("/perception/status").json()["capability"] == "locked"
+
+
+def test_situation_context_hook_roundtrips_watermark(tmp_path):
+    repo = Path(__file__).resolve().parents[2]
+    script = repo / "scripts" / "situation-context-hook.sh"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log_path = tmp_path / "curl-args.log"
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "headers=''\n"
+        "body=''\n"
+        "while [ $# -gt 0 ]; do\n"
+        "  case \"$1\" in\n"
+        "    -D) headers=\"$2\"; shift 2 ;;\n"
+        "    -o) body=\"$2\"; shift 2 ;;\n"
+        "    --data-urlencode) printf '%s\\n' \"$2\" >> \"$FAKE_CURL_LOG\"; shift 2 ;;\n"
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        "printf 'HTTP/1.1 200 OK\\r\\nX-Situation-Watermark: 2026-06-21T12:00:00+00:00\\r\\n\\r\\n' > \"$headers\"\n"
+        "printf '[カメラ 12:00] 机（詳細はGET /situation）\\n' > \"$body\"\n"
+    )
+    fake_curl.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "FAKE_CURL_LOG": str(log_path),
+            "MH_SITUATION_INJECT": "1",
+            "VISION_BASE_URL": "http://vision-worker",
+            "XDG_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "CLAUDE_SESSION_ID": "session-1",
+        }
+    )
+
+    first = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True, check=True)
+    second = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True, check=True)
+
+    assert first.stdout == "[カメラ 12:00] 机（詳細はGET /situation）\n"
+    assert second.stdout == first.stdout
+    log = log_path.read_text()
+    assert log.count("format=text") == 2
+    assert "since=2026-06-21T12:00:00+00:00" in log

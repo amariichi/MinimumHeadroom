@@ -91,6 +91,51 @@ condensing text during idle moments and cached, so reading is always free.
 Always relay the safety boundary when relevant; the digest text already carries a
 short disclaimer.
 
+### Standing instruction for injected camera context
+
+When `scripts/situation-context-hook.sh` injects a `[カメラ ...]` or
+`[カメラの状況 ...]` block, treat it as ambient background. Do not mention the
+camera or its contents unless it is relevant to the user's turn. When the user
+refers to their surroundings, what is visible, what changed, or how long the
+scene has been stable, answer from the injected block or pull `GET /situation` /
+`POST /look` for more detail. When the user contradicts a camera-derived claim,
+post that clarification to `POST /correction` so the worker stops repeating the
+misread and the note reaches future summaries.
+
+### Optional per-turn injection setup
+
+For Claude-style `UserPromptSubmit` hooks, first put runtime configuration in the
+operator environment (normally via `~/.config/minimum-headroom.env`):
+
+```bash
+export MH_SITUATION_INJECT=1
+export VISION_BASE_URL=http://127.0.0.1:8095
+```
+
+Then register the hook once in the conversational agent settings. This is a
+documentation snippet only — do not edit user settings programmatically:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/amari1/github/minimum-headroom/scripts/situation-context-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Codex and agy agents should use this skill's pull-based fallback unless their
+runtime has an equivalent prompt-submit hook: call `GET /situation` when the user
+asks about the surroundings, and `POST /look` for a deliberate fresh view.
+
 ## Two ways to use the camera
 
 - **Mode A — on-demand (default).** The user asks what's in front of them right

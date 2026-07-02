@@ -36,6 +36,59 @@ def _parse_iso(value: str | None) -> datetime | None:
     return dt
 
 
+def _clock_tag(digest: dict) -> str:
+    now = _parse_iso(digest.get("now"))
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return now.astimezone().strftime("%H:%M")
+
+
+def situation_state_token(digest: dict) -> str:
+    """Comparable observing/stale state for salience gating."""
+    current = digest.get("current") or {}
+    observing = bool(digest.get("observing"))
+    stale = bool(current.get("stale"))
+    return f"observing={int(observing)};stale={int(stale)}"
+
+
+def salience_reasons(
+    digest: dict,
+    *,
+    since: datetime | None,
+    corrections: list[dict] | None = None,
+    state_changed_at: datetime | None = None,
+) -> list[str]:
+    """Return why a `since` request should receive the full situation block.
+
+    No `since` means the legacy full-block behavior is handled by the caller.
+    Active corrections deliberately count as salient for as long as they are
+    live, because the human note and stale-soon nudge must keep reaching the
+    conversational model until the correction retires.
+    """
+    if since is None:
+        return []
+
+    reasons: list[str] = []
+    current = digest.get("current") or {}
+    changed_at = _parse_iso(current.get("changed_at"))
+    if changed_at is not None and changed_at > since:
+        reasons.append("scene_change")
+
+    if corrections:
+        reasons.append("correction")
+
+    if state_changed_at is not None and state_changed_at > since:
+        reasons.append("state")
+
+    narration = digest.get("last_narration")
+    if isinstance(narration, dict):
+        narrated_at = _parse_iso(narration.get("at"))
+        if narrated_at is not None and narrated_at > since:
+            reasons.append("narration")
+
+    return reasons
+
+
 def compose_situation(
     *,
     now: datetime,
@@ -179,6 +232,33 @@ def _render_summary_lines(summaries: list[dict]) -> list[str]:
     return lines[:_SUMMARY_LINE_LIMIT]
 
 
+def render_situation_presence_line(digest: dict) -> str:
+    """Render the every-turn low-cost Design B presence line."""
+    stamp = _clock_tag(digest)
+    current = digest.get("current")
+    if not current:
+        return f"[カメラ {stamp}] まだ観測がありません（詳細はGET /situation）"
+
+    overview = (current.get("overview") or "(不明)").strip()
+    observing = bool(digest.get("observing"))
+    stale = bool(current.get("stale"))
+    stable_seconds = current.get("stable_seconds")
+
+    if observing and not stale and stable_seconds is not None:
+        status = f"{humanize_seconds(stable_seconds)}変化なし"
+    elif stale:
+        age = current.get("as_of_age_seconds")
+        prefix = f"{humanize_seconds(age)}前・" if age is not None else ""
+        status = f"{prefix}カメラ応答なし"
+    elif not observing:
+        age = current.get("as_of_age_seconds")
+        status = f"{humanize_seconds(age)}前" if age is not None else "観測停止中"
+    else:
+        status = "観測中"
+
+    return f"[カメラ {stamp}] {overview}（{status}・詳細はGET /situation）"
+
+
 def render_situation_text(digest: dict, corrections: list[dict] | None = None) -> str:
     """Render the situation digest as a compact Japanese text block.
 
@@ -194,9 +274,10 @@ def render_situation_text(digest: dict, corrections: list[dict] | None = None) -
     flagged as unconfirmed; near the end of its lifetime a re-confirmation nudge
     is added so the LLM can ask the user before it lapses (M5c).
     """
+    stamp = _clock_tag(digest)
     current = digest.get("current")
     if not current:
-        return f"[カメラ] まだ観測がありません。{_TEXT_DISCLAIMER}"
+        return f"[カメラ {stamp}] まだ観測がありません。{_TEXT_DISCLAIMER}"
 
     observing = digest.get("observing")
     stale = current.get("stale")
@@ -212,7 +293,7 @@ def render_situation_text(digest: dict, corrections: list[dict] | None = None) -
         head = "観測中"
     else:
         head = "観測停止中"
-    lines = [f"[カメラの状況] {head}"]
+    lines = [f"[カメラの状況 {stamp}] {head}"]
 
     overview = current.get("overview") or "(不明)"
     if live:
