@@ -6,7 +6,14 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createAgentRuntimeStateStore } from '../../face-app/dist/agent_runtime_state.js';
 import { createAgentAssignmentStateStore } from '../../face-app/dist/agent_assignment_state.js';
-import { createAgentLifecycleApi, createAgentLifecycleRuntime, inferAgentType, buildPermissionConfig } from '../../face-app/dist/agent_lifecycle.js';
+import {
+  buildPermissionConfig,
+  createAgentLifecycleApi,
+  createAgentLifecycleRuntime,
+  inferAgentType,
+  isPlainShellCommand,
+  resetCodexSandboxProbeCacheForTests
+} from '../../face-app/dist/agent_lifecycle.js';
 import { createOwnerInboxStateStore } from '../../face-app/dist/owner_inbox_state.js';
 
 const quietLog = {
@@ -398,6 +405,62 @@ test('agent lifecycle runtime injects literal mission text into helper tmux pane
     ).length >= 2,
     true
   );
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime refuses shell-pane injection unless forced', async () => {
+  let pastedContent = null;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    pastedContent = content;
+  });
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
+      if (command === 'tmux' && args[0] === 'display-message') {
+        if (args[4] === '#{pane_current_command}') {
+          return { stdout: 'bash\n', stderr: '', code: 0 };
+        }
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return { stdout: 'user@host:~/repo$ \n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-shell-pane',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%78',
+    source_repo_path: repoRoot
+  });
+
+  await assert.rejects(
+    () => runtime.injectAgent('agent-shell-pane', {
+      text: 'Mission text',
+      submit: true
+    }),
+    (error) => error?.code === 'injection_refused_shell_pane'
+  );
+  assert.equal(pastedContent, null);
+
+  const forced = await runtime.injectAgent('agent-shell-pane', {
+    text: 'Forced shell text',
+    submit: false,
+    wait_for_ready: false,
+    force_shell_inject: true
+  });
+
+  assert.equal(forced.ok, true);
+  assert.equal(forced.injection.shell_guard.plain_shell, true);
+  assert.equal(forced.injection.shell_guard.forced, true);
+  assert.equal(pastedContent, 'Forced shell text');
 
   cleanup(repoRoot);
 });
@@ -1719,10 +1782,15 @@ test('buildPermissionConfig returns correct config per agent type and preset', (
 
   const codexFull = buildPermissionConfig('codex', 'full');
   assert.equal(codexFull.configPath, null);
-  assert.equal(codexFull.cmdSuffix, '--full-auto');
+  assert.equal(codexFull.cmdSuffix, '--dangerously-bypass-approvals-and-sandbox');
 
   const codexReviewer = buildPermissionConfig('codex', 'reviewer');
-  assert.equal(codexReviewer.cmdSuffix, '-a untrusted');
+  assert.equal(codexReviewer.cmdSuffix, '-s read-only -a never');
+
+  const codexImplementer = buildPermissionConfig('codex', 'implementer', {
+    sourceRepoPath: '/tmp/source repo'
+  });
+  assert.equal(codexImplementer.cmdSuffix, "-s workspace-write -a never --add-dir '/tmp/source repo/.git'");
 
   const antigravityImpl = buildPermissionConfig('antigravity', 'implementer');
   assert.equal(antigravityImpl.configPath, '.gemini/antigravity-cli/settings.json');
@@ -1739,6 +1807,41 @@ test('buildPermissionConfig returns correct config per agent type and preset', (
   const noPreset = buildPermissionConfig('claude', null);
   assert.equal(noPreset.configPath, null);
   assert.equal(noPreset.configContent, null);
+});
+
+test('buildPermissionConfig lets Codex preset env overrides replace the whole suffix', () => {
+  assert.equal(
+    buildPermissionConfig('codex', 'reviewer', {
+      env: { MH_CODEX_PRESET_REVIEWER: '--custom reviewer' },
+      sourceRepoPath: '/tmp/source'
+    }).cmdSuffix,
+    '--custom reviewer'
+  );
+  assert.equal(
+    buildPermissionConfig('codex', 'implementer', {
+      env: { MH_CODEX_PRESET_IMPLEMENTER: '--custom implementer' },
+      sourceRepoPath: '/tmp/source'
+    }).cmdSuffix,
+    '--custom implementer'
+  );
+  assert.equal(
+    buildPermissionConfig('codex', 'full', {
+      env: { MH_CODEX_PRESET_FULL: '--custom full' },
+      sourceRepoPath: '/tmp/source'
+    }).cmdSuffix,
+    '--custom full'
+  );
+});
+
+test('isPlainShellCommand detects only bare shell commands', () => {
+  assert.equal(isPlainShellCommand('bash'), true);
+  assert.equal(isPlainShellCommand('/bin/zsh'), true);
+  assert.equal(isPlainShellCommand('-bash'), true);
+  assert.equal(isPlainShellCommand('fish --login'), true);
+  assert.equal(isPlainShellCommand('codex'), false);
+  assert.equal(isPlainShellCommand('node'), false);
+  assert.equal(isPlainShellCommand(''), false);
+  assert.equal(isPlainShellCommand(null), false);
 });
 
 test('addAgent writes permission config into worktree for claude helper', async () => {
@@ -1765,7 +1868,7 @@ test('addAgent writes permission config into worktree for claude helper', async 
   cleanup(repoRoot);
 });
 
-test('addAgent appends approval mode flag for codex helper', async () => {
+test('addAgent appends full bypass flag for codex full helper', async () => {
   const { repoRoot, runtime, commands } = createRuntimeHarness();
 
   const result = await runtime.addAgent({
@@ -1779,9 +1882,119 @@ test('addAgent appends approval mode flag for codex helper', async () => {
 
   assert.equal(result.ok, true);
   const launchCmd = commands.find(
-    (entry) => entry[0] === 'tmux' && entry[1] === 'send-keys' && entry.some((arg) => typeof arg === 'string' && arg.includes('--full-auto'))
+    (entry) =>
+      entry[0] === 'tmux' &&
+      entry[1] === 'send-keys' &&
+      entry.some((arg) => typeof arg === 'string' && arg.includes('--dangerously-bypass-approvals-and-sandbox'))
   );
-  assert.ok(launchCmd, 'expected codex launch command to include --full-auto');
+  assert.ok(launchCmd, 'expected codex launch command to include the full bypass flag');
+
+  cleanup(repoRoot);
+});
+
+test('addAgent downgrades codex sandbox preset when sandbox preflight fails', async () => {
+  resetCodexSandboxProbeCacheForTests();
+  const { repoRoot, runtime, commands } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'git' && args[1] === 'rev-parse') {
+        return { stdout: 'true\n', stderr: '', code: 0 };
+      }
+      if (command === 'git' && args[1] === 'worktree' && args[2] === 'add') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'timeout') {
+        return { stdout: '', stderr: 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n', code: 1 };
+      }
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%61\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'display-message') {
+        if (args[4] === '#{pane_current_command}') {
+          return { stdout: 'codex\n', stderr: '', code: 0 };
+        }
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  const result = await runtime.addAgent({
+    id: 'agent-codex-fallback',
+    create_worktree: true,
+    create_tmux: true,
+    source_repo_path: repoRoot,
+    agent_cmd: 'codex',
+    permission_preset: 'implementer'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.sandbox_fallback, true);
+  assert.match(result.sandbox_fallback_reason, /danger-full-access/);
+  assert.match(result.agent.agent_cmd, /-s danger-full-access -a never/);
+  assert.doesNotMatch(result.agent.agent_cmd, /workspace-write/);
+  assert.match(result.agent.last_message, /codex sandbox fallback/);
+  assert.equal(result.orchestration.codex_sandbox_preflight.requested_sandbox_mode, 'workspace-write');
+  assert.equal(result.orchestration.codex_sandbox_preflight.effective_sandbox_mode, 'danger-full-access');
+  assert.equal(
+    commands.filter((entry) => entry[0] === 'timeout' && entry[1] === '15' && entry[2] === 'codex').length,
+    1
+  );
+  assert.ok(
+    commands.some(
+      (entry) =>
+        entry[0] === 'tmux' &&
+        entry[1] === 'send-keys' &&
+        entry.some((arg) => typeof arg === 'string' && arg.includes('-s danger-full-access'))
+    ),
+    'expected launch command to use danger-full-access after fallback'
+  );
+
+  resetCodexSandboxProbeCacheForTests();
+  cleanup(repoRoot);
+});
+
+test('addAgent reports launch_failed with pane tail when helper stays in a shell', async () => {
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'list-windows') {
+        return { stdout: 'operator\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'new-window') {
+        return { stdout: '%62\n', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'display-message') {
+        if (args[4] === '#{pane_current_command}') {
+          return { stdout: 'bash\n', stderr: '', code: 0 };
+        }
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return { stdout: 'codex: unknown option --full-auto\nuser@host:~/repo$ \n', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  const result = await runtime.addAgent({
+    id: 'agent-launch-fail',
+    create_worktree: false,
+    create_tmux: true,
+    source_repo_path: repoRoot,
+    agent_cmd: 'codex --bad-flag',
+    launch_verify_timeout_ms: 5,
+    launch_verify_poll_ms: 1
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.launch_failed, true);
+  assert.equal(result.agent.id, 'agent-launch-fail');
+  assert.equal(result.agent.pane_id, '%62');
+  assert.match(result.agent.last_message, /launch_failed/);
+  assert.deepEqual(result.launch_failure.pane_tail, ['codex: unknown option --full-auto', 'user@host:~/repo$ ']);
+  assert.equal(stateStore.getAgent('agent-launch-fail')?.pane_id, '%62');
 
   cleanup(repoRoot);
 });

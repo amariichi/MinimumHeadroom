@@ -143,6 +143,7 @@ function statusCodeFromError(error) {
     case 'duplicate_agent':
     case 'invalid_state':
     case 'invalid_transition':
+    case 'injection_refused_shell_pane':
       return 409;
     case 'external_delete_forbidden':
     case 'external_worktree_forbidden':
@@ -266,6 +267,10 @@ async function runProcess(command, args, options = {}) {
 }
 
 const PERMISSION_PRESETS = new Set(['reviewer', 'implementer', 'full']);
+const CODEX_SANDBOX_OK_TOKEN = '__mh_userns_ok__';
+const CODEX_SANDBOX_MODES_REQUIRING_PREFLIGHT = new Set(['read-only', 'workspace-write']);
+const PLAIN_SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'dash', 'fish']);
+let codexSandboxProbeCache = null;
 
 export function inferAgentType(agentCmd) {
   if (!agentCmd || typeof agentCmd !== 'string') {
@@ -281,7 +286,106 @@ export function inferAgentType(agentCmd) {
   return 'claude';
 }
 
-export function buildPermissionConfig(agentType, preset) {
+function codexPresetOverrideEnvName(preset) {
+  switch (preset) {
+    case 'reviewer':
+      return 'MH_CODEX_PRESET_REVIEWER';
+    case 'implementer':
+      return 'MH_CODEX_PRESET_IMPLEMENTER';
+    case 'full':
+      return 'MH_CODEX_PRESET_FULL';
+    default:
+      return null;
+  }
+}
+
+function findCodexSandboxMode(command) {
+  const source = asNonEmptyString(command);
+  if (!source) {
+    return null;
+  }
+  const match = source.match(/(^|\s)-s\s+(read-only|workspace-write)(?=\s|$)/);
+  if (!match || !CODEX_SANDBOX_MODES_REQUIRING_PREFLIGHT.has(match[2])) {
+    return null;
+  }
+  return match[2];
+}
+
+function replaceCodexSandboxModeWithDanger(command) {
+  return String(command ?? '').replace(/(^|\s)-s\s+(read-only|workspace-write)(?=\s|$)/g, '$1-s danger-full-access');
+}
+
+function compactDiagnostic(value, fallback = 'no diagnostic output') {
+  const normalized = stripAnsi(String(value ?? '')).replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return fallback;
+  }
+  return normalized.length > 360 ? `${normalized.slice(0, 357)}...` : normalized;
+}
+
+function describeCommandFailure(error) {
+  const message = asNonEmptyString(error?.message) ?? 'command failed';
+  const stderr = asNonEmptyString(error?.stderr);
+  return stderr ? `${message}: ${compactDiagnostic(stderr)}` : compactDiagnostic(message);
+}
+
+async function probeCodexSandboxOnce(runCommandFn, log) {
+  if (codexSandboxProbeCache) {
+    return codexSandboxProbeCache;
+  }
+
+  const probePromise = (async () => {
+    try {
+      const result = await runCommandFn(
+        'timeout',
+        ['15', 'codex', 'sandbox', '--', 'echo', CODEX_SANDBOX_OK_TOKEN],
+        { timeoutMs: 17_000 }
+      );
+      if (result?.code === 0 && String(result?.stdout ?? '').includes(CODEX_SANDBOX_OK_TOKEN)) {
+        return {
+          ok: true,
+          reason: null
+        };
+      }
+      const stderr = compactDiagnostic(result?.stderr, '');
+      const stdout = compactDiagnostic(result?.stdout, '');
+      const detail = stderr || stdout || `exit code ${result?.code ?? 'unknown'}`;
+      return {
+        ok: false,
+        reason: `codex sandbox preflight did not emit ${CODEX_SANDBOX_OK_TOKEN}: ${detail}`
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: describeCommandFailure(error)
+      };
+    }
+  })();
+
+  codexSandboxProbeCache = probePromise;
+  const result = await probePromise;
+  codexSandboxProbeCache = result;
+  if (!result.ok) {
+    log.warn(`[agent-lifecycle] codex sandbox preflight failed: ${result.reason}`);
+  }
+  return result;
+}
+
+export function resetCodexSandboxProbeCacheForTests() {
+  codexSandboxProbeCache = null;
+}
+
+export function isPlainShellCommand(command) {
+  const source = asNonEmptyString(command);
+  if (!source) {
+    return false;
+  }
+  const firstWord = source.split(/\s+/)[0] ?? '';
+  const basename = path.basename(firstWord).replace(/^-+/, '').toLowerCase();
+  return PLAIN_SHELL_COMMANDS.has(basename);
+}
+
+export function buildPermissionConfig(agentType, preset, options = {}) {
   if (!preset || !PERMISSION_PRESETS.has(preset)) {
     return { configPath: null, configContent: null, cmdSuffix: null };
   }
@@ -313,10 +417,25 @@ export function buildPermissionConfig(agentType, preset) {
   }
 
   if (agentType === 'codex') {
-    if (preset === 'reviewer') {
-      return { configPath: null, configContent: null, cmdSuffix: '-a untrusted' };
+    const env = options.env ?? process.env;
+    const overrideName = codexPresetOverrideEnvName(preset);
+    const override = overrideName ? asNonEmptyString(env?.[overrideName]) : null;
+    if (override) {
+      return { configPath: null, configContent: null, cmdSuffix: override };
     }
-    return { configPath: null, configContent: null, cmdSuffix: '--full-auto' };
+    if (preset === 'reviewer') {
+      return { configPath: null, configContent: null, cmdSuffix: '-s read-only -a never' };
+    }
+    if (preset === 'implementer') {
+      const sourceRepoPath = path.resolve(asNonEmptyString(options.sourceRepoPath ?? options.source_repo_path) ?? '.');
+      const gitDir = path.join(sourceRepoPath, '.git');
+      return {
+        configPath: null,
+        configContent: null,
+        cmdSuffix: `-s workspace-write -a never --add-dir ${shellEscapeSingle(gitDir)}`
+      };
+    }
+    return { configPath: null, configContent: null, cmdSuffix: '--dangerously-bypass-approvals-and-sandbox' };
   }
 
   return { configPath: null, configContent: null, cmdSuffix: null };
@@ -663,9 +782,27 @@ export function createAgentLifecycleRuntime(options = {}) {
     const permissionPreset = PERMISSION_PRESETS.has(input.permission_preset) ? input.permission_preset : null;
     let launchCommand = null;
     let runCwd = worktreePath;
+    let codexSandboxPreflight = {
+      enabled: false,
+      ok: true,
+      sandbox_fallback: false,
+      sandbox_fallback_reason: null,
+      requested_sandbox_mode: null,
+      effective_sandbox_mode: null
+    };
+    let launchVerification = {
+      enabled: false,
+      ok: true,
+      reason: null,
+      current_command: null,
+      waited_ms: 0,
+      attempts: 0,
+      pane_tail: []
+    };
 
     let worktreeCreated = false;
     let paneCreated = false;
+    let agentRecordCreated = false;
     let paneId = asNonEmptyString(input.pane_id);
 
     if (createWorktree) {
@@ -693,7 +830,9 @@ export function createAgentLifecycleRuntime(options = {}) {
 
     if (permissionPreset && worktreeCreated) {
       const agentType = inferAgentType(agentCommand);
-      const permConfig = buildPermissionConfig(agentType, permissionPreset);
+      const permConfig = buildPermissionConfig(agentType, permissionPreset, {
+        sourceRepoPath
+      });
       if (permConfig.configContent && permConfig.configPath) {
         const fullConfigPath = path.join(worktreePath, permConfig.configPath);
         fs.mkdirSync(path.dirname(fullConfigPath), { recursive: true });
@@ -702,6 +841,23 @@ export function createAgentLifecycleRuntime(options = {}) {
       }
       if (permConfig.cmdSuffix) {
         agentCommand = `${agentCommand} ${permConfig.cmdSuffix}`;
+      }
+    }
+
+    const finalAgentType = inferAgentType(agentCommand);
+    const requestedSandboxMode = finalAgentType === 'codex' ? findCodexSandboxMode(agentCommand) : null;
+    if (requestedSandboxMode) {
+      const probeResult = await probeCodexSandboxOnce(runCommand, log);
+      codexSandboxPreflight = {
+        enabled: true,
+        ok: probeResult.ok,
+        sandbox_fallback: !probeResult.ok,
+        sandbox_fallback_reason: probeResult.ok ? null : `using danger-full-access because Codex sandbox preflight failed: ${probeResult.reason}`,
+        requested_sandbox_mode: requestedSandboxMode,
+        effective_sandbox_mode: probeResult.ok ? requestedSandboxMode : 'danger-full-access'
+      };
+      if (!probeResult.ok) {
+        agentCommand = replaceCodexSandboxModeWithDanger(agentCommand);
       }
     }
 
@@ -723,6 +879,9 @@ export function createAgentLifecycleRuntime(options = {}) {
     }
 
     try {
+      const initialMessage = codexSandboxPreflight.sandbox_fallback
+        ? `codex sandbox fallback: ${codexSandboxPreflight.sandbox_fallback_reason}`
+        : 'agent created';
       const result = stateStore.addAgent({
         id: agentId,
         session_id: sessionId,
@@ -736,25 +895,52 @@ export function createAgentLifecycleRuntime(options = {}) {
         worktree_path: createWorktree ? worktreePath : explicitWorktreePath ? worktreePath : null,
         branch,
         pane_id: paneId,
-        last_message: 'agent created',
+        last_message: initialMessage,
         message_source: 'status'
       });
+      agentRecordCreated = true;
+      if (paneCreated && paneId) {
+        launchVerification = await verifyPaneLaunch(paneId, input);
+        if (!launchVerification.ok) {
+          const message = `launch_failed: ${launchVerification.reason}`;
+          const patched = stateStore.setAgentMessage(agentId, message, 'status');
+          return {
+            ...result,
+            agent: patched.agent,
+            state: patched.state,
+            launch_failed: true,
+            launch_failure: launchVerification,
+            sandbox_fallback: codexSandboxPreflight.sandbox_fallback,
+            sandbox_fallback_reason: codexSandboxPreflight.sandbox_fallback_reason,
+            orchestration: {
+              worktree_created: worktreeCreated,
+              pane_created: paneCreated,
+              codex_sandbox_preflight: codexSandboxPreflight,
+              launch_verification: launchVerification
+            }
+          };
+        }
+      }
       return {
         ...result,
+        sandbox_fallback: codexSandboxPreflight.sandbox_fallback,
+        sandbox_fallback_reason: codexSandboxPreflight.sandbox_fallback_reason,
         orchestration: {
           worktree_created: worktreeCreated,
-          pane_created: paneCreated
+          pane_created: paneCreated,
+          codex_sandbox_preflight: codexSandboxPreflight,
+          launch_verification: launchVerification
         }
       };
     } catch (error) {
-      if (paneCreated && paneId) {
+      if (!agentRecordCreated && paneCreated && paneId) {
         try {
           await runTmux(['kill-pane', '-t', paneId]);
         } catch (cleanupError) {
           log.warn(`[agent-lifecycle] failed cleanup kill-pane ${paneId}: ${cleanupError.message}`);
         }
       }
-      if (worktreeCreated) {
+      if (!agentRecordCreated && worktreeCreated) {
         try {
           await runGit(sourceRepoPath, ['worktree', 'remove', '--force', worktreePath]);
         } catch (cleanupError) {
@@ -853,6 +1039,103 @@ export function createAgentLifecycleRuntime(options = {}) {
       .split('\n')
       .map((line) => stripAnsi(line))
       .filter((line, index, source) => !(index === source.length - 1 && line === ''));
+  }
+
+  async function capturePaneTailSafe(paneId, lineCount = helperInjectReadyCaptureLines) {
+    try {
+      return await capturePaneTail(paneId, lineCount);
+    } catch (error) {
+      return [`<pane tail unavailable: ${error?.message ?? 'unknown error'}>`];
+    }
+  }
+
+  async function getPaneCurrentCommand(paneId) {
+    const result = await runTmux(['display-message', '-p', '-t', paneId, '#{pane_current_command}']);
+    return stripAnsi(asNonEmptyString(result.stdout) ?? '').trim();
+  }
+
+  async function verifyPaneLaunch(paneId, input = {}) {
+    const timeoutMs = parseInteger(input.launch_verify_timeout_ms, 15_000, 0);
+    const pollMs = parseInteger(input.launch_verify_poll_ms, 500, 20);
+    if (timeoutMs <= 0) {
+      return {
+        enabled: false,
+        ok: true,
+        reason: null,
+        current_command: null,
+        waited_ms: 0,
+        attempts: 0,
+        pane_tail: []
+      };
+    }
+
+    const startedAt = now();
+    const deadline = startedAt + timeoutMs;
+    let attempts = 0;
+    let lastCommand = null;
+    let lastError = null;
+
+    while (now() <= deadline) {
+      attempts += 1;
+      try {
+        const currentCommand = await getPaneCurrentCommand(paneId);
+        lastCommand = currentCommand;
+        if (currentCommand && !isPlainShellCommand(currentCommand)) {
+          return {
+            enabled: true,
+            ok: true,
+            reason: null,
+            current_command: currentCommand,
+            waited_ms: Math.max(0, now() - startedAt),
+            attempts,
+            pane_tail: []
+          };
+        }
+      } catch (error) {
+        lastError = error;
+      }
+      await delayMs(pollMs);
+    }
+
+    const paneTail = await capturePaneTailSafe(paneId, 15);
+    const reason = lastError
+      ? `pane_current_command unavailable: ${lastError.message}`
+      : `pane stayed in plain shell: ${lastCommand || 'unknown'}`;
+    return {
+      enabled: true,
+      ok: false,
+      reason,
+      current_command: lastCommand,
+      waited_ms: Math.max(0, now() - startedAt),
+      attempts,
+      pane_tail: paneTail
+    };
+  }
+
+  async function inspectShellPaneForInjection(paneId, input = {}) {
+    const forceShellInject = normalizeBoolean(input.force_shell_inject, false);
+    const currentCommand = await getPaneCurrentCommand(paneId);
+    const plainShell = isPlainShellCommand(currentCommand);
+    if (!plainShell) {
+      return {
+        checked: true,
+        refused: false,
+        forced: false,
+        current_command: currentCommand,
+        plain_shell: false,
+        pane_tail: []
+      };
+    }
+
+    const paneTail = await capturePaneTailSafe(paneId, 15);
+    return {
+      checked: true,
+      refused: !forceShellInject,
+      forced: forceShellInject,
+      current_command: currentCommand,
+      plain_shell: true,
+      pane_tail: paneTail
+    };
   }
 
   function createProbeToken() {
@@ -1334,6 +1617,20 @@ export function createAgentLifecycleRuntime(options = {}) {
     if (!text) {
       throw createLifecycleError('invalid_request', 'inject text is required');
     }
+    const shellGuard = await inspectShellPaneForInjection(paneId, input);
+    if (shellGuard.refused) {
+      stateStore.setAgentMessage(
+        agent.id,
+        `injection_refused_shell_pane: pane current command is ${shellGuard.current_command || 'unknown'}`,
+        'status'
+      );
+      const error = createLifecycleError(
+        'injection_refused_shell_pane',
+        `injection_refused_shell_pane: refusing to inject into plain shell pane (${shellGuard.current_command || 'unknown'})`
+      );
+      error.details = shellGuard;
+      throw error;
+    }
     const waitForReady = normalizeBoolean(input.wait_for_ready, helperInjectWaitForReady);
     const submit = normalizeBoolean(input.submit, true);
     const requestedReinforceSubmit = normalizeBoolean(input.reinforce_submit, false);
@@ -1413,7 +1710,8 @@ export function createAgentLifecycleRuntime(options = {}) {
         reinforce_submit: reinforceSubmit,
         rescue_submit: rescueSubmit,
         ready_wait: readiness,
-        probe
+        probe,
+        shell_guard: shellGuard
       }
     };
   }

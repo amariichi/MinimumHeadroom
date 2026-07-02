@@ -100,6 +100,7 @@ test('renderAssignmentPrompt prepends helper bootstrap guidance for generated pr
   assert.match(prompt, /After your final done\/review_findings report, stop and wait for the owner/);
   assert.match(prompt, /Stream root: \/tmp\/target/);
   assert.match(prompt, /Target paths \(stream-root anchored\): \/tmp\/target\/README\.md, \/tmp\/target\/doc\/examples\/AGENT_RULES\.md/);
+  assert.match(prompt, /Target paths are READ references; make all edits and commits inside the assigned worktree on the helper branch/);
   assert.match(prompt, /Completion criteria: Return one finding or done\./);
   assert.match(prompt, /Timebox minutes: 3/);
   assert.match(prompt, /Max findings this pass: 1/);
@@ -130,6 +131,7 @@ test('renderAssignmentPrompt wraps explicit prompt_text with helper bootstrap gu
   assert.match(prompt, /If the scope is still ambiguous after the first report, send question/);
   assert.match(prompt, /Stream root: \/tmp\/target\./);
   assert.match(prompt, /Read the exact target path under the stream root even if it sits outside your helper worktree/);
+  assert.match(prompt, /Target paths are READ references; make all edits and commits inside the assigned worktree on the helper branch/);
   assert.match(prompt, /Mission body:/);
   assert.match(prompt, /Investigate the failure and patch the bug\./);
 });
@@ -256,6 +258,7 @@ test('agent assignment api handles assign, list, and inject flows', async () => 
   assert.match(runtimeCalls[0]?.input?.text ?? '', /call the agent\.report MCP tool/);
   assert.match(runtimeCalls[0]?.input?.text ?? '', /Stream root: \/tmp\/target/);
   assert.match(runtimeCalls[0]?.input?.text ?? '', /Target paths \(stream-root anchored\): \/tmp\/target\/face-app\/dist\/agent_assignment_api\.js/);
+  assert.match(runtimeCalls[0]?.input?.text ?? '', /Target paths are READ references; make all edits and commits inside the assigned worktree on the helper branch/);
   assert.match(runtimeCalls[0]?.input?.text ?? '', /Timebox minutes: 5/);
   assert.equal(runtimeCalls[0]?.input?.probe_before_send, false);
 
@@ -278,8 +281,28 @@ test('agent assignment api handles assign, list, and inject flows', async () => 
   assert.equal(probeInjectResponse.snapshot().statusCode, 200);
   assert.equal(runtimeCalls.length, 2);
   assert.equal(runtimeCalls[1]?.input?.probe_before_send, true);
+  assert.equal(runtimeCalls[1]?.input?.force_shell_inject, false);
   assert.equal(runtimeCalls[1]?.input?.probe_timeout_ms, 1200);
   assert.equal(runtimeCalls[1]?.input?.probe_poll_ms, 50);
+
+  const forceShellInjectRequest = createRequest({
+    method: 'POST',
+    url: '/api/agent-assignments/inject',
+    body: {
+      stream_id: 'repo:/tmp/target',
+      mission_id: 'mission-a',
+      agent_id: 'helper-a',
+      force_shell_inject: true
+    }
+  });
+  const forceShellInjectResponse = createResponseCapture();
+  const forceShellInjectHandled = await api.handleHttpRequest(forceShellInjectRequest, forceShellInjectResponse);
+  assert.equal(forceShellInjectHandled, true);
+  assert.equal(forceShellInjectResponse.snapshot().statusCode, 200);
+  assert.equal(runtimeCalls.length, 3);
+  assert.equal(runtimeCalls[2]?.input?.force_shell_inject, true);
+  const forceAssignment = forceShellInjectResponse.snapshot().body?.result?.assignment;
+  assert.equal(forceAssignment.ack_deadline_at - forceAssignment.last_sent_at, 120_000);
 
   const followupInjectRequest = createRequest({
     method: 'POST',
@@ -298,11 +321,11 @@ test('agent assignment api handles assign, list, and inject flows', async () => 
   const followupInjectHandled = await api.handleHttpRequest(followupInjectRequest, followupInjectResponse);
   assert.equal(followupInjectHandled, true);
   assert.equal(followupInjectResponse.snapshot().statusCode, 200);
-  assert.equal(runtimeCalls.length, 3);
-  assert.match(runtimeCalls[2]?.input?.text ?? '', /^Owner follow-up for helper agent helper-a\./);
-  assert.match(runtimeCalls[2]?.input?.text ?? '', /send done or review_findings now/i);
-  assert.equal(runtimeCalls[2]?.input?.probe_before_send, true);
-  assert.equal(runtimeCalls[2]?.input?.rescue_submit_if_buffered, true);
+  assert.equal(runtimeCalls.length, 4);
+  assert.match(runtimeCalls[3]?.input?.text ?? '', /^Owner follow-up for helper agent helper-a\./);
+  assert.match(runtimeCalls[3]?.input?.text ?? '', /send done or review_findings now/i);
+  assert.equal(runtimeCalls[3]?.input?.probe_before_send, true);
+  assert.equal(runtimeCalls[3]?.input?.rescue_submit_if_buffered, true);
 
   cleanup(rootDir);
 });
