@@ -5,13 +5,19 @@
 #  Persistent configuration is read from:
 #    ~/.config/minimum-headroom.env
 #
-#  Required keys for live operation:
-#    VISION_CAMERA_URL     AtomS3R-M12 snapshot URL
+#  Required key for live operation:
 #    MH_FACE_AUTH_TOKEN    X-Headroom-Auth token for the M12 audio endpoint
-#    M12_AUDIO_URL         AtomS3R-M12 /api/headroom/audio URL
+#
+#  M12 endpoint configuration:
+#    VISION_CAMERA_URL     AtomS3R-M12 snapshot URL, or unset/auto for discovery
+#    M12_AUDIO_URL         AtomS3R-M12 /api/headroom/audio URL, or unset/auto
+#    MH_M12_DEVICE_ID      expected M12 firmware device_id (default: atom-headroom-m12)
+#    ATOM_HEADROOM_DISCOVERY_SUBNETS  optional extra routed /24s to probe
+#    MH_DEVICE_REGISTRY_PATH          optional discovery cache JSON path
 #
 #  Optional overrides:
 #    VISION_PORT, VISION_HOST, VISION_CACHE_DIR, VISION_DB_PATH, VISION_* knobs
+#    VISION_CAMERA_REDISCOVER_AFTER_FAILURES (default 5)
 #    VLLM_DGEMMA_* knobs for scripts/run-vllm-diffusiongemma.sh
 #    M12_SPEAKER_* knobs for scripts/run-m12-alert-speaker.sh
 #
@@ -74,6 +80,54 @@ SPEAKER_LOG="$LOG_DIR/vision-stack-m12-speaker.log"
 
 log() { echo "[run-vision-stack] $*"; }
 
+is_auto_value() {
+  local value="${1:-}"
+  [[ -z "$value" || "${value,,}" == "auto" ]]
+}
+
+resolve_device_base_url() {
+  local device_id="$1"
+  python3 ./scripts/resolve-atoms3r-device.py --device-id "$device_id" --path / --refresh 2>/dev/null
+}
+
+resolve_auto_endpoints() {
+  MH_M12_DEVICE_ID="${MH_M12_DEVICE_ID:-atom-headroom-m12}"
+  VISION_CAMERA_URL_SOURCE="env"
+  M12_AUDIO_URL_SOURCE="env"
+  local m12_base_url=""
+
+  if is_auto_value "${VISION_CAMERA_URL:-}" || is_auto_value "${M12_AUDIO_URL:-}"; then
+    if resolved="$(resolve_device_base_url "$MH_M12_DEVICE_ID")"; then
+      m12_base_url="${resolved%/}"
+    fi
+  fi
+
+  if is_auto_value "${VISION_CAMERA_URL:-}"; then
+    if [[ -n "$m12_base_url" ]]; then
+      VISION_CAMERA_URL_SOURCE="discovery"
+      VISION_CAMERA_URL="${m12_base_url}/snapshot"
+    else
+      VISION_CAMERA_URL_SOURCE="missing"
+    fi
+  fi
+
+  if is_auto_value "${M12_AUDIO_URL:-}"; then
+    if [[ -n "$m12_base_url" ]]; then
+      M12_AUDIO_URL_SOURCE="discovery"
+      M12_AUDIO_URL="${m12_base_url}/api/headroom/audio"
+    else
+      M12_AUDIO_URL_SOURCE="missing"
+    fi
+  fi
+
+  VISION_CAMERA_RESOLVE_DEVICE_ID="${VISION_CAMERA_RESOLVE_DEVICE_ID:-$MH_M12_DEVICE_ID}"
+  VISION_CAMERA_REDISCOVER_AFTER_FAILURES="${VISION_CAMERA_REDISCOVER_AFTER_FAILURES:-5}"
+  M12_SPEAKER_RERESOLVE_AFTER_FAILURES="${M12_SPEAKER_RERESOLVE_AFTER_FAILURES:-5}"
+  export MH_M12_DEVICE_ID VISION_CAMERA_URL M12_AUDIO_URL \
+    VISION_CAMERA_RESOLVE_DEVICE_ID VISION_CAMERA_REDISCOVER_AFTER_FAILURES \
+    M12_SPEAKER_RERESOLVE_AFTER_FAILURES
+}
+
 http_ok() {
   curl -fsS --max-time 2 "$1" >/dev/null 2>&1
 }
@@ -111,12 +165,20 @@ wait_tcp() {
   return 1
 }
 
+resolve_auto_endpoints
+
 missing_required=()
-for key in VISION_CAMERA_URL MH_FACE_AUTH_TOKEN M12_AUDIO_URL; do
+for key in MH_FACE_AUTH_TOKEN; do
   if [[ -z "${!key:-}" ]]; then
     missing_required+=("$key")
   fi
 done
+if is_auto_value "${VISION_CAMERA_URL:-}"; then
+  missing_required+=("VISION_CAMERA_URL(auto unresolved)")
+fi
+if is_auto_value "${M12_AUDIO_URL:-}"; then
+  missing_required+=("M12_AUDIO_URL(auto unresolved)")
+fi
 
 vllm_models_url="${VISION_MODEL_URL%/}/models"
 vision_health_url="http://${VISION_HOST}:${VISION_PORT}/healthz"
@@ -153,14 +215,20 @@ print_check() {
     log "m12 alert speaker: not listening -> would start ./scripts/run-m12-alert-speaker.sh"
   fi
 
-  if [[ -n "${VISION_CAMERA_URL:-}" ]]; then
-    if http_ok "$VISION_CAMERA_URL"; then
-      log "camera: reachable at VISION_CAMERA_URL"
-    else
-      log "camera: WARNING not reachable now (non-fatal; M12 may be away)"
-    fi
+  log "M12 device id: ${MH_M12_DEVICE_ID}"
+  log "camera URL: ${VISION_CAMERA_URL:-auto} (source=${VISION_CAMERA_URL_SOURCE})"
+  log "M12 audio URL: ${M12_AUDIO_URL:-auto} (source=${M12_AUDIO_URL_SOURCE})"
+
+  if is_auto_value "${VISION_CAMERA_URL:-}"; then
+    log "camera: WARNING unresolved; set VISION_CAMERA_URL or keep M12 connected for discovery"
+  elif http_ok "$VISION_CAMERA_URL"; then
+    log "camera: reachable at VISION_CAMERA_URL"
   else
-    log "camera: WARNING VISION_CAMERA_URL is unset"
+    log "camera: WARNING not reachable now (non-fatal; M12 may be away)"
+  fi
+
+  if is_auto_value "${M12_AUDIO_URL:-}"; then
+    log "m12 audio: WARNING unresolved; set M12_AUDIO_URL or keep M12 connected for discovery"
   fi
 
   if ((${#missing_required[@]} > 0)); then
@@ -203,6 +271,12 @@ else
     VISION_PORT="$VISION_PORT" \
     VISION_MODEL_BACKEND=diffusiongemma \
     VISION_MODEL_URL="$VISION_MODEL_URL" \
+    VISION_CAMERA_URL="$VISION_CAMERA_URL" \
+    VISION_CAMERA_RESOLVE_DEVICE_ID="$VISION_CAMERA_RESOLVE_DEVICE_ID" \
+    VISION_CAMERA_REDISCOVER_AFTER_FAILURES="$VISION_CAMERA_REDISCOVER_AFTER_FAILURES" \
+    MH_FACE_AUTH_TOKEN="${MH_FACE_AUTH_TOKEN:-}" \
+    ATOM_HEADROOM_DISCOVERY_SUBNETS="${ATOM_HEADROOM_DISCOVERY_SUBNETS:-}" \
+    MH_DEVICE_REGISTRY_PATH="${MH_DEVICE_REGISTRY_PATH:-}" \
     VISION_OUTPUT_LANG=ja \
     VISION_CORRECTION_TO_MODEL=1 \
     VISION_NARRATE_CHANGES=1 \

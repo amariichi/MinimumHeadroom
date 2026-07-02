@@ -31,3 +31,47 @@ def test_build_capture_source_selection():
     assert isinstance(build_capture_source(s), DirectoryCaptureSource)
     s.camera_url = "http://cam.local/snapshot"
     assert isinstance(build_capture_source(s), NetworkCaptureSource)  # camera_url wins
+
+
+def test_network_capture_source_reresolves_after_failures(monkeypatch):
+    class Response:
+        def __init__(self, content: bytes, *, ok: bool = True) -> None:
+            self.content = content
+            self.ok = ok
+
+        def raise_for_status(self) -> None:
+            if not self.ok:
+                raise RuntimeError("bad status")
+
+    calls: list[str] = []
+
+    def fake_get(url: str, timeout: float):
+        calls.append(url)
+        if url == "http://old.invalid/snapshot":
+            return Response(b"", ok=False)
+        return Response(b"new-frame")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    src = NetworkCaptureSource(
+        "http://old.invalid/snapshot",
+        resolver=lambda: "http://new.invalid/snapshot",
+        rediscover_after_failures=2,
+        rotate_ccw=0,
+    )
+
+    try:
+        src.capture()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("first failed capture should be surfaced")
+
+    assert src.capture() == b"new-frame"
+    assert calls == [
+        "http://old.invalid/snapshot",
+        "http://old.invalid/snapshot",
+        "http://new.invalid/snapshot",
+    ]
+    assert src.url == "http://new.invalid/snapshot"

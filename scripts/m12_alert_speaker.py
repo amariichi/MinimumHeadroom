@@ -42,16 +42,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 import urllib.request
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tts-worker", "src"))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(ROOT, "vision-worker", "src"))
+sys.path.insert(0, os.path.join(ROOT, "tts-worker", "src"))
 from tts_worker.kokoro_engine import KokoroEngine, resolve_model_paths  # noqa: E402
+from vision_worker.device_discovery import (  # noqa: E402
+    DEFAULT_M12_DEVICE_ID,
+    DeviceResolutionError,
+    is_auto,
+    resolve_device_url,
+)
 
-M12_AUDIO_URL = os.getenv("M12_AUDIO_URL", "http://192.168.1.25/api/headroom/audio")
+M12_DEVICE_ID = os.getenv("MH_M12_DEVICE_ID", DEFAULT_M12_DEVICE_ID)
+M12_AUDIO_URL = os.getenv("M12_AUDIO_URL", "auto")
 AUTH_TOKEN = os.getenv("MH_FACE_AUTH_TOKEN", "")
 BIND_HOST = os.getenv("M12_SPEAKER_HOST", "127.0.0.1")
 BIND_PORT = int(os.getenv("M12_SPEAKER_PORT", "8096"))
 AMP = float(os.getenv("M12_SPEAKER_AMP", "0.22"))          # linear loudness control
 LEAD_SILENCE_S = float(os.getenv("M12_SPEAKER_LEAD_SILENCE", "0.25"))  # ES8311 settle
 MIN_INTERVAL_S = float(os.getenv("M12_SPEAKER_MIN_INTERVAL", "4.0"))   # rate limit
+RERESOLVE_AFTER_FAILURES = max(1, int(os.getenv("M12_SPEAKER_RERESOLVE_AFTER_FAILURES", "5")))
 
 print("[m12-speaker] loading kokoro...", flush=True)
 with contextlib.redirect_stdout(sys.stderr):
@@ -59,6 +69,25 @@ with contextlib.redirect_stdout(sys.stderr):
 print(f"[m12-speaker] ready: bind {BIND_HOST}:{BIND_PORT} -> {M12_AUDIO_URL}", flush=True)
 
 _last_spoken_at = 0.0
+_send_failures = 0
+
+
+def _resolve_m12_audio_url(refresh: bool = True) -> bool:
+    global M12_AUDIO_URL
+    try:
+        resolved = resolve_device_url(M12_DEVICE_ID, "/api/headroom/audio", refresh=refresh)
+    except DeviceResolutionError as exc:
+        print(f"[m12-speaker] device discovery failed for {M12_DEVICE_ID}: {exc}", file=sys.stderr, flush=True)
+        return False
+    if resolved != M12_AUDIO_URL:
+        print(f"[m12-speaker] M12_AUDIO_URL resolved: {M12_AUDIO_URL} -> {resolved}", flush=True)
+    M12_AUDIO_URL = resolved
+    return True
+
+
+if is_auto(M12_AUDIO_URL):
+    _resolve_m12_audio_url(refresh=True)
+
 
 
 def _synth_wav(text: str) -> bytes:
@@ -79,15 +108,31 @@ def _synth_wav(text: str) -> bytes:
     return buf.getvalue()
 
 
-def _send_to_m12(wav: bytes) -> int:
+def _send_once(url: str, wav: bytes) -> int:
     req = urllib.request.Request(
-        M12_AUDIO_URL,
+        url,
         data=wav,
         headers={"Content-Type": "audio/wav", "X-Headroom-Auth": AUTH_TOKEN},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=20) as r:
         return r.status
+
+
+def _send_to_m12(wav: bytes) -> int:
+    global _send_failures
+    if is_auto(M12_AUDIO_URL) and not _resolve_m12_audio_url(refresh=True):
+        raise RuntimeError("M12_AUDIO_URL is auto but device discovery found no M12")
+    try:
+        status = _send_once(M12_AUDIO_URL, wav)
+    except Exception:
+        _send_failures += 1
+        if _send_failures >= RERESOLVE_AFTER_FAILURES and _resolve_m12_audio_url(refresh=True):
+            _send_failures = 0
+            return _send_once(M12_AUDIO_URL, wav)
+        raise
+    _send_failures = 0
+    return status
 
 
 def _speak(text: str) -> tuple[bool, str]:

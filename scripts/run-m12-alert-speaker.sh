@@ -18,5 +18,5 @@ if [[ -z "${MH_FACE_AUTH_TOKEN:-}" && -f "$HOME/.config/minimum-headroom.env" ]]
   set -a; source "$HOME/.config/minimum-headroom.env"; set +a
 fi
 
-echo "[run-m12-alert-speaker] M12_AUDIO_URL=${M12_AUDIO_URL:-http://192.168.1.25/api/headroom/audio} port=${M12_SPEAKER_PORT:-8096}"
+echo "[run-m12-alert-speaker] M12_AUDIO_URL=${M12_AUDIO_URL:-auto} MH_M12_DEVICE_ID=${MH_M12_DEVICE_ID:-atom-headroom-m12} port=${M12_SPEAKER_PORT:-8096}"
 exec "$PY" "$ROOT_DIR/scripts/m12_alert_speaker.py"
