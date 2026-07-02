@@ -176,9 +176,10 @@ curl -s "$BASE/diffs?n=50"     # summarize change_from_prev, newest first
 
 ```bash
 curl -s -X POST "$BASE/watches" -H 'Content-Type: application/json' \
-  -d '{"name":"red light","rule":"red","kind":"keyword"}'
+  -d '{"name":"red light","rule":"赤","kind":"keyword"}'
 curl -s -X POST "$BASE/perception/start"
 ```
+Keyword watch rules must be written in the worker output language (`VISION_OUTPUT_LANG`; Japanese, `ja`, in the live stack), so use `"赤"` rather than `"red"` when the worker describes scenes in Japanese.
 Relay the returned safety disclaimer. **"Stop watching"** → `POST /perception/stop`.
 **"Are you watching?"** → `GET /perception/status`.
 

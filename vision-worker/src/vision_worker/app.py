@@ -572,6 +572,14 @@ def create_app() -> FastAPI:
 
     @app.post("/watches")
     def add_watch(watch: WatchIn) -> dict:
+        if watch.kind == "enum":
+            raise HTTPException(
+                status_code=501,
+                detail=(
+                    "enum watches are not implemented yet; use kind=keyword with "
+                    "a rule in the worker output language"
+                ),
+            )
         registry.add(Watch(name=watch.name, rule=watch.rule, kind=watch.kind))
         return {
             "registered": {"name": watch.name, "rule": watch.rule, "kind": watch.kind},

@@ -4,9 +4,8 @@ A "watch" is a named rule the user registers ("tell me if you see a red
 light"). On every committed observation the registry checks the active watches
 against the observation's text. Keyword watches are evaluated here (text only).
 Enum watches — a constrained model question per frame, e.g. is the red signal
-illuminated — require a model call and are handled in the GPU-backed path
-(milestone M5 with the model), so they are accepted and listed but not fired by
-this text-only evaluator.
+illuminated — require a model call and are rejected by the API until that
+GPU-backed path exists.
 
 Reminder: this is informational/assistive only and must never be relied on as a
 safety device (see DISCLAIMER in app.py).
@@ -15,6 +14,7 @@ safety device (see DISCLAIMER in app.py).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from unicodedata import normalize
 
 from .records import Observation
 
@@ -26,12 +26,16 @@ class Watch:
     kind: str = "keyword"  # "keyword" | "enum"
 
 
+def _match_text(value: str) -> str:
+    return normalize("NFKC", value or "").casefold()
+
+
 def _haystack(obs: Observation) -> str:
-    return " ".join([obs.overview or "", obs.ocr_full or "", obs.change_from_prev or ""]).lower()
+    return _match_text(" ".join([obs.overview or "", obs.ocr_full or "", obs.change_from_prev or ""]))
 
 
 def keyword_matches(rule: str, obs: Observation) -> bool:
-    return rule.strip().lower() in _haystack(obs)
+    return _match_text(rule.strip()) in _haystack(obs)
 
 
 class WatchRegistry:

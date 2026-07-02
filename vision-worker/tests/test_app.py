@@ -221,6 +221,16 @@ def test_watch_registration_includes_disclaimer(tmp_path, monkeypatch):
     assert "safety" in body["disclaimer"].lower()
 
 
+def test_enum_watch_registration_returns_501_and_is_not_stored(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    resp = client.post("/watches", json={"name": "red signal", "rule": "赤", "kind": "enum"})
+
+    assert resp.status_code == 501
+    assert "keyword" in resp.json()["detail"]
+    assert client.get("/watches").json()["watches"] == []
+    assert len(client.app.state.watches) == 0
+
+
 def test_correction_rejected_before_any_observation(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     resp = client.post("/correction", json={"text": "救急車の赤色灯"})

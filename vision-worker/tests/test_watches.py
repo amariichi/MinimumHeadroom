@@ -21,13 +21,18 @@ def test_keyword_matches_searches_all_text_fields():
     assert not keyword_matches("zebra", _obs(overview="a house in a field"))
 
 
-def test_registry_fires_keyword_but_not_enum():
+def test_keyword_matches_normalizes_width_and_case():
+    assert keyword_matches("ｒｅｄ", _obs(overview="A RED traffic light"))
+    assert keyword_matches("ABC123", _obs(ocr="ＡＢＣ１２３"))
+    assert keyword_matches("赤", _obs(change="赤信号が点灯した"))
+
+
+def test_registry_fires_keyword_only():
     reg = WatchRegistry()
     reg.add(Watch("red light", "red", "keyword"))
-    reg.add(Watch("signal", "red", "enum"))  # needs a model call; not fired here
     fired = reg.evaluate(_obs(overview="the red light is on"))
     assert [w.name for w in fired] == ["red light"]
-    assert len(reg) == 2
+    assert len(reg) == 1
 
 
 def test_make_alert_text_mentions_watch():
