@@ -212,6 +212,8 @@ sequenceDiagram
 Choose one startup path depending on your goal.
 Before starting, configure your coding agent for MCP (see [Agent Setup](#en-agent-setup)), set up the agent-specific `AGENTS.md`, and reflect `doc/examples/AGENT_RULES.md` in the agent instructions. If you want a ready-to-paste starting point, use `doc/examples/AGENTS.sample.md` as the template for your project-local `AGENTS.md`.
 
+If anything misbehaves, run `./scripts/doctor.sh` to check your environment before digging deeper.
+
 If you plan to use the mobile UI remotely, it is convenient to start Tailscale Serve in advance:
 
 ```bash
@@ -224,6 +226,10 @@ Optional M12 vision backend:
 ./scripts/run-vision-stack.sh
 # or: examples/rmh-voice-mode/start-rmh.sh --agent codex --with-vision
 ```
+
+### Codex bubblewrap warning on Ubuntu 24.04+
+
+If Codex prints a startup warning about bubblewrap or user namespaces, it is usually a host AppArmor restriction on Ubuntu 24.04+. Run `./scripts/doctor.sh` to get a tailored AppArmor profile for Codex's bundled `bwrap`; without that fix, Codex sandboxed modes cannot execute commands. Helpers can still be launched unsandboxed with `-s danger-full-access` while you apply the fix.
 
 ### Binding to 0.0.0.0 for docker / remote agents
 

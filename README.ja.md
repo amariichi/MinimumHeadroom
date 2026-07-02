@@ -211,6 +211,8 @@ sequenceDiagram
 目的に合わせて起動パスを選んでください。
 開始前に、利用するコーディングエージェントで MCP 設定を行い（[エージェント設定](#ja-agent-setup) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。すぐ使えるひな形が必要なら、`doc/examples/AGENTS.sample.md` を project-local `AGENTS.md` のテンプレートとして使ってください。
 
+うまく動かない場合は、まず `./scripts/doctor.sh` を実行して環境を確認してください。
+
 モバイルUIをリモート利用する場合は、先に Tailscale Serve を起動しておくと便利です。
 
 ```bash
@@ -223,6 +225,10 @@ tailscale serve --bg 8765
 ./scripts/run-vision-stack.sh
 # または: examples/rmh-voice-mode/start-rmh.sh --agent codex --with-vision
 ```
+
+### Ubuntu 24.04+ の Codex bubblewrap 警告
+
+Codex 起動時に bubblewrap / user namespace に関する警告が出る場合、多くは Ubuntu 24.04+ の host AppArmor 制限です。`./scripts/doctor.sh` を実行すると Codex に同梱された `bwrap` 向けの AppArmor profile 修正案が表示されます。この修正がないと、Codex の sandboxed modes はコマンドを実行できません。修正までの間、helper は `-s danger-full-access` で unsandboxed 起動できます。
 
 ### docker / リモートエージェント向けに 0.0.0.0 でバインドする場合
 
