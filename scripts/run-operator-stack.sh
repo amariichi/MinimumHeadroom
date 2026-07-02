@@ -33,6 +33,10 @@ cd "$ROOT_DIR"
 # env exported upstream does not reliably cross the operator tmux allowlist.
 : "${MH_TTS_CHUNK_MAX_CHARS:=64}"
 : "${MH_KOKORO_VOICE:=jf_alpha}"
+# TTS noise capture-on-anomaly diagnostics. 1 = save a WAV+JSON sample
+# whenever a synthesized utterance looks noise-like (capture only; never
+# alters playback). Off by default.
+: "${MH_TTS_CAPTURE_ANOMALY:=0}"
 # Atom VAD backend selection. 'rms' is the default deterministic energy
 # gate; 'silero' routes frames through silero-vad-worker for ML-based
 # noise-vs-speech classification. The stack only starts the silero worker
@@ -98,6 +102,7 @@ echo "[run-operator-stack] MH_STACK_START_REALTIME_ASR=${MH_STACK_START_REALTIME
 echo "[run-operator-stack] MH_STACK_START_MCP=${MH_STACK_START_MCP}"
 echo "[run-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${MH_OPERATOR_FACE_AGENT_ID}"
 echo "[run-operator-stack] MH_KOKORO_VOICE=${MH_KOKORO_VOICE}"
+echo "[run-operator-stack] MH_TTS_CAPTURE_ANOMALY=${MH_TTS_CAPTURE_ANOMALY}"
 echo "[run-operator-stack] MH_ATOM_VAD_BACKEND=${MH_ATOM_VAD_BACKEND}"
 echo "[run-operator-stack] MH_SILERO_VAD_BASE_URL=${MH_SILERO_VAD_BASE_URL}"
 
@@ -144,6 +149,7 @@ start_proc "face-app" \
   FACE_AUDIO_TARGET="$FACE_AUDIO_TARGET" FACE_UI_MODE="$FACE_UI_MODE" FACE_OPERATOR_PANEL_ENABLED="1" MH_OPERATOR_ASR_BASE_URL="$STACK_OPERATOR_ASR_BASE_URL" \
   MH_TTS_CHUNK_MAX_CHARS="$MH_TTS_CHUNK_MAX_CHARS" \
   MH_KOKORO_VOICE="$MH_KOKORO_VOICE" \
+  MH_TTS_CAPTURE_ANOMALY="$MH_TTS_CAPTURE_ANOMALY" \
   MH_ATOM_VAD_BACKEND="$MH_ATOM_VAD_BACKEND" \
   MH_SILERO_VAD_BASE_URL="$MH_SILERO_VAD_BASE_URL" \
   MH_OPERATOR_REALTIME_ASR_ENABLED="$MH_OPERATOR_REALTIME_ASR_ENABLED" \
