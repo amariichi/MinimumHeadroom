@@ -40,6 +40,46 @@ Then query it:
     VISION_MODEL_BACKEND=diffusiongemma VISION_MODEL_URL=http://127.0.0.1:8000/v1 \
       ./scripts/run-vision-worker.sh
 
+## Full M12 Vision Stack
+
+The reboot-safe stack entrypoint is:
+
+    ./scripts/run-vision-stack.sh --check   # dry run, starts nothing
+    ./scripts/run-vision-stack.sh           # start/reuse diffusiongemma + worker + M12 speaker
+
+It reads persistent configuration from `~/.config/minimum-headroom.env`, never
+from `/tmp`. Required live keys:
+
+| Variable | Meaning |
+| --- | --- |
+| `VISION_CAMERA_URL` | AtomS3R-M12 snapshot URL |
+| `MH_FACE_AUTH_TOKEN` | auth token sent to the M12 audio endpoint |
+| `M12_AUDIO_URL` | AtomS3R-M12 `/api/headroom/audio` URL |
+
+The script sets the live worker profile to `VISION_MODEL_BACKEND=diffusiongemma`,
+`VISION_OUTPUT_LANG=ja`, `VISION_CORRECTION_TO_MODEL=1`,
+`VISION_NARRATE_CHANGES=1`, `VISION_ALERT_ENABLED=1`, and
+`VISION_ALERT_WEBHOOK=http://127.0.0.1:8096/alert` unless an explicit override is
+already present. Useful optional overrides include `VISION_PORT`,
+`VISION_CACHE_DIR`, `VISION_DB_PATH`, other `VISION_*` knobs,
+`VLLM_DGEMMA_*`, and `M12_SPEAKER_*`.
+
+The script does not start Voxtral or any ASR service. The operator stack owns
+ASR; keep Parakeet on CPU there with `MH_ASR_DEVICE=cpu` when GPU memory is
+tight.
+
+Deferred live smoke checklist for the next physical M12 pass:
+
+1. After reboot, run `./scripts/run-vision-stack.sh --check`, then
+   `./scripts/run-vision-stack.sh`.
+2. Confirm diffusiongemma `/v1/models`, vision-worker `/healthz`, and the
+   speaker bridge port are healthy.
+3. Confirm `POST /look` works against the M12.
+4. Confirm the face stack remains up and no CUDA OOM appears while
+   diffusiongemma is loaded.
+5. Trigger a vision alert or narration and confirm speech reaches the M12 Echo
+   Base.
+
 ## Key environment variables
 
 | Variable | Default | Meaning |
