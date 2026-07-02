@@ -62,6 +62,79 @@ def make_correction(
     }
 
 
+def retirement_cause(
+    c: dict,
+    *,
+    now: datetime,
+    current_change_at: datetime | None,
+    current_hash: int | None,
+    drift_threshold: int,
+) -> str | None:
+    """Return why a correction is retired, or None when it remains active."""
+    # (3) wall-clock cap. Keep the historical evaluation order: a note that is
+    # both expired and scene-retired is counted as ttl because it survived to cap.
+    if now >= c["expires_at"]:
+        return "ttl"
+    # (1) a real change committed after this correction was made.
+    anchor_change = c.get("anchor_change_at")
+    if (
+        anchor_change is not None
+        and current_change_at is not None
+        and current_change_at > anchor_change
+    ):
+        return "change"
+    # (2) perceptual-hash drift, independent of the model's narrative.
+    anchor_hash = c.get("anchor_hash")
+    if (
+        anchor_hash is not None
+        and current_hash is not None
+        and hamming(anchor_hash, current_hash) > drift_threshold
+    ):
+        return "drift"
+    return None
+
+
+def _active_copy(c: dict, *, now: datetime, stale_soon_fraction: float) -> dict:
+    age_seconds = max(0, int((now - c["created_at"]).total_seconds()))
+    ttl_total = (c["expires_at"] - c["created_at"]).total_seconds()
+    stale_soon = ttl_total > 0 and age_seconds >= stale_soon_fraction * ttl_total
+    return {**c, "age_seconds": age_seconds, "stale_soon": stale_soon}
+
+
+def partition_corrections(
+    corrections: list[dict],
+    *,
+    now: datetime,
+    current_change_at: datetime | None,
+    current_hash: int | None,
+    drift_threshold: int,
+    stale_soon_fraction: float = 0.8,
+) -> tuple[list[dict], list[dict]]:
+    """Split corrections into active and newly retired records.
+
+    Active records are newest first and include render fields. Retired records
+    include `retired_cause` and `lifetime_seconds` for telemetry/logging.
+    """
+    active: list[dict] = []
+    retired: list[dict] = []
+    for c in corrections:
+        cause = retirement_cause(
+            c,
+            now=now,
+            current_change_at=current_change_at,
+            current_hash=current_hash,
+            drift_threshold=drift_threshold,
+        )
+        if cause is not None:
+            lifetime_seconds = max(0, int((now - c["created_at"]).total_seconds()))
+            retired.append({**c, "retired_cause": cause, "lifetime_seconds": lifetime_seconds})
+            continue
+        active.append(_active_copy(c, now=now, stale_soon_fraction=stale_soon_fraction))
+
+    active.sort(key=lambda c: c["age_seconds"])
+    return active, retired
+
+
 def active_corrections(
     corrections: list[dict],
     *,
@@ -78,32 +151,12 @@ def active_corrections(
     `stale_soon` (True once it has used `stale_soon_fraction` of its lifetime,
     so the LLM can re-confirm with the user before it lapses — M5c).
     """
-    out: list[dict] = []
-    for c in corrections:
-        # (3) wall-clock cap.
-        if now >= c["expires_at"]:
-            continue
-        # (1) a real change committed after this correction was made.
-        anchor_change = c.get("anchor_change_at")
-        if (
-            anchor_change is not None
-            and current_change_at is not None
-            and current_change_at > anchor_change
-        ):
-            continue
-        # (2) perceptual-hash drift, independent of the model's narrative.
-        anchor_hash = c.get("anchor_hash")
-        if (
-            anchor_hash is not None
-            and current_hash is not None
-            and hamming(anchor_hash, current_hash) > drift_threshold
-        ):
-            continue
-
-        age_seconds = max(0, int((now - c["created_at"]).total_seconds()))
-        ttl_total = (c["expires_at"] - c["created_at"]).total_seconds()
-        stale_soon = ttl_total > 0 and age_seconds >= stale_soon_fraction * ttl_total
-        out.append({**c, "age_seconds": age_seconds, "stale_soon": stale_soon})
-
-    out.sort(key=lambda c: c["age_seconds"])
-    return out
+    active, _ = partition_corrections(
+        corrections,
+        now=now,
+        current_change_at=current_change_at,
+        current_hash=current_hash,
+        drift_threshold=drift_threshold,
+        stale_soon_fraction=stale_soon_fraction,
+    )
+    return active

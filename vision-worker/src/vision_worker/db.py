@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS observations (
     ocr_full TEXT NOT NULL DEFAULT '',
     overview TEXT NOT NULL DEFAULT '',
     change_from_prev TEXT NOT NULL DEFAULT '',
+    human_note TEXT,
     model TEXT NOT NULL DEFAULT '',
     latency_ms INTEGER NOT NULL DEFAULT 0,
     low_confidence INTEGER NOT NULL DEFAULT 0,
@@ -60,7 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_summaries_level ON summaries(level, period_start 
 
 _SELECT = """
 SELECT o.id AS obs_id, o.frame_id, o.is_text, o.ocr_full, o.overview,
-       o.change_from_prev, o.model, o.latency_ms, o.low_confidence, o.created_at,
+       o.change_from_prev, o.human_note, o.model, o.latency_ms, o.low_confidence, o.created_at,
        f.captured_at, f.width, f.height
 FROM observations o
 JOIN frames f ON f.id = o.frame_id
@@ -81,6 +82,7 @@ def _to_public(row: sqlite3.Row) -> dict:
         "overview": row["overview"],
         "ocr_full": row["ocr_full"],
         "change_from_prev": row["change_from_prev"],
+        "human_note": row["human_note"],
         "low_confidence": bool(row["low_confidence"]),
         "model": row["model"],
         "latency_ms": row["latency_ms"],
@@ -98,6 +100,12 @@ class VisionDB:
         os.makedirs(parent, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            columns = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(observations)").fetchall()
+            }
+            if "human_note" not in columns:
+                conn.execute("ALTER TABLE observations ADD COLUMN human_note TEXT")
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -182,6 +190,27 @@ class VisionDB:
             ).fetchall()
             return [_to_public(r) for r in rows]
 
+    def stamp_human_note_at_or_before(self, anchor_iso: str, note: str) -> dict | None:
+        """Attach a human note to the newest observation at or before anchor_iso."""
+        with self._conn() as conn:
+            row = conn.execute(
+                _SELECT
+                + " WHERE o.created_at <= ?"
+                + " ORDER BY o.created_at DESC, o.id DESC LIMIT 1",
+                (anchor_iso,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE observations SET human_note = ? WHERE id = ?",
+                (note, row["obs_id"]),
+            )
+            updated = conn.execute(
+                _SELECT + " WHERE o.id = ?",
+                (row["obs_id"],),
+            ).fetchone()
+            return _to_public(updated) if updated else None
+
     def upsert_summary(
         self,
         level: int,
@@ -253,6 +282,15 @@ class VisionDB:
                 )
             else:
                 conn.execute("DELETE FROM summaries WHERE level = ?", (level,))
+
+    def delete_summaries_containing(self, ts_iso: str) -> int:
+        """Delete cached summaries at every tier whose closed band contains ts."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM summaries WHERE period_start <= ? AND period_end > ?",
+                (ts_iso, ts_iso),
+            )
+            return int(cur.rowcount)
 
     def search(self, query: str, limit: int = 50) -> list[dict]:
         like = f"%{query}%"

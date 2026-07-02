@@ -97,7 +97,13 @@ def closed_bands(now: datetime, level: int, n: int | None = None) -> list[tuple[
 
 
 def _change_text(c: dict) -> str:
-    return (c.get("change_from_prev") or c.get("overview") or "").strip()
+    text = (c.get("change_from_prev") or c.get("overview") or "").strip()
+    note = (c.get("human_note") or "").strip()
+    if not note:
+        return text
+    if not text:
+        return f"人の訂正: {note}"
+    return f"{text}（人の訂正: {note}）"
 
 
 def extractive_summary(changes: list[dict]) -> str:

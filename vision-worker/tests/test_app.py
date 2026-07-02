@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import os
+import time
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
+
+from vision_worker.summarize import Summarizer, consolidate_closed_bands
+
+UTC = timezone.utc
 
 
 def _client(tmp_path, monkeypatch) -> TestClient:
@@ -12,6 +18,36 @@ def _client(tmp_path, monkeypatch) -> TestClient:
     from vision_worker.app import create_app
 
     return TestClient(create_app())
+
+
+
+
+class _EchoSummarizer(Summarizer):
+    def __init__(self):
+        super().__init__(base_url="http://unused", model_name="m", enabled=True)
+
+    def _summarize_llm(self, changes):
+        return self._format_changes(changes)
+
+
+def _insert_change_at(db, created_at_iso: str, overview: str, change: str) -> None:
+    with db._conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO frames(captured_at, phash, full_path, thumb_path, width, height)"
+            " VALUES(?, ?, ?, ?, ?, ?)",
+            (created_at_iso, "h", "/tmp/app-test.jpg", None, 64, 64),
+        )
+        conn.execute(
+            "INSERT INTO observations(frame_id, is_text, ocr_full, overview, change_from_prev,"
+            " model, latency_ms, low_confidence, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cur.lastrowid, 0, "", overview, change, "test", 0, 0, created_at_iso),
+        )
+
+
+def _join_threads(threads):
+    for thread in threads:
+        thread.join(timeout=3.0)
+        assert not thread.is_alive()
 
 
 def test_healthz_reports_mock_backend(tmp_path, monkeypatch):
@@ -151,6 +187,67 @@ def test_correction_roundtrip_and_scene_change_expiry(tmp_path, monkeypatch, mak
     text2 = client.get("/situation?format=text").text
     assert "[人の補足]" not in text2
     assert client.get("/corrections").json()["active"] == []
+
+
+def test_correction_stamps_memory_invalidates_and_rebuilds_t1_t2(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    db = client.app.state.db
+    pipeline = client.app.state.pipeline
+    created = datetime(2026, 6, 22, 8, 5, tzinfo=UTC)
+    _insert_change_at(db, created.isoformat(), "赤信号らしき光", "赤信号が見える")
+    pipeline.last_change_at = created
+    pipeline.last_visual_hash = 0
+
+    db.upsert_summary(1, "2026-06-22T08:00:00+00:00", "2026-06-22T08:10:00+00:00", "stale-t1", 1)
+    db.upsert_summary(2, "2026-06-22T08:00:00+00:00", "2026-06-22T09:00:00+00:00", "stale-t2", 1)
+    db.upsert_summary(3, "2026-06-22T06:00:00+00:00", "2026-06-22T12:00:00+00:00", "stale-t3", 1)
+    db.upsert_summary(4, "2026-06-22T00:00:00+00:00", "2026-06-23T00:00:00+00:00", "stale-t4", 1)
+    db.upsert_summary(1, "2026-06-22T08:10:00+00:00", "2026-06-22T08:20:00+00:00", "keep", 1)
+
+    posted = client.post("/correction", json={"text": "赤く見えるものは救急車の赤色灯"})
+    assert posted.status_code == 200
+    assert posted.json()["memory"]["invalidated_summaries"] == 4
+    assert db.latest()["human_note"] == "赤く見えるものは救急車の赤色灯"
+    assert db.get_summary(1, "2026-06-22T08:00:00+00:00") is None
+    assert db.get_summary(2, "2026-06-22T08:00:00+00:00") is None
+    assert db.get_summary(3, "2026-06-22T06:00:00+00:00") is None
+    assert db.get_summary(4, "2026-06-22T00:00:00+00:00") is None
+    assert db.get_summary(1, "2026-06-22T08:10:00+00:00")["text"] == "keep"
+
+    summarizer = _EchoSummarizer()
+    _join_threads(consolidate_closed_bands(db, summarizer, datetime(2026, 6, 22, 8, 25, tzinfo=UTC)))
+    t1 = db.get_summary(1, "2026-06-22T08:00:00+00:00")
+    assert t1 is not None
+    assert "救急車の赤色灯" in t1["text"]
+
+    _join_threads(consolidate_closed_bands(db, summarizer, datetime(2026, 6, 22, 9, 5, tzinfo=UTC)))
+    t2 = db.get_summary(2, "2026-06-22T08:00:00+00:00")
+    assert t2 is not None
+    assert "救急車の赤色灯" in t2["text"]
+
+
+def test_correction_metrics_count_retirement_causes(tmp_path, monkeypatch, make_frame):
+    client = _client(tmp_path, monkeypatch)
+
+    client.post("/ingest", files={"image": ("a.jpg", make_frame(0x0F0F), "image/jpeg")})
+    client.post("/correction", json={"text": "change"})
+    client.post("/ingest", files={"image": ("b.jpg", make_frame(0xF0F0), "image/jpeg")})
+    client.get("/corrections")
+
+    client.post("/correction", json={"text": "drift"})
+    client.app.state.pipeline.last_visual_hash ^= (1 << 16) - 1
+    client.get("/corrections")
+
+    client.post("/correction", json={"text": "ttl", "ttl_s": 0.001})
+    time.sleep(0.01)
+    client.get("/corrections")
+
+    metrics = client.get("/metrics").json()["corrections"]
+    assert metrics == {
+        "retired_by_change": 1,
+        "retired_by_drift": 1,
+        "retired_by_ttl": 1,
+    }
 
 
 def test_correction_delete_clears(tmp_path, monkeypatch, make_frame):

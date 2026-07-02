@@ -19,6 +19,7 @@ Stable endpoints (consumed by the agent skill and the alert layer):
 from __future__ import annotations
 
 import itertools
+import logging
 import os
 import threading
 from datetime import datetime, timezone
@@ -32,7 +33,7 @@ from . import __version__
 from .alerts import AsyncAlertSink, ChangeNarrator, build_alert_sink, make_alert_text
 from .capture import build_capture_source
 from .config import load_settings
-from .corrections import active_corrections, make_correction
+from .corrections import make_correction, partition_corrections
 from .db import VisionDB
 from .model_client import build_model_client
 from .perception import PerceptionLoop, decide_start
@@ -51,6 +52,8 @@ DISCLAIMER = (
     "such as street crossing or driving."
 )
 
+logger = logging.getLogger(__name__)
+
 
 class WatchIn(BaseModel):
     name: str = Field(min_length=1)
@@ -60,6 +63,18 @@ class WatchIn(BaseModel):
 
 class NarrateIn(BaseModel):
     on: bool
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class CorrectionIn(BaseModel):
@@ -131,18 +146,32 @@ def create_app() -> FastAPI:
     corrections: list[dict] = []
     corrections_lock = threading.Lock()
     correction_seq = itertools.count(1)
+    correction_retirements = {"change": 0, "drift": 0, "ttl": 0}
     app.state.corrections = corrections
+    app.state.correction_retirements = correction_retirements
 
     def _active_corrections(now: datetime) -> list[dict]:
         with corrections_lock:
-            snapshot = list(corrections)
-        return active_corrections(
-            snapshot,
-            now=now,
-            current_change_at=pipeline.last_change_at,
-            current_hash=pipeline.last_visual_hash,
-            drift_threshold=settings.correction_hash_drift,
-        )
+            active, retired = partition_corrections(
+                list(corrections),
+                now=now,
+                current_change_at=pipeline.last_change_at,
+                current_hash=pipeline.last_visual_hash,
+                drift_threshold=settings.correction_hash_drift,
+            )
+            if retired:
+                active_ids = {c["id"] for c in active}
+                corrections[:] = [c for c in corrections if c["id"] in active_ids]
+                for c in retired:
+                    cause = c["retired_cause"]
+                    correction_retirements[cause] += 1
+                    logger.info(
+                        "correction retired id=%s cause=%s lifetime_seconds=%s",
+                        c.get("id"),
+                        cause,
+                        c.get("lifetime_seconds"),
+                    )
+            return active
 
     def _correction_advisory() -> str | None:
         """The freshest active correction text to advise the VLM with (M5b).
@@ -199,7 +228,15 @@ def create_app() -> FastAPI:
 
     @app.get("/metrics")
     def metrics() -> dict:
-        return {"counts": db.counts(), "pipeline": pipeline.stats.as_dict()}
+        return {
+            "counts": db.counts(),
+            "pipeline": pipeline.stats.as_dict(),
+            "corrections": {
+                "retired_by_change": correction_retirements["change"],
+                "retired_by_drift": correction_retirements["drift"],
+                "retired_by_ttl": correction_retirements["ttl"],
+            },
+        }
 
     @app.get("/situation")
     def situation(format: str = "json"):
@@ -422,15 +459,26 @@ def create_app() -> FastAPI:
         text = body.text.strip()
         if not text:
             raise HTTPException(status_code=422, detail="empty correction text")
+        latest = db.latest()
+        if latest is None:
+            raise HTTPException(
+                status_code=409,
+                detail="no live scene to attach a correction to (nothing observed yet)",
+            )
         now = datetime.now(timezone.utc)
         ttl = body.ttl_s if (body.ttl_s and body.ttl_s > 0) else settings.correction_ttl_s
+        anchor_change_at = _parse_iso(latest.get("created_at")) or pipeline.last_change_at
         rec = make_correction(
             correction_id=next(correction_seq),
             text=text,
             now=now,
-            anchor_change_at=pipeline.last_change_at,
+            anchor_change_at=anchor_change_at,
             anchor_hash=pipeline.last_visual_hash,
             ttl_s=ttl,
+        )
+        stamped = db.stamp_human_note_at_or_before(latest["created_at"], text)
+        invalidated = (
+            db.delete_summaries_containing(stamped["created_at"]) if stamped is not None else 0
         )
         with corrections_lock:
             corrections.append(rec)
@@ -440,6 +488,10 @@ def create_app() -> FastAPI:
                 del corrections[:overflow]
         return {
             "recorded": {"id": rec["id"], "text": rec["text"]},
+            "memory": {
+                "obs_id": stamped["obs_id"] if stamped is not None else None,
+                "invalidated_summaries": invalidated,
+            },
             "ttl_s": ttl,
             "disclaimer": DISCLAIMER,
         }

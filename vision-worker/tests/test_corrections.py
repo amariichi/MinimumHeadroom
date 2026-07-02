@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from vision_worker.corrections import active_corrections, make_correction
+from vision_worker.corrections import active_corrections, make_correction, partition_corrections
 
 UTC = timezone.utc
 T0 = datetime(2026, 6, 25, 12, 0, 0, tzinfo=UTC)
@@ -101,3 +101,17 @@ def test_none_anchors_only_expire_by_cap():
     )
     out = _active(c, secs=10, change_at=T0 + timedelta(seconds=5), current_hash=999999)
     assert len(out) == 1
+
+
+def test_partition_reports_retirement_causes_and_lifetimes():
+    active, retired = partition_corrections(
+        [_corr(), _corr(correction_id=2, ttl_s=5.0)],
+        now=T0 + timedelta(seconds=10),
+        current_change_at=T0,
+        current_hash=0,
+        drift_threshold=8,
+    )
+    assert [c["id"] for c in active] == [1]
+    assert retired[0]["id"] == 2
+    assert retired[0]["retired_cause"] == "ttl"
+    assert retired[0]["lifetime_seconds"] == 10

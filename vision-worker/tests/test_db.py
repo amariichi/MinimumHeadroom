@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 from vision_worker.db import VisionDB
 from vision_worker.records import Observation
 
@@ -61,3 +63,77 @@ def test_frame_path_roundtrip(tmp_path):
     frame_id = _insert(db, "x")
     assert db.frame_path(frame_id) == "/tmp/x.jpg"
     assert db.frame_path(99999) is None
+
+
+def test_existing_db_migrates_human_note_column(tmp_path):
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                captured_at TEXT NOT NULL,
+                phash TEXT,
+                full_path TEXT NOT NULL,
+                thumb_path TEXT,
+                width INTEGER,
+                height INTEGER
+            );
+            CREATE TABLE observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                frame_id INTEGER NOT NULL REFERENCES frames(id),
+                is_text INTEGER NOT NULL,
+                ocr_full TEXT NOT NULL DEFAULT '',
+                overview TEXT NOT NULL DEFAULT '',
+                change_from_prev TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                latency_ms INTEGER NOT NULL DEFAULT 0,
+                low_confidence INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO frames(captured_at, phash, full_path, thumb_path, width, height)"
+            " VALUES(?, ?, ?, ?, ?, ?)",
+            ("2026-06-22T08:00:00+00:00", "h", "/tmp/old.jpg", None, 64, 64),
+        )
+        conn.execute(
+            "INSERT INTO observations(frame_id, is_text, ocr_full, overview, change_from_prev,"
+            " model, latency_ms, low_confidence, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (1, 0, "", "赤信号", "赤信号が見える", "test", 0, 0, "2026-06-22T08:00:00+00:00"),
+        )
+
+    db = VisionDB(str(path))
+    with db._conn() as conn:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(observations)")}
+    assert "human_note" in columns
+    assert db.latest()["human_note"] is None
+
+    stamped = db.stamp_human_note_at_or_before(
+        "2026-06-22T08:00:00+00:00", "救急車の赤色灯"
+    )
+    assert stamped is not None
+    assert stamped["human_note"] == "救急車の赤色灯"
+    assert db.latest()["human_note"] == "救急車の赤色灯"
+
+
+def test_delete_summaries_containing_removes_all_covering_tiers(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    ts = "2026-06-22T08:05:00+00:00"
+    covering = [
+        (1, "2026-06-22T08:00:00+00:00", "2026-06-22T08:10:00+00:00"),
+        (2, "2026-06-22T08:00:00+00:00", "2026-06-22T09:00:00+00:00"),
+        (3, "2026-06-22T06:00:00+00:00", "2026-06-22T12:00:00+00:00"),
+        (4, "2026-06-22T00:00:00+00:00", "2026-06-23T00:00:00+00:00"),
+    ]
+    for level, start, end in covering:
+        db.upsert_summary(level, start, end, f"stale-{level}", 1)
+    db.upsert_summary(1, "2026-06-22T08:10:00+00:00", "2026-06-22T08:20:00+00:00", "keep", 1)
+    db.upsert_summary(2, "2026-06-22T07:00:00+00:00", "2026-06-22T08:00:00+00:00", "keep2", 1)
+
+    assert db.delete_summaries_containing(ts) == 4
+    for level, start, _ in covering:
+        assert db.get_summary(level, start) is None
+    assert db.get_summary(1, "2026-06-22T08:10:00+00:00")["text"] == "keep"
+    assert db.get_summary(2, "2026-06-22T07:00:00+00:00")["text"] == "keep2"
