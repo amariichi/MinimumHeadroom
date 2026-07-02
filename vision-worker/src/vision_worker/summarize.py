@@ -49,6 +49,11 @@ MAX_LEVEL = max(TIER_BUCKETS)
 #: horizon (~2 weeks) everything is dropped (a long-term diary is out of scope).
 TIER_RETENTION: dict[int, int] = {1: 12, 2: 26, 3: 12, 4: 14}
 
+#: How many recent closed bands each tier may contribute to the live situation
+#: digest. This plugs the gap where content just older than the newest closed
+#: T1 bucket could vanish until the coarser T2 bucket closed.
+SITUATION_SUMMARY_BANDS: dict[int, int] = {1: 3, 2: 2, 3: 1, 4: 1}
+
 _INSTRUCTION_JA = (
     "次の時系列の変化ログを、1〜2文の自然な日本語で要約してください。"
     "箇条書きや前置きは付けず、要約文だけを返してください。"
@@ -309,21 +314,22 @@ def consolidate_closed_bands(db, summarizer: Summarizer, now: datetime) -> list[
 
 
 def situation_summaries(db, summarizer: Summarizer, now: datetime, *, idle: bool) -> list[dict]:
-    """Build the `summaries` list for GET /situation: the newest closed summary
-    of each populated tier (1 = ~10 min, 2 = hour, 3 = 6 h, 4 = day), coarsest
-    history furthest back.
+    """Build the `summaries` list for GET /situation from recent closed bands.
 
-    For each tier it returns the cached LLM summary if present, else an instant
-    extractive summary, and — only while the scene is idle — schedules the LLM
-    summary to be computed and cached off the request thread. The read never
-    blocks on the model. While idle it also prunes each tier to its retention
-    cap so the table stays bounded over a long run.
+    Each tier contributes its newest populated closed bands (T1 up to three,
+    T2 up to two, T3/T4 one each), newest first. For each band it returns the
+    cached LLM summary if present, else an instant extractive summary, and —
+    only while the scene is idle — schedules the LLM summary to be computed and
+    cached off the request thread. The read never blocks on the model. While
+    idle it also prunes each tier to its retention cap so the table stays
+    bounded over a long run.
     """
     out: list[dict] = []
     for level in range(1, MAX_LEVEL + 1):
-        entry = _consolidate_tier(db, summarizer, now, level, idle=idle)
-        if entry is not None:
-            out.append(entry)
+        for start, end in closed_bands(now, level, SITUATION_SUMMARY_BANDS.get(level, 1)):
+            entry = _consolidate_band(db, summarizer, level, start, end, idle=idle)
+            if entry is not None:
+                out.append(entry)
     if idle:
         for level, keep in TIER_RETENTION.items():
             db.prune_summaries(level, keep)

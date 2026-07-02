@@ -194,6 +194,38 @@ def test_render_text_full():
     assert "安全用途不可" in out
 
 
+def test_render_text_merges_t1_and_caps_summary_lines():
+    digest = {
+        "observing": True,
+        "current": {"overview": "机", "is_text": False, "ocr": "", "stable_seconds": 10},
+        "recent": [],
+        "summaries": [
+            {"level": 1, "text": "T1新"},
+            {"level": 1, "text": "T1中"},
+            {"level": 1, "text": "T1古"},
+            {"level": 2, "text": "T2新"},
+            {"level": 2, "text": "T2中"},
+            {"level": 2, "text": "T2余分"},
+            {"level": 3, "text": "T3新"},
+            {"level": 4, "text": "T4新"},
+        ],
+    }
+    out = render_situation_text(digest)
+    summary_lines = [
+        line for line in out.splitlines()
+        if line.startswith(("直近:", "1時間:", "6時間:", "1日:"))
+    ]
+    assert summary_lines == [
+        "直近: T1新 ← T1中 ← T1古",
+        "1時間: T2新",
+        "1時間: T2中",
+        "1時間: T2余分",
+        "6時間: T3新",
+    ]
+    assert len(summary_lines) == 5
+    assert "1日: T4新" not in out
+
+
 def test_render_text_filters_baseline_marker():
     digest = {
         "observing": True,

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from vision_worker.db import VisionDB
 from vision_worker.records import Observation
+from vision_worker.situation import render_situation_text
 from vision_worker.summarize import (
     MAX_LEVEL,
     Summarizer,
@@ -231,6 +232,36 @@ def test_full_ladder_returns_one_entry_per_populated_tier(tmp_path):
     out = situation_summaries(db, _FakeSummarizer(), NOW, idle=False)
     assert [e["level"] for e in out] == [1, 2, 3, 4]
     assert MAX_LEVEL == 4
+
+
+def test_situation_summaries_looks_past_empty_newest_t1_bucket(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    now = datetime(2026, 6, 22, 8, 44, tzinfo=UTC)
+    # Newest closed T1 is [08:30, 08:40), intentionally empty. The activity sits
+    # in the next two older closed buckets, matching the now-25..now-15 gap.
+    _insert_change_at(db, (now - timedelta(minutes=25)).isoformat(), "a", "古い変化A")
+    _insert_change_at(db, (now - timedelta(minutes=15)).isoformat(), "b", "古い変化B")
+
+    summaries = situation_summaries(db, _FakeSummarizer(), now, idle=False)
+    lvl1 = [s for s in summaries if s["level"] == 1]
+    assert [s["period_start"] for s in lvl1] == [
+        "2026-06-22T08:20:00+00:00",
+        "2026-06-22T08:10:00+00:00",
+    ]
+
+    text = render_situation_text({
+        "observing": True,
+        "current": {
+            "overview": "机",
+            "is_text": False,
+            "ocr": "",
+            "stable_seconds": 5,
+            "stale": False,
+        },
+        "recent": [],
+        "summaries": summaries,
+    })
+    assert "直近: 古い変化B ← 古い変化A" in text
 
 
 def test_retention_prunes_when_idle(tmp_path):

@@ -132,6 +132,11 @@ def compose_situation(
 #: How a summarized tier is labelled in the rendered text block (by coarseness).
 _TIER_LABELS = {1: "直近", 2: "1時間", 3: "6時間", 4: "1日"}
 
+#: The rendered block can be injected every conversational turn, so historical
+#: summary lines stay bounded even when several closed bands are returned.
+_SUMMARY_LINE_LIMIT = 5
+_T1_RENDER_LIMIT = 3
+
 #: Kept short so it costs few tokens when injected on every conversational turn.
 _TEXT_DISCLAIMER = "（情報提供のみ・安全用途不可）"
 
@@ -149,6 +154,29 @@ def humanize_seconds(seconds: int | None) -> str:
     if hours < 36:
         return f"約{hours}時間"
     return f"約{hours // 24}日"
+
+
+
+def _render_summary_lines(summaries: list[dict]) -> list[str]:
+    tier1_texts: list[str] = []
+    other_lines: list[str] = []
+    for s in summaries:
+        text = (s.get("text") or "").strip()
+        if not text:
+            continue
+        level = s.get("level")
+        if level == 1:
+            tier1_texts.append(text)
+            continue
+        label = _TIER_LABELS.get(level, f"L{level}")
+        other_lines.append(f"{label}: {text}")
+
+    lines: list[str] = []
+    if tier1_texts:
+        joined = " ← ".join(tier1_texts[:_T1_RENDER_LIMIT])
+        lines.append(f"{_TIER_LABELS[1]}: {joined}")
+    lines.extend(other_lines)
+    return lines[:_SUMMARY_LINE_LIMIT]
 
 
 def render_situation_text(digest: dict, corrections: list[dict] | None = None) -> str:
@@ -232,11 +260,7 @@ def render_situation_text(digest: dict, corrections: list[dict] | None = None) -
         if changes:
             lines.append("直近の変化: " + " / ".join(changes))
 
-    for s in digest.get("summaries") or []:
-        label = _TIER_LABELS.get(s.get("level"), f"L{s.get('level')}")
-        text = (s.get("text") or "").strip()
-        if text:
-            lines.append(f"{label}: {text}")
+    lines.extend(_render_summary_lines(digest.get("summaries") or []))
 
     lines.append(_TEXT_DISCLAIMER)
     return "\n".join(lines)
