@@ -21,7 +21,7 @@
 #    # settings.json UserPromptSubmit hook:
 #    # {"hooks": {"UserPromptSubmit": [{"hooks": [
 #    #   {"type": "command",
-#    #    "command": "/home/amari1/github/minimum-headroom/scripts/situation-context-hook.sh"}]}]}}
+#    #    "command": "/ABS/PATH/minimum-headroom/scripts/situation-context-hook.sh"}]}]}}
 # =============================================================================
 set -uo pipefail
 

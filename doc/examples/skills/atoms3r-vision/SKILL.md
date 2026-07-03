@@ -123,7 +123,7 @@ documentation snippet only — do not edit user settings programmatically:
         "hooks": [
           {
             "type": "command",
-            "command": "/home/amari1/github/minimum-headroom/scripts/situation-context-hook.sh"
+            "command": "/ABS/PATH/minimum-headroom/scripts/situation-context-hook.sh"
           }
         ]
       }

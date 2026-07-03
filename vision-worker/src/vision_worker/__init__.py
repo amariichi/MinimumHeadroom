@@ -7,7 +7,7 @@ memory in SQLite that cloud agents query through a skill + HTTP API.
 
 This package is GPU-free by default: the perception model is swappable, and
 the bundled `MockModelClient` lets the whole pipeline run and be tested
-without a GPU. See `.agent/execplans/atoms3r-m12-vision-memory.md`.
+without a GPU. See `doc/guides/m12-vision.md` for the full design.
 """
 
 from __future__ import annotations

@@ -12,9 +12,8 @@ GPU. The real model (`nvidia/diffusiongemma-26B-A4B-it-NVFP4` via an
 OpenAI-compatible vLLM endpoint) is wired in milestone M2.
 
 See the public guide in
-[`doc/guides/m12-vision.md`](../doc/guides/m12-vision.md). Detailed ExecPlans
-under `.agent/execplans/` are local-only and may not be available to repository
-readers.
+[`doc/guides/m12-vision.md`](../doc/guides/m12-vision.md), which covers the
+perception flow, the tiered situation memory, corrections, and alerts.
 
 ## Run (mock backend, no GPU)
 
