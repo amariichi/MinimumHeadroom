@@ -3,7 +3,7 @@
 The digest is a small JSON document that lets the conversational LLM stay in
 sync with the camera cheaply: what the camera sees *now*, how many seconds that
 view has been *stable* (unchanged), and a multi-resolution history (recent raw
-changes plus, from M2 on, progressively coarser summaries). Reading it never
+changes plus progressively coarser summaries). Reading it never
 runs the vision model, so the LLM can read it every turn for free.
 
 `compose_situation` is a pure assembly function: it takes the already-fetched

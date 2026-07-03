@@ -1,4 +1,4 @@
-"""Low-cost hierarchical text summarization for the situation digest (M2+).
+"""Low-cost hierarchical text summarization for the situation digest.
 
 The situation digest (GET /situation) keeps the last few minutes of change
 events verbatim, but older history is condensed into progressively coarser

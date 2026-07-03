@@ -52,7 +52,7 @@ class ChangeGate:
     def scene_is_steady(self) -> bool:
         """True once the scene has been unchanged for `steady_frames` frames.
 
-        Used by temporal voting (milestone M2) to decide when it is safe to
+        Used by temporal voting to decide when it is safe to
         reconcile several frames of the same scene.
         """
         return self._steady_count >= self._steady_frames

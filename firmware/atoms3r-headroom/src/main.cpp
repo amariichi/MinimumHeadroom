@@ -71,7 +71,7 @@ constexpr float kImuInPlaneMinG = 0.40f;
 // atan2(ay,ax) snapped to 90s, then offset/sign applied. The AtomS3R IMU axis
 // orientation vs. the panel is not verifiable without hardware; the boot log
 // prints raw accel + chosen rotation so these two can be fixed in one
-// on-device calibration pass (Milestone 4 in PLANS_49).
+// on-device calibration pass.
 //
 // Calibrated 2026-05-19 on real hardware. With offset=0/sign=+1 the observed
 // face direction was the mirror of the wanted one plus 90°:

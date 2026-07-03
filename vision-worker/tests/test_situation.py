@@ -382,7 +382,7 @@ def test_presence_line_omits_last_narration():
 
 
 def test_pipeline_commit_sets_last_change_at_and_drives_stable_seconds(tmp_path, make_frame):
-    # The plan's M1 acceptance: build a pipeline, commit one observation, advance
+    # Acceptance: build a pipeline, commit one observation, advance
     # a fake clock, and assert stable_seconds grows off the real last_change_at.
     db = VisionDB(str(tmp_path / "v.db"))
     store = FrameStore(str(tmp_path / "cache"))

@@ -6,7 +6,7 @@ unintentionally. `WebhookAlertSink` POSTs the alert to a configurable URL (a thi
 bridge to the stack's `face_say` voice path) and is only used when
 `VISION_ALERT_ENABLED=1` and `VISION_ALERT_WEBHOOK` is set. Wiring this to the
 live face/voice path and the constrained-enum watches is finished alongside the
-stack integration (milestone M6) and the model-backed alert path (M5).
+stack integration and the model-backed alert path.
 """
 
 from __future__ import annotations

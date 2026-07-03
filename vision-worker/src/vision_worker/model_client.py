@@ -4,8 +4,7 @@ The pipeline depends only on the `VisionModelClient` protocol, so the model is
 swappable. `MockModelClient` is deterministic and GPU-free (used for tests and
 for building the pipeline while the GPU is busy). `DiffusionGemmaClient` calls
 an OpenAI-compatible vLLM endpoint serving `nvidia/diffusiongemma-26B-A4B-it-NVFP4`
-(wired up and exercised in milestone M2; it is functional but untested until a
-GPU is available).
+(functional but untested until a GPU is available).
 """
 
 from __future__ import annotations
@@ -217,7 +216,7 @@ def _extract_json(content: str) -> dict:
 
 
 class DiffusionGemmaClient:
-    """Client for an OpenAI-compatible vLLM endpoint (milestone M2)."""
+    """Client for an OpenAI-compatible vLLM endpoint."""
 
     def __init__(
         self,

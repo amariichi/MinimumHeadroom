@@ -9,7 +9,7 @@ skill + HTTP API.
 This worker is **GPU-free by default**. The perception model is swappable; the
 bundled `MockModelClient` runs the whole pipeline and the test suite without a
 GPU. The real model (`nvidia/diffusiongemma-26B-A4B-it-NVFP4` via an
-OpenAI-compatible vLLM endpoint) is wired in milestone M2.
+OpenAI-compatible vLLM endpoint) is wired in as an optional backend.
 
 See the public guide in
 [`doc/guides/m12-vision.md`](../doc/guides/m12-vision.md), which covers the
@@ -34,7 +34,7 @@ Then query it:
 
     uv run --project vision-worker pytest
 
-## Real model (milestone M2, needs a free GPU)
+## Real model (needs a free GPU)
 
     ./scripts/setup-vllm-diffusiongemma.sh
     ./scripts/run-vllm-diffusiongemma.sh
@@ -113,7 +113,7 @@ Deferred live smoke checklist for the next physical M12 pass:
 | `VISION_CAMERA_RESOLVE_DEVICE_ID` | unset | device id used to re-resolve the snapshot URL after failures |
 | `VISION_CAMERA_REDISCOVER_AFTER_FAILURES` | `5` | consecutive network capture failures before re-resolution |
 | `VISION_CAPTURE_INTERVAL_MS` | `1500` | replay/poll interval |
-| `VISION_VOTE_K` | `1` | temporal voting count (M2) |
+| `VISION_VOTE_K` | `1` | temporal voting count |
 | `VISION_MAX_CHANGES` | `50` | rolling change-window size |
 | `VISION_GATE_HAMMING` | `6` | perceptual-hash change threshold |
 | `VISION_GATE_PIXELDIFF` | `0.06` | pixel-diff change threshold |

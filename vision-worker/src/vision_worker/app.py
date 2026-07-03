@@ -12,7 +12,7 @@ Stable endpoints (consumed by the agent skill and the alert layer):
   POST /correction         record a human correction bound to the current scene
   GET  /corrections        list still-active human corrections
   DELETE /corrections      clear all human corrections
-  POST /watches            register an alert watch (alerting itself is M5)
+  POST /watches            register an alert watch
   GET  /watches            list registered watches
 """
 
@@ -409,8 +409,8 @@ def create_app() -> FastAPI:
     def capture(full: int = 0, store: int = 0):
         """Mode A (on-demand): grab one fresh frame now and return the JPEG so the
         agent can read it with its own vision. No model/GPU is used unless
-        store=1. `full` (full-resolution) is honored once the M12 camera is wired
-        (M3)."""
+        store=1. `full` (full-resolution) is honored once the M12 camera is
+        wired."""
         if capture_source is None:
             raise HTTPException(status_code=503, detail="no camera configured (set VISION_CAMERA_URL)")
         try:

@@ -1,4 +1,4 @@
-"""Capability probe for diffusiongemma (milestone M0).
+"""Capability probe for diffusiongemma.
 
 Sends a folder of representative images (a workbook page, a scene, a traffic
 light) to a running OpenAI-compatible vLLM endpoint serving diffusiongemma, and

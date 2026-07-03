@@ -1,8 +1,8 @@
 """Frame sources.
 
 `DirectoryFrameSource` replays JPEG/PNG files from a folder and is used for
-offline development and tests (milestone M1). `NetworkFrameSource` pulls frames
-over HTTP from the physical AtomS3R-M12 and is refined in milestone M3.
+offline development and tests. `NetworkFrameSource` pulls frames
+over HTTP from the physical AtomS3R-M12.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class DirectoryFrameSource:
 
 
 class NetworkFrameSource:
-    """Poll a snapshot URL on the AtomS3R-M12 over HTTP (milestone M3)."""
+    """Poll a snapshot URL on the AtomS3R-M12 over HTTP."""
 
     def __init__(self, url: str, interval_ms: int = 1500) -> None:
         self.url = url
