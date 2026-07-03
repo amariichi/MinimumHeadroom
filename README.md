@@ -198,6 +198,19 @@ sequenceDiagram
   - either PortAudio (`libportaudio2`) for `sounddevice`
   - or ALSA `aplay` fallback
 
+### Hardware Tiers
+
+You do not need the full hardware set. Each tier adds capability on top of the previous one — the core experience works on a plain PC:
+
+| Tier | Hardware | What you get |
+|------|----------|--------------|
+| 0 | A Linux PC, **no GPU** | Browser 3D face, Kokoro TTS (CPU), Parakeet batch ASR (`MH_ASR_DEVICE=cpu`), mobile operator UI — the core experience |
+| 1 | + AtomS3R + Atomic Echo Base | A physical desk face with voice, push-to-talk, and hands-free mic (the RMH experience) |
+| 2 | + a mid-range NVIDIA GPU | Realtime ASR (Voxtral) and faster local inference |
+| 3 | + 32 GB VRAM GPU + AtomS3R-M12 (+ its own Echo Base) | Always-on camera perception with diffusiongemma, hierarchical situation memory, and spoken scene alerts |
+
+The 32 GB figure is the default configuration, not an architectural requirement: the vision worker talks to any OpenAI-compatible endpoint (`VISION_MODEL_URL`), so a smaller local VLM or a hosted model can serve tier 3 on lighter hardware.
+
 <a id="en-quick-start"></a>
 ## Quick Start
 

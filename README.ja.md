@@ -198,6 +198,19 @@ sequenceDiagram
   - PortAudio (`libportaudio2`) + `sounddevice`
   - または ALSA `aplay`
 
+### ハードウェア段階（Tiers）
+
+フルセットのハードウェアは必須ではありません。各段が前の段に機能を積み増す構成で、コア体験は素の PC だけで成立します:
+
+| 段 | ハードウェア | できること |
+|----|--------------|-----------|
+| 0 | Linux PC のみ（**GPU 不要**） | ブラウザの 3D 顔、Kokoro TTS（CPU）、Parakeet バッチ ASR（`MH_ASR_DEVICE=cpu`）、スマホ operator UI — コア体験 |
+| 1 | + AtomS3R + Atomic Echo Base | 声と PTT・ハンズフリーマイクを備えた物理の卓上フェイス（RMH 体験） |
+| 2 | + ミドルレンジ NVIDIA GPU | リアルタイム ASR（Voxtral）とローカル推論の高速化 |
+| 3 | + 32GB VRAM GPU + AtomS3R-M12（+ 専用 Echo Base） | diffusiongemma による常時カメラ知覚、階層化された状況メモリ、音声シーンアラート |
+
+32GB という数字は既定構成であってアーキテクチャ上の要件ではありません。vision worker は OpenAI 互換エンドポイント（`VISION_MODEL_URL`）なら何でも接続できるため、小型のローカル VLM やホスト型モデルを指せば、より軽いハードウェアでも段 3 を動かせます。
+
 <a id="ja-quick-start"></a>
 ## クイックスタート
 
