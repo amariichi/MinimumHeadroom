@@ -201,13 +201,25 @@ sequenceDiagram
 <a id="en-quick-start"></a>
 ## Quick Start
 
-> [!IMPORTANT]
-> **English users: launch with `MH_KOKORO_VOICE=af_heart`.** The default Kokoro
-> voice is `jf_alpha`, which is tuned for Japanese; English sounds noticeably
-> better with `af_heart`. Prefix any startup command with it, for example:
-> `MH_KOKORO_VOICE=af_heart ./scripts/run-operator-once.sh --profile default --audio-target browser`.
-> The Kokoro voice is shared by English and Japanese, so pick the one that
-> matches your primary language.
+### Language: Japanese / English (MH_LANG)
+
+Set the deployment language in `~/.config/minimum-headroom.env`:
+
+```bash
+MH_LANG=en
+# or
+MH_LANG=ja
+```
+
+The vision stack and operator stack read this file as defaults on the next start or restart; an already exported specific variable still wins. `MH_LANG` switches the diffusiongemma scene-description language, the default Kokoro voice (`en` → `af_heart`, `ja` → `jf_alpha`; explicit `MH_KOKORO_VOICE` wins), and the ASR fallback language.
+
+The Atom device keeps its own ASR language setting. Provision it once when changing languages:
+
+```bash
+node scripts/atoms3r-provision.mjs --asr-lang en
+```
+
+Kokoro voices are accent-bound: `jf_alpha` speaking English sounds heavily Japanese-accented, and `af_heart` speaking Japanese is similarly unnatural. Mixed-language sessions must pick one Kokoro voice. TTS auto-detects the text language per chunk, and the agent replies in the language you speak.
 
 Choose one startup path depending on your goal.
 Before starting, configure your coding agent for MCP (see [Agent Setup](#en-agent-setup)), set up the agent-specific `AGENTS.md`, and reflect `doc/examples/AGENT_RULES.md` in the agent instructions. If you want a ready-to-paste starting point, use `doc/examples/AGENTS.sample.md` as the template for your project-local `AGENTS.md`.
@@ -298,7 +310,7 @@ Then, in another terminal:
 Use this path when you want the simple face UI and signaling, without the full operator panel workflow. `run-face-app.sh` hides the operator panel by default.
 
 - If your coding agent already starts this repository's MCP server from its own MCP client config, do not also run `./scripts/run-mcp-server.sh`.
-- By default, `face-app` starts `tts-worker` for you unless `FACE_TTS_ENABLED=0` is set. The default backend is Kokoro; if the `face-app` process is launched with `TTS_ENGINE=qwen3`, the spawned worker uses the optional Qwen3 path instead. For Kokoro, the voice defaults to `jf_alpha`; set `MH_KOKORO_VOICE=af_heart` or another Kokoro voice id in the launcher environment to override it.
+- By default, `face-app` starts `tts-worker` for you unless `FACE_TTS_ENABLED=0` is set. The default backend is Kokoro; if the `face-app` process is launched with `TTS_ENGINE=qwen3`, the spawned worker uses the optional Qwen3 path instead. For Kokoro, the default voice follows `MH_LANG` (`af_heart` for English, `jf_alpha` otherwise); set `MH_KOKORO_VOICE` to override it.
 
 ### Path B: Full Mobile Operator Stack (recommended)
 
@@ -310,7 +322,7 @@ After `./scripts/setup.sh`, recommended one-shot startup:
 
 Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring. Start with `--profile default` or `--profile realtime` unless you specifically want Qwen3 TTS.
 
-- `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. `qwen3` / `qwen3-realtime` profiles work by passing `TTS_ENGINE=qwen3` into that spawned worker path. For Kokoro profiles, prefix startup with `MH_KOKORO_VOICE=af_heart` or `MH_KOKORO_VOICE=jf_alpha` to choose the shared voice for English and Japanese.
+- `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. `qwen3` / `qwen3-realtime` profiles work by passing `TTS_ENGINE=qwen3` into that spawned worker path. For Kokoro profiles, set `MH_LANG=en` or `MH_LANG=ja` for the deployment default, or set `MH_KOKORO_VOICE` when you need an explicit shared voice for English and Japanese.
 - `run-operator-once.sh` exports `MH_FACE_AGENT_ID=__operator__` / `MH_FACE_AGENT_LABEL=Operator` for the operator pane, and the integrated operator stack binds its optional MCP server to the same identity. Helper panes get their assigned helper id at spawn time; Docker-based helper commands receive it through `docker exec -e`.
 - The MCP face tools auto-fill `agent_id` from `MH_FACE_AGENT_ID` when their MCP server process has that binding, and reject mismatched explicit ids with remediation guidance. If your MCP client runs a separate unbound server, pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call, using `MH_FACE_AGENT_ID` as the source of truth.
 - `--agent-cmd` controls only the primary operator pane. `MH_AGENT_DEFAULT_CMD` is the helper-agent launch template used by `face-app` when you add helpers later. If that helper template starts with `docker exec`, Minimum Headroom inserts the per-helper `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` with `docker exec -e`; otherwise it prefixes the helper command with `env ...`. See [Operator Stack Guide](doc/guides/operator-stack.md#docker-and-helper-agent-commands) for Docker examples.

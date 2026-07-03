@@ -8,7 +8,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from .capture import AnomalyCapture
 from .engine import EngineMetadata, TtsEngine
@@ -568,10 +568,14 @@ class WorkerRuntime:
     self.current_task = None
 
 
-def resolve_kokoro_voice() -> str:
-  raw = os.environ.get('MH_KOKORO_VOICE')
+def resolve_kokoro_voice(env: Optional[Mapping[str, str]] = None) -> str:
+  values = os.environ if env is None else env
+  raw = values.get('MH_KOKORO_VOICE')
   if raw is None or raw.strip() == '':
-    return 'jf_alpha'
+    lang = (values.get('MH_LANG') or '').strip().lower()
+    # Kokoro voices are accent-bound: jf_alpha makes English heavily
+    # Japanese-accented, and af_heart does the same in reverse for Japanese.
+    return 'af_heart' if lang == 'en' else 'jf_alpha'
   return raw.strip()
 
 

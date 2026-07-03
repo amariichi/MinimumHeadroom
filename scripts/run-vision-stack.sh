@@ -80,6 +80,16 @@ SPEAKER_LOG="$LOG_DIR/vision-stack-m12-speaker.log"
 
 log() { echo "[run-vision-stack] $*"; }
 
+resolve_mh_lang_default() {
+  local raw="${1:-}"
+  raw="${raw,,}"
+  if [[ "$raw" == "en" ]]; then
+    echo "en"
+  else
+    echo "ja"
+  fi
+}
+
 is_auto_value() {
   local value="${1:-}"
   [[ -z "$value" || "${value,,}" == "auto" ]]
@@ -123,9 +133,10 @@ resolve_auto_endpoints() {
   VISION_CAMERA_RESOLVE_DEVICE_ID="${VISION_CAMERA_RESOLVE_DEVICE_ID:-$MH_M12_DEVICE_ID}"
   VISION_CAMERA_REDISCOVER_AFTER_FAILURES="${VISION_CAMERA_REDISCOVER_AFTER_FAILURES:-5}"
   M12_SPEAKER_RERESOLVE_AFTER_FAILURES="${M12_SPEAKER_RERESOLVE_AFTER_FAILURES:-5}"
+  VISION_OUTPUT_LANG="${VISION_OUTPUT_LANG:-$(resolve_mh_lang_default "${MH_LANG:-}")}"
   export MH_M12_DEVICE_ID VISION_CAMERA_URL M12_AUDIO_URL \
     VISION_CAMERA_RESOLVE_DEVICE_ID VISION_CAMERA_REDISCOVER_AFTER_FAILURES \
-    M12_SPEAKER_RERESOLVE_AFTER_FAILURES
+    M12_SPEAKER_RERESOLVE_AFTER_FAILURES VISION_OUTPUT_LANG
 }
 
 http_ok() {
@@ -277,7 +288,7 @@ else
     MH_FACE_AUTH_TOKEN="${MH_FACE_AUTH_TOKEN:-}" \
     ATOM_HEADROOM_DISCOVERY_SUBNETS="${ATOM_HEADROOM_DISCOVERY_SUBNETS:-}" \
     MH_DEVICE_REGISTRY_PATH="${MH_DEVICE_REGISTRY_PATH:-}" \
-    VISION_OUTPUT_LANG=ja \
+    VISION_OUTPUT_LANG="$VISION_OUTPUT_LANG" \
     VISION_CORRECTION_TO_MODEL=1 \
     VISION_NARRATE_CHANGES=1 \
     VISION_ALERT_ENABLED=1 \

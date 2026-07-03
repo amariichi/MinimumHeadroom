@@ -39,6 +39,14 @@ function normalizeLanguage(value, fallback = 'en') {
   return fallback;
 }
 
+function languageDefaultFromMhLang(value, fallback = 'en') {
+  const normalized = asNonEmptyString(value)?.toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  return normalized === 'en' ? 'en' : 'ja';
+}
+
 function normalizeAsrResult(payload, fallbackLanguage) {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -128,6 +136,8 @@ export function createOperatorAsrProxy(options = {}) {
   const maxBodyBytes = Number.isFinite(options.maxBodyBytes) ? Math.max(1024, Math.floor(options.maxBodyBytes)) : 10 * 1024 * 1024;
   const modelEn = asNonEmptyString(options.modelEn);
   const modelJa = asNonEmptyString(options.modelJa);
+  const env = options.env && typeof options.env === 'object' ? options.env : process.env;
+  const fallbackLanguage = languageDefaultFromMhLang(env.MH_LANG, 'en');
   const fetchImpl = typeof options.fetchImpl === 'function' ? options.fetchImpl : globalThis.fetch;
   const onBargeIn = typeof options.onBargeIn === 'function' ? options.onBargeIn : null;
   const onAcceptedSpeech = typeof options.onAcceptedSpeech === 'function' ? options.onAcceptedSpeech : null;
@@ -165,8 +175,8 @@ export function createOperatorAsrProxy(options = {}) {
       }
 
       const requestedLanguage = normalizeLanguage(
-        parsedUrl.searchParams.get('lang') ?? parsedUrl.searchParams.get('languageHint') ?? 'en',
-        'en'
+        parsedUrl.searchParams.get('lang') ?? parsedUrl.searchParams.get('languageHint'),
+        fallbackLanguage
       );
       const upstreamUrl = resolveUpstreamUrl(endpointUrl, baseUrl, requestedLanguage);
       if (!upstreamUrl) {

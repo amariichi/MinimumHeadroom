@@ -4,6 +4,52 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+MH_ENV_FILE="${MH_ENV_FILE:-$HOME/.config/minimum-headroom.env}"
+
+trim_env_loader_field() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+strip_matching_quotes() {
+  local value="$1"
+  if ((${#value} >= 2)); then
+    if [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+  fi
+  printf '%s' "$value"
+}
+
+load_env_defaults() {
+  local env_file="$1"
+  local line key value
+  [[ -f "$env_file" ]] || return 0
+
+  # Load persistent config as defaults only: caller/prefixed env wins, and
+  # this parser never sources the file because source would override it.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(trim_env_loader_field "$line")"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="$(trim_env_loader_field "${line#export}")"
+    fi
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      value="$(strip_matching_quotes "$(trim_env_loader_field "${BASH_REMATCH[2]}")")"
+      if [[ -z "${!key+x}" ]]; then
+        export "$key=$value"
+      fi
+    fi
+  done < "$env_file"
+}
+
+load_env_defaults "$MH_ENV_FILE"
+
 : "${FACE_WS_HOST:=127.0.0.1}"
 : "${FACE_WS_PORT:=8765}"
 : "${FACE_WS_PATH:=/ws}"
@@ -32,7 +78,6 @@ cd "$ROOT_DIR"
 # the single chokepoint every operator bring-up path passes through, since
 # env exported upstream does not reliably cross the operator tmux allowlist.
 : "${MH_TTS_CHUNK_MAX_CHARS:=64}"
-: "${MH_KOKORO_VOICE:=jf_alpha}"
 # TTS noise capture-on-anomaly diagnostics. 1 = save a WAV+JSON sample
 # whenever a synthesized utterance looks noise-like (capture only; never
 # alters playback). Off by default.
@@ -101,7 +146,8 @@ echo "[run-operator-stack] MH_OPERATOR_REALTIME_ASR_WS_URL=${MH_OPERATOR_REALTIM
 echo "[run-operator-stack] MH_STACK_START_REALTIME_ASR=${MH_STACK_START_REALTIME_ASR}"
 echo "[run-operator-stack] MH_STACK_START_MCP=${MH_STACK_START_MCP}"
 echo "[run-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${MH_OPERATOR_FACE_AGENT_ID}"
-echo "[run-operator-stack] MH_KOKORO_VOICE=${MH_KOKORO_VOICE}"
+echo "[run-operator-stack] MH_LANG=${MH_LANG:-<unset>}"
+echo "[run-operator-stack] MH_KOKORO_VOICE=${MH_KOKORO_VOICE:-<unset>}"
 echo "[run-operator-stack] MH_TTS_CAPTURE_ANOMALY=${MH_TTS_CAPTURE_ANOMALY}"
 echo "[run-operator-stack] MH_ATOM_VAD_BACKEND=${MH_ATOM_VAD_BACKEND}"
 echo "[run-operator-stack] MH_SILERO_VAD_BASE_URL=${MH_SILERO_VAD_BASE_URL}"
@@ -148,7 +194,7 @@ start_proc "face-app" \
   env FACE_WS_HOST="$FACE_WS_HOST" FACE_WS_PORT="$FACE_WS_PORT" FACE_WS_PATH="$FACE_WS_PATH" \
   FACE_AUDIO_TARGET="$FACE_AUDIO_TARGET" FACE_UI_MODE="$FACE_UI_MODE" FACE_OPERATOR_PANEL_ENABLED="1" MH_OPERATOR_ASR_BASE_URL="$STACK_OPERATOR_ASR_BASE_URL" \
   MH_TTS_CHUNK_MAX_CHARS="$MH_TTS_CHUNK_MAX_CHARS" \
-  MH_KOKORO_VOICE="$MH_KOKORO_VOICE" \
+  MH_KOKORO_VOICE="${MH_KOKORO_VOICE:-}" \
   MH_TTS_CAPTURE_ANOMALY="$MH_TTS_CAPTURE_ANOMALY" \
   MH_ATOM_VAD_BACKEND="$MH_ATOM_VAD_BACKEND" \
   MH_SILERO_VAD_BASE_URL="$MH_SILERO_VAD_BASE_URL" \

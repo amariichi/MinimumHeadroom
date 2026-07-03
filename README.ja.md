@@ -201,12 +201,25 @@ sequenceDiagram
 <a id="ja-quick-start"></a>
 ## クイックスタート
 
-> [!IMPORTANT]
-> **英語が主な言語の方は `MH_KOKORO_VOICE=af_heart` を付けて起動してください。** Kokoro の
-> 既定 voice は日本語向けの `jf_alpha` で、英語は `af_heart` の方が明らかに自然に聞こえます。
-> 任意の起動コマンドの前に付けます。例：
-> `MH_KOKORO_VOICE=af_heart ./scripts/run-operator-once.sh --profile default --audio-target browser`
-> Kokoro voice は英語・日本語で共通なので、主に使う言語に合わせて選んでください。
+### 言語: 日本語 / 英語 (MH_LANG)
+
+デプロイ全体の既定言語は `~/.config/minimum-headroom.env` に設定します。
+
+```bash
+MH_LANG=en
+# または
+MH_LANG=ja
+```
+
+vision stack と operator stack は、次回 start / restart 時にこのファイルを defaults として読みます。すでに環境変数で個別指定されている値は上書きされません。`MH_LANG` は diffusiongemma の scene description 言語、Kokoro の既定 voice（`en` → `af_heart`, `ja` → `jf_alpha`; 明示的な `MH_KOKORO_VOICE` が優先）、ASR fallback 言語を切り替えます。
+
+Atom 端末は ASR 言語を端末側にも保持します。言語を変えるときは一度だけ provision してください。
+
+```bash
+node scripts/atoms3r-provision.mjs --asr-lang en
+```
+
+Kokoro voice は accent に強く結びついています。`jf_alpha` の英語はかなり日本語訛りに聞こえ、`af_heart` の日本語も同じように不自然です。混在言語セッションでは Kokoro voice を 1 つ選ぶ必要があります。TTS は chunk ごとにテキスト言語を自動判定し、エージェントは話しかけられた言語で返答します。
 
 目的に合わせて起動パスを選んでください。
 開始前に、利用するコーディングエージェントで MCP 設定を行い（[エージェント設定](#ja-agent-setup) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。すぐ使えるひな形が必要なら、`doc/examples/AGENTS.sample.md` を project-local `AGENTS.md` のテンプレートとして使ってください。
@@ -295,7 +308,7 @@ token は、face-app・operator bridge・MCP forwarding を行う agent CLI を 
 これは、シンプルな face UI とシグナリングだけを使いたいとき向けです。`run-face-app.sh` は既定で operator panel を隠します。
 
 - 利用中のコーディングエージェントが MCP クライアント設定からこのリポジトリの MCP サーバーを自動起動する場合、`./scripts/run-mcp-server.sh` は二重起動しないでください。
-- 既定では `face-app` が `tts-worker` を子プロセス起動するため、`FACE_TTS_ENABLED=0` にしていない限り別ターミナルでの起動は不要です。既定 backend は Kokoro で、`face-app` 側を `TTS_ENGINE=qwen3` 付きで起動すると任意の Qwen3 worker 経路を使います。Kokoro の voice は既定で `jf_alpha` です。起動環境に `MH_KOKORO_VOICE=af_heart` など Kokoro の voice id を指定すると上書きできます。
+- 既定では `face-app` が `tts-worker` を子プロセス起動するため、`FACE_TTS_ENABLED=0` にしていない限り別ターミナルでの起動は不要です。既定 backend は Kokoro で、`face-app` 側を `TTS_ENGINE=qwen3` 付きで起動すると任意の Qwen3 worker 経路を使います。Kokoro の既定 voice は `MH_LANG` に従います（英語は `af_heart`、それ以外は `jf_alpha`）。`MH_KOKORO_VOICE` を指定すると上書きできます。
 
 ### Path B: フルモバイル Operator Stack（推奨）
 
@@ -307,7 +320,7 @@ token は、face-app・operator bridge・MCP forwarding を行う agent CLI を 
 
 これは、tmux 連携、browser PTT、terminal mirror、隠し復旧、bridge の安全な既定配線まで含む、いちばん実用的な構成です。特に Qwen3 TTS を使いたい理由がなければ、`--profile default` か `--profile realtime` から始めてください。
 
-- `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`qwen3` / `qwen3-realtime` profile は、この子起動 worker に `TTS_ENGINE=qwen3` を渡して切り替えます。Kokoro profile では `MH_KOKORO_VOICE=af_heart` または `MH_KOKORO_VOICE=jf_alpha` を起動コマンドの前に付けると、英語・日本語で共通利用する voice を選べます。
+- `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`qwen3` / `qwen3-realtime` profile は、この子起動 worker に `TTS_ENGINE=qwen3` を渡して切り替えます。Kokoro profile では `MH_LANG=en` または `MH_LANG=ja` でデプロイ既定を選び、英語・日本語で共通利用する voice を明示したい場合だけ `MH_KOKORO_VOICE` を指定します。
 - `run-operator-once.sh` は operator pane に `MH_FACE_AGENT_ID=__operator__` / `MH_FACE_AGENT_LABEL=Operator` を export し、統合 operator stack の任意起動 MCP server も同じ identity に束縛します。helper pane は spawn 時に割り当てられた helper id を受け取り、Docker 経由の helper command には `docker exec -e` でコンテナ内へ渡されます。
 - MCP face tools は MCP server process に `MH_FACE_AGENT_ID` がある場合、`agent_id` を自動補完し、明示された id が束縛値と違う場合は対応方法つきで拒否します。MCP client が別の未束縛 server を起動する構成では、`MH_FACE_AGENT_ID` を正として `face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。
 - `--agent-cmd` は primary operator pane だけを指定します。`MH_AGENT_DEFAULT_CMD` は、あとで helper を追加するときに `face-app` が使う helper-agent 起動テンプレートです。この helper テンプレートが `docker exec` で始まる場合、Minimum Headroom は helper ごとの `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` を `docker exec -e` で挿入します。Docker でない場合は `env ...` を command の前に付けます。Docker の具体例は[Operator Stack Guide](doc/guides/operator-stack.md#ja-docker-and-helper-agent-commands)を参照してください。

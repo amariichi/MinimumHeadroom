@@ -1,3 +1,6 @@
+<!-- Auto-generated from tools/voice-first-rules.md. Do not edit directly. -->
+<!-- Target CLI: Codex CLI (codex) -->
+
 <!--
   Source of truth for the voice-first rule set used in
   examples/rmh-voice-mode/{CLAUDE,AGENTS,GEMINI}.md.
