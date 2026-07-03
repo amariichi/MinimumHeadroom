@@ -143,10 +143,10 @@ flowchart TB
   Consolidate --> T3
   Consolidate --> T4
   Read --> SituationSummaries
-  SituationSummaries --> T1
-  SituationSummaries --> T2
-  SituationSummaries --> T3
-  SituationSummaries --> T4
+  T1 -- "newest 3 bands" --> SituationSummaries
+  T2 -- "newest 2 bands" --> SituationSummaries
+  T3 -- "newest band" --> SituationSummaries
+  T4 -- "newest band" --> SituationSummaries
   Recent --> Compose
   Stable --> Compose
   Stale --> Compose
