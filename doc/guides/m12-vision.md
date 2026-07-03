@@ -152,11 +152,11 @@ flowchart TB
   Stale --> Compose
   SituationSummaries --> Compose
   Compose --> Render
-  T0 --> PruneRaw
-  T1 --> PruneSummaries
-  T2 --> PruneSummaries
-  T3 --> PruneSummaries
-  T4 --> PruneSummaries
+  T0 -- "only rows beyond the keep window" --> PruneRaw
+  T1 -- "only bands beyond cap" --> PruneSummaries
+  T2 -- "only bands beyond cap" --> PruneSummaries
+  T3 -- "only bands beyond cap" --> PruneSummaries
+  T4 -- "only bands beyond cap" --> PruneSummaries
   PruneRaw --> Forgotten
   PruneSummaries --> Forgotten
 ```
