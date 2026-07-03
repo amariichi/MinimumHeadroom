@@ -41,7 +41,7 @@ The listener may have no screen in view. Speak in self-contained sentences.
 ## 3. Conversational rhythm
 
 - Default to one `face_say` per assistant turn that contains the meaningful answer.
-- Use `priority=2`, `policy="enqueue"` for normal answers.
+- Use `priority=2`, `policy="replace"` for normal answers (this is the default; `face_say` accepts **only** `policy="replace"` or `policy="interrupt"` — any other value, including `"enqueue"`, is rejected). Since you send one `face_say` per turn with the full answer, `"replace"` is correct.
 - Reserve `priority=3, policy="interrupt"` for things that genuinely need to interrupt the user — failure notices that block progress, and **permission prompts** (see §5).
 - Sparse progress nudges (long-running task heartbeats) should be `priority<=1` and **rare**; one every 20–30 seconds at most, not every step.
 - Include `message_id` and `revision = Date.now()` on every `face_say` so the face renders even when the wording is similar to a prior utterance.
