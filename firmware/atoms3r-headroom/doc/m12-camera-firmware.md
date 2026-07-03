@@ -1,15 +1,33 @@
-# AtomS3R-M12 Camera Firmware — Integration Spec (milestone M3)
+# AtomS3R-M12 Camera Firmware — Integration Spec
 
-Status: **specification only.** The AtomS3R-M12 device is not yet in hand, so
-nothing here has been flashed or run on hardware. This document pins down the
-design and the verified pin maps so that flashing day is fast and low-risk. The
-two things that genuinely require the device — confirming the camera pin map on
-real silicon and confirming that audio and camera coexist without audio glitches
-— are called out explicitly below.
+> **This is the AtomS3R-M12 (camera + voice output) firmware.** For the other
+> device — the face AtomS3R (face + voice I/O) — and how the two relate, see
+> [AtomS3R Devices](../../../doc/guides/atom-devices.md). For the M12 *software*
+> side (vision worker, situation memory), see
+> [M12 Vision Guide](../../../doc/guides/m12-vision.md).
 
-This spec extends the existing firmware project `firmware/atoms3r-headroom/`.
-See its `README.md` and `../../doc/guides/atoms3r-voice.md` for the audio/VAD
-pipeline, the WebServer patch, provisioning, and the release build.
+Status: **validated on real hardware.** This started as a specification written
+before the device was in hand; the camera firmware has since been flashed and
+run on a real AtomS3R-M12 — the camera pin map is confirmed on real silicon and
+audio and camera coexist without glitches (the mic bus is briefly borrowed for
+camera SCCB, see below). This document keeps the design detail and the verified
+pin maps as the firmware reference.
+
+This spec extends the existing firmware project `firmware/atoms3r-headroom/`
+(the `atoms3r-m12` PlatformIO env). See its `README.md` and
+`../../../doc/guides/atoms3r-voice.md` for the audio path, the WebServer patch,
+provisioning, and the release build.
+
+## 日本語（概要）
+
+これは **AtomS3R-M12（カメラ＋音声出力）** のファームウェア仕様です。もう一方の
+**顔 AtomS3R（顔＋音声入出力）** との関係は
+[AtomS3R Devices](../../../doc/guides/atom-devices.md#japanese) を、M12 の**ソフト側**
+（vision worker・状況メモリ）は
+[M12 Vision Guide](../../../doc/guides/m12-vision.md#japanese) を参照してください。
+本文書は実機で動作確認済みのファーム仕様（カメラのピンマップ、音声とカメラの共存など）
+を英語で詳述しています。M12 は同じ `firmware/atoms3r-headroom/` プロジェクトの
+`atoms3r-m12` env でビルドします（顔は `m5stack-atoms3r` env）。
 
 ## What the M12 firmware is
 

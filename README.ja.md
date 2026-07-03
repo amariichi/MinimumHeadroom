@@ -29,6 +29,7 @@
 - **Claude Code、Codex CLI、Antigravity CLI に対応** — ターミナルで動くエージェントなら何でも使えます。
 - **tmux operator bridge** がブラウザ UI とエージェントペイン間の入出力を中継します。
 - **3D フェイス + TTS + MCP シグナリング** でエージェントに声と表情を与え、状態をリアルタイムに反映します。
+- **任意の AtomS3R 卓上デバイス** — 名前のよく似た2種類の M5Stack 基板を追加できます: **AtomS3R**（顔＋音声入出力 — 話しかける物理の卓上フェイス）と **AtomS3R-M12**（カメラ＋音声出力 — 周囲状況の把握、マイク非搭載）。[AtomS3R Devices](doc/guides/atom-devices.md#japanese) を参照。
 - **M12 vision サブシステム** — AtomS3R-M12 カメラ、diffusiongemma (vLLM) captioner、階層化された situation memory、`GET /situation` による agent context 注入、M12 Echo Base への音声 alert を追加します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) と [vision-worker README](vision-worker/README.md) を参照。
 - **マルチエージェント対応**（実験的） — 分離 worktree に helper を生成し、権限プリセットとミッション追跡で管理します。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
 - **Tailscale Serve** でスマホ/タブレットから安全にリモートアクセス。
@@ -207,7 +208,7 @@ sequenceDiagram
 | 0 | Linux PC のみ（**GPU 不要**） | ブラウザの 3D 顔、Kokoro TTS（CPU）、Parakeet バッチ ASR（`MH_ASR_DEVICE=cpu`）、スマホ operator UI — コア体験 |
 | 1 | + AtomS3R + Atomic Echo Base | 声と PTT・ハンズフリーマイクを備えた物理の卓上フェイス（RMH 体験） |
 | 2 | + ミドルレンジ NVIDIA GPU | リアルタイム ASR（Voxtral）とローカル推論の高速化 |
-| 3 | + 32GB VRAM GPU + AtomS3R-M12（+ 専用 Echo Base） | diffusiongemma による常時カメラ知覚、階層化された状況メモリ、音声シーンアラート |
+| 3 | + 32GB VRAM GPU + AtomS3R-M12 +（Atomic Echo Base） | diffusiongemma による常時カメラ知覚、階層化された状況メモリ、音声シーンアラート |
 
 32GB という数字は既定構成であってアーキテクチャ上の要件ではありません。vision worker は OpenAI 互換エンドポイント（`VISION_MODEL_URL`）なら何でも接続できるため、小型のローカル VLM やホスト型モデルを指せば、より軽いハードウェアでも段 3 を動かせます。
 
@@ -226,7 +227,7 @@ MH_LANG=ja
 
 vision stack と operator stack は、次回 start / restart 時にこのファイルを defaults として読みます。すでに環境変数で個別指定されている値は上書きされません。`MH_LANG` は diffusiongemma の scene description 言語、Kokoro の既定 voice（`en` → `af_heart`, `ja` → `jf_alpha`; 明示的な `MH_KOKORO_VOICE` が優先）、ASR fallback 言語を切り替えます。
 
-Atom 端末は ASR 言語を端末側にも保持します。言語を変えるときは一度だけ provision してください。
+**顔 AtomS3R** は ASR 言語を端末側にも保持します（これは端末があなたの音声を取り込む言語です）。言語を変えるときは一度だけ再 provision してください。これは**顔 AtomS3R だけ**に適用されます — AtomS3R-M12 カメラはマイクを持たないので `--asr-lang` は関係ありません。2デバイスの違いは [AtomS3R Devices](doc/guides/atom-devices.md#japanese) を参照。
 
 ```bash
 node scripts/atoms3r-provision.mjs --asr-lang en
@@ -487,11 +488,12 @@ MCP クライアントがドット付きツール名（例: `face.event`）を�
 ## 詳細ガイド
 
 - [ドキュメント索引](doc/README.md) — guide、example、spec、firmware、vision-worker への入口
+- [AtomS3R Devices](doc/guides/atom-devices.md#japanese) — 2つの物理 Atom デバイス（顔 と M12 カメラ）の違い、どの文書がどちらのものか、`--asr-lang` の落とし穴
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) — 起動スクリプトの選び方、tmux bridge、operator UI、キーボードショートカット、batch / realtime ASR、隠し復旧、Tailscale リモート運用
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化
 - [M12 Vision Guide](doc/guides/m12-vision.md#japanese) — M12 perception flow、memory/forgetting、correction、keyword watch、音声 alert
 - [マルチエージェントガイド](doc/guides/multi-agent.md#japanese) — helper の生成、権限プリセット、ミッション割当、owner inbox、worktree 分離、セキュリティ強化
-- [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#japanese) — ハンズフリー VAD パイプライン、書き込み＋USB プロビジョニング、RMS と Silero、ADPCM、各チューニング（endSilence / 閾値 / tail / maxUtterance）、PTT、トラブルシュート
+- [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#japanese) — **顔 AtomS3R:** ハンズフリー VAD パイプライン、書き込み＋USB プロビジョニング、RMS と Silero、ADPCM、各チューニング（endSilence / 閾値 / tail / maxUtterance）、PTT、トラブルシュート
 - [Tailscale トラベルルーター手順](doc/guides/tailscale-travel-router-setup.md#japanese) — Tailscale 非対応デバイス（AtomS3R 等）を、Tailscale 対応トラベルルーター経由で PC から到達させる subnet routing の手順。**双方向の ACL**（PC→デバイス／デバイス→PC＝顔の WebSocket ポート）を解説。デバイス→PC は ACL の `src` をトラベルルーターの **LAN CIDR** にする必要がある（ルーターはデバイスの元の送信元 IP をそのまま中継するため、ノード/グループ指定だけでは一致しない）。
 
 ## オプションスキル

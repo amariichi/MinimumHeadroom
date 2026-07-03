@@ -29,6 +29,7 @@ A face and operator companion app for coding agents.
 - **Works with Claude Code, Codex CLI, and Antigravity CLI** — any agent that runs in a terminal.
 - **tmux operator bridge** relays input/output between the browser UI and the agent pane.
 - **3D face + TTS + MCP signaling** give your agent a voice and expressions that reflect its state.
+- **Optional AtomS3R desk devices** — two similarly-named M5Stack boards you can add: **AtomS3R** (face + voice I/O — the physical desk face you talk to) and **AtomS3R-M12** (camera + voice output — ambient scene awareness, no microphone). See [AtomS3R Devices](doc/guides/atom-devices.md#english).
 - **M12 vision subsystem** adds AtomS3R-M12 camera awareness: diffusiongemma (vLLM) captions, hierarchical situation memory, `GET /situation` agent-context injection, and spoken alerts through the M12 Echo Base. See [M12 Vision Guide](doc/guides/m12-vision.md#english) and [vision-worker README](vision-worker/README.md).
 - **Multi-agent support** (experimental) — spawn helper agents in isolated worktrees with permission presets and durable mission tracking. See [Multi-Agent Guide](doc/guides/multi-agent.md).
 - **Tailscale Serve** for secure remote access from phone or tablet.
@@ -207,7 +208,7 @@ You do not need the full hardware set. Each tier adds capability on top of the p
 | 0 | A Linux PC, **no GPU** | Browser 3D face, Kokoro TTS (CPU), Parakeet batch ASR (`MH_ASR_DEVICE=cpu`), mobile operator UI — the core experience |
 | 1 | + AtomS3R + Atomic Echo Base | A physical desk face with voice, push-to-talk, and hands-free mic (the RMH experience) |
 | 2 | + a mid-range NVIDIA GPU | Realtime ASR (Voxtral) and faster local inference |
-| 3 | + 32 GB VRAM GPU + AtomS3R-M12 (+ its own Echo Base) | Always-on camera perception with diffusiongemma, hierarchical situation memory, and spoken scene alerts |
+| 3 | + 32 GB VRAM GPU + AtomS3R-M12 (+ its own Atomic Echo Base) | Always-on camera perception with diffusiongemma, hierarchical situation memory, and spoken scene alerts |
 
 The 32 GB figure is the default configuration, not an architectural requirement: the vision worker talks to any OpenAI-compatible endpoint (`VISION_MODEL_URL`), so a smaller local VLM or a hosted model can serve tier 3 on lighter hardware.
 
@@ -226,7 +227,7 @@ MH_LANG=ja
 
 The vision stack and operator stack read this file as defaults on the next start or restart; an already exported specific variable still wins. `MH_LANG` switches the diffusiongemma scene-description language, the default Kokoro voice (`en` → `af_heart`, `ja` → `jf_alpha`; explicit `MH_KOKORO_VOICE` wins), and the ASR fallback language.
 
-The Atom device keeps its own ASR language setting. Provision it once when changing languages:
+The **face AtomS3R** keeps its own ASR language on-device (this is the language it captures your voice in). Re-provision it once when changing languages. This applies **only to the face AtomS3R** — the AtomS3R-M12 camera has no microphone, so `--asr-lang` does not apply to it. See [AtomS3R Devices](doc/guides/atom-devices.md#english) for the two-device distinction.
 
 ```bash
 node scripts/atoms3r-provision.mjs --asr-lang en
@@ -475,11 +476,12 @@ If your MCP client rejects tool names with dots (for example `face.event`), set 
 ## Detailed Guides
 
 - [Documentation Index](doc/README.md) — full map of repository docs, guides, examples, specs, firmware, and vision-worker references
+- [AtomS3R Devices](doc/guides/atom-devices.md#english) — the two physical Atom devices (face vs M12 camera), which docs belong to which, and the `--asr-lang` gotcha
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english) — launcher choice, tmux bridge, operator UI, keyboard shortcuts, hidden mobile recovery, batch/realtime ASR, Tailscale remote operation
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization
 - [M12 Vision Guide](doc/guides/m12-vision.md#english) — M12 perception flow, hierarchical memory and forgetting, corrections, keyword watches, and spoken alerts
 - [Multi-Agent Guide](doc/guides/multi-agent.md#english) — spawning helpers, permission presets, mission assignment, owner inbox, worktree isolation, security hardening
-- [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#english) — hands-free VAD pipeline, flashing + USB provisioning, RMS vs Silero backends, ADPCM, every tuning knob (endSilence / threshold / tail / maxUtterance), PTT, troubleshooting
+- [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#english) — **the face AtomS3R:** hands-free VAD pipeline, flashing + USB provisioning, RMS vs Silero backends, ADPCM, every tuning knob (endSilence / threshold / tail / maxUtterance), PTT, troubleshooting
 - [Tailscale Travel-Router Guide](doc/guides/tailscale-travel-router-setup.md#english) — reach a Tailscale-incapable device (e.g. AtomS3R) from the PC over a Tailscale-capable travel router via subnet routing. Covers the **bidirectional ACL**: PC→device, and device→PC (the face WebSocket port). For the device→PC direction the ACL `src` must be the travel router's **LAN CIDR** — the router relays the device's original source IP, so a node/group grant alone will not match.
 
 ## Hook Bridge (safety net for forgotten face_say)
