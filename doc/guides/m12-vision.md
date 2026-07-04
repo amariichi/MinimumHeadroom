@@ -274,6 +274,10 @@ Voxtral or any ASR path; the operator stack owns ASR.
 For live configuration and the environment-variable table, use
 [vision-worker/README.md](../../vision-worker/README.md#key-environment-variables).
 That README also has the full-stack smoke checklist and the `--check` notes.
+For the default diffusiongemma/vLLM path, the Hugging Face model-card link, and
+the JSON contract required when substituting another OpenAI-compatible vision
+endpoint, see
+[vision-worker/README.md](../../vision-worker/README.md#real-model-diffusiongemma-via-vllm).
 
 Useful health probes after the stack starts:
 
@@ -341,6 +345,7 @@ LLM による要約は、場面が待機状態のときだけ予約されます�
 `--check` は何も起動しません。永続環境変数ファイル、M12 の発見、diffusiongemma の状態、vision-worker のヘルス確認用エンドポイント、M12 警告スピーカーのポートがすでに開いているかを確認します。起動スクリプトは diffusiongemma vLLM、`vision-worker`、M12 警告スピーカーブリッジを起動または再利用します。Voxtral や ASR 経路は起動しません。ASR はオペレータースタックが担当します。
 
 ライブ設定と環境変数表は [vision-worker/README.md](../../vision-worker/README.md#key-environment-variables) を参照してください。この README には、スタック全体の簡易動作確認チェックリストと `--check` の注記もあります。
+標準の diffusiongemma/vLLM 経路、Hugging Face モデルカードへのリンク、別の OpenAI 互換視覚エンドポイントへ差し替える場合に必要な JSON 契約は [vision-worker/README.md](../../vision-worker/README.md#real-model-diffusiongemma-via-vllm) にまとめています。
 
 スタック起動後に役立つヘルス確認:
 

@@ -34,12 +34,50 @@ Then query it:
 
     uv run --project vision-worker pytest
 
-## Real model (needs a free GPU)
+## Real model: diffusiongemma via vLLM
+
+The default real-model path uses NVIDIA's NVFP4 diffusiongemma checkpoint:
+[`nvidia/diffusiongemma-26B-A4B-it-NVFP4`](https://huggingface.co/nvidia/diffusiongemma-26B-A4B-it-NVFP4).
+Use the Hugging Face model card for upstream model details, access and license
+terms, supported hardware, and current vLLM compatibility notes. In this
+repository, prefer the scripts below instead of copying raw vLLM flags from the
+model card.
+
+Prerequisites for the default Docker path:
+
+- Docker with NVIDIA GPU access.
+- A supported NVIDIA GPU for the NVFP4 checkpoint, as described by the model
+  card.
+- Optional `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` if your Hugging Face setup
+  needs one for download or rate-limit handling.
+
+Initial image pull:
 
     ./scripts/setup-vllm-diffusiongemma.sh
-    ./scripts/run-vllm-diffusiongemma.sh
+
+Start or reuse the model server:
+
+    ./scripts/run-vllm-diffusiongemma.sh start
+
+Then point the worker at it:
+
     VISION_MODEL_BACKEND=diffusiongemma VISION_MODEL_URL=http://127.0.0.1:8000/v1 \
       ./scripts/run-vision-worker.sh
+
+For the full M12 camera path, prefer `./scripts/run-vision-stack.sh`; it starts
+or reuses the vLLM server, the `vision-worker`, and the M12 alert speaker bridge
+together.
+
+Advanced users may point `VISION_MODEL_URL` and `VISION_MODEL_NAME` at another
+OpenAI-compatible vision endpoint. That endpoint must accept image+text
+`/chat/completions` requests and return one JSON object with these fields:
+`is_text`, `ocr_full`, `overview`, `changed`, and `change_from_prev`.
+`VISION_GUIDED_DECODING=1` asks vLLM to enforce this schema with `guided_json`
+when the endpoint supports it. Runtime knobs such as `VLLM_DGEMMA_PORT`,
+`VLLM_DGEMMA_GPU_MEM_UTIL`, `VLLM_DGEMMA_MAX_MODEL_LEN`, and
+`VLLM_DGEMMA_BACKEND` are intentionally documented by
+`scripts/run-vllm-diffusiongemma.sh`, which is the source of truth for the
+repository's pinned vLLM options.
 
 ## Full M12 Vision Stack
 
