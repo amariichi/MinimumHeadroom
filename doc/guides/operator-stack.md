@@ -343,7 +343,7 @@ Wrong pane is mirrored on mobile:
 
 ### どの起動スクリプトを使うか
 
-`./scripts/run-face-app.sh` は、フェイス UI と音声出力だけを使いたいときに使います。この経路では `FACE_OPERATOR_PANEL_ENABLED=0` が既定なので、operator panel は明示的に有効化しない限り表示されません。
+`./scripts/run-face-app.sh` は、フェイス画面と音声出力だけを使いたいときに使います。この経路では `FACE_OPERATOR_PANEL_ENABLED=0` が既定なので、オペレーターパネルは明示的に有効化しない限り表示されません。
 
 `./scripts/run-operator-once.sh --profile qwen3-realtime` は、現在の推奨フル構成です。tmux の実際のエージェントペインを自動で解決し、`MH_BRIDGE_TMUX_PANE` と `MH_BRIDGE_RECOVERY_TMUX_PANE` の両方を安全に設定します。
 
@@ -364,7 +364,7 @@ Wrong pane is mirrored on mobile:
 
     ./scripts/run-operator-once.sh --profile qwen3-realtime --agent-shell
 
-意図的に stack ペインをミラーしたいデバッグ用途:
+意図的にスタックペインをミラーしたいデバッグ用途:
 
     ./scripts/run-operator-once.sh --bridge-target stack
 
@@ -372,9 +372,9 @@ Wrong pane is mirrored on mobile:
 
 `FACE_AUDIO_TARGET`:
 
-- `browser`（リモート向けの推奨）: 接続中のブラウザ／AtomS3R などへのみ送出。worker のリモート先読み（既定 ~900 ms リード）とブラウザ／Atom 側 FIFO キューが有効になり、長文の文間ギャップが大幅に短くなります。PC ブラウザ・スマホブラウザ・AtomS3R いずれも対象。
-- `local`: ホストスピーカーのみ。ヘッドレス PC で worker に直接ローカル音声デバイスを叩かせたいとき。
-- `both`: ホストスピーカーで再生しつつリモートにもブロードキャスト。PC スピーカーとブラウザ／Atom を同時に使いたいとき便利だが、worker の先読みはこのモードでは **無効**（ローカル再生クロックを早めに切れない）のため、リモート側は従来の「合成→送信→再生完了待ち」の間が残ります。
+- `browser`（リモート向けの推奨）: 接続中のブラウザ／AtomS3R などへのみ送出。ワーカーのリモート先読み（既定 ~900 ms リード）とブラウザ／Atom 側 FIFO キューが有効になり、長文の文間ギャップが大幅に短くなります。PC ブラウザ・スマホブラウザ・AtomS3R いずれも対象。
+- `local`: ホストスピーカーのみ。ヘッドレス PC でワーカーに直接ローカル音声デバイスを叩かせたいとき。
+- `both`: ホストスピーカーで再生しつつリモートにもブロードキャスト。PC スピーカーとブラウザ／Atom を同時に使いたいとき便利だが、ワーカーの先読みはこのモードでは **無効**（ローカル再生クロックを早めに切れない）のため、リモート側は従来の「合成→送信→再生完了待ち」の間が残ります。
 
 `--ui-mode <auto|pc|mobile>` / `FACE_UI_MODE`:
 
@@ -384,56 +384,56 @@ Wrong pane is mirrored on mobile:
 
 `run-face-app.sh` は `FACE_OPERATOR_PANEL_ENABLED=0` が既定、`run-operator-stack.sh` は `FACE_OPERATOR_PANEL_ENABLED=1` を強制します。
 
-### フル operator stack の中身
+### フルオペレータースタックの中身
 
-`run-operator-once.sh` は tmux セッションを作成または再利用し、ウィンドウを 2 ペインに分け、0 番にエージェント、1 番に統合スタックを起動し、bridge の接続先を既定で 0 番へ向けます。
+`run-operator-once.sh` は tmux セッションを作成または再利用し、ウィンドウを 2 ペインに分け、0 番にエージェント、1 番に統合スタックを起動し、ブリッジの接続先を既定で 0 番へ向けます。
 
-また、operator pane には `MH_FACE_AGENT_ID=__operator__` と `MH_FACE_AGENT_LABEL=Operator` を export します。`run-operator-stack.sh` が任意起動 MCP server を起動する場合、その MCP server も同じ operator identity に束縛され、face tools は `agent_id=__operator__` を自動補完し、矛盾する明示 id を拒否します。helper pane は spawn 時に割り当てられた helper id を受け取り、Docker 経由の helper command には `docker exec -e` でその identity が渡されます。別の未束縛 MCP server を使う client では `face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。
+また、オペレーターペインには `MH_FACE_AGENT_ID=__operator__` と `MH_FACE_AGENT_LABEL=Operator` を export します。`run-operator-stack.sh` が任意起動 MCP サーバーを起動する場合、その MCP サーバーも同じオペレーター識別子に束縛され、フェイスツールは `agent_id=__operator__` を自動補完し、矛盾する明示 ID を拒否します。ヘルパーペインは生成時に割り当てられたヘルパー ID を受け取り、Docker 経由のヘルパーコマンドには `docker exec -e` でその識別子が渡されます。別の未束縛 MCP サーバーを使うクライアントでは `face_ping` / `face_event` / `face_say` の全呼び出しに `agent_id` を明示してください。
 
 <a id="ja-docker-and-helper-agent-commands"></a>
-### Docker と helper agent の command
+### Docker とヘルパーエージェントのコマンド
 
-primary operator の command と helper-agent の起動テンプレートは別です。
+主オペレーターのコマンドとヘルパーエージェントの起動テンプレートは別です。
 
-- `--agent-cmd <command>` は primary operator pane を起動します。
-- `MH_AGENT_DEFAULT_CMD=<command>` は、あとで helper agent を spawn するときに `face-app` が使うテンプレートです。
+- `--agent-cmd <command>` は主オペレーターペインを起動します。
+- `MH_AGENT_DEFAULT_CMD=<command>` は、あとでヘルパーエージェントを生成するときに `face-app` が使うテンプレートです。
 
-`run-operator-once.sh` は operator pane の環境に `MH_FACE_AGENT_ID=__operator__` を設定しますが、`--agent-cmd` に渡された任意の Docker command を書き換えるわけではありません。primary operator 自体を Docker 経由で動かす場合は、その command に operator identity を明示してください。
+`run-operator-once.sh` はオペレーターペインの環境に `MH_FACE_AGENT_ID=__operator__` を設定しますが、`--agent-cmd` に渡された任意の Docker コマンドを書き換えるわけではありません。主オペレーター自体を Docker 経由で動かす場合は、そのコマンドにオペレーター識別子を明示してください。
 
 ```bash
 ./scripts/run-operator-once.sh --profile realtime \
   --agent-cmd 'docker exec -it -e MH_FACE_AGENT_ID=__operator__ -e MH_FACE_AGENT_LABEL=Operator agent-container agent-cli'
 ```
 
-helper agent は `face-app` が作成し、各 helper id を知っているため扱いが異なります。`MH_AGENT_DEFAULT_CMD` が `docker exec` で始まる場合、`face-app` はコンテナ名の前に helper identity を挿入します。
+ヘルパーエージェントは `face-app` が作成し、各ヘルパー ID を知っているため扱いが異なります。`MH_AGENT_DEFAULT_CMD` が `docker exec` で始まる場合、`face-app` はコンテナ名の前にヘルパー識別子を挿入します。
 
 ```bash
 MH_AGENT_DEFAULT_CMD='docker exec -it agent-container agent-cli' \
   ./scripts/run-operator-once.sh --profile realtime
 ```
 
-`helper-1` という helper の場合、実質的には次のような起動になります。
+`helper-1` というヘルパーの場合、実質的には次のような起動になります。
 
 ```bash
 docker exec -it -e MH_FACE_AGENT_ID=helper-1 -e MH_FACE_AGENT_LABEL=helper-1 agent-container agent-cli
 ```
 
-helper テンプレートが `docker exec` でない場合は、通常の process environment として command の前に付けます。
+ヘルパーテンプレートが `docker exec` でない場合は、通常のプロセス環境としてコマンドの前に付けます。
 
 ```bash
 env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 ```
 
-これは agent process と、その process environment から起動された MCP server に identity を渡します。MCP face tools は `MH_FACE_AGENT_ID` があれば `agent_id` を自動補完し、矛盾する明示 id を対応方法つきで拒否します。別の未束縛 MCP server を使う client では、`face_ping` / `face_event` / `face_say` の全 call に `agent_id` を明示してください。
+これはエージェントプロセスと、そのプロセス環境から起動された MCP サーバーに識別子を渡します。MCP のフェイスツールは `MH_FACE_AGENT_ID` があれば `agent_id` を自動補完し、矛盾する明示 ID を対応方法つきで拒否します。別の未束縛 MCP サーバーを使うクライアントでは、`face_ping` / `face_event` / `face_say` の全呼び出しに `agent_id` を明示してください。
 
-agent process が Docker の別 network namespace で動く場合は、README の `FACE_WS_HOST=0.0.0.0` の説明も参照してください。ループバック外へ face-app をバインドする場合は `MH_FACE_AUTH_TOKEN` が必須です。stack 起動前の shell で export しておくと、`face-app`、operator bridge、stack が任意起動する MCP server が同じ token を継承します。
+エージェントプロセスが Docker の別ネットワーク名前空間で動く場合は、README の `FACE_WS_HOST=0.0.0.0` の説明も参照してください。ループバック外へ face-app をバインドする場合は `MH_FACE_AUTH_TOKEN` が必須です。スタック起動前のシェルで export しておくと、`face-app`、オペレーターブリッジ、スタックが任意起動する MCP サーバーが同じトークンを継承します。
 
 `run-operator-stack.sh` が起動するもの:
 
 - `face-app`
 - `operator-bridge`
 - batch `asr-worker`（無効化しない限り）
-- 任意の realtime ASR（有効時）
+- 任意のリアルタイム ASR（有効時）
 
 `run-operator-bridge.sh` は 1 つの tmux ペインだけをミラーし、承認済みの入力を `tmux send-keys` でそのペインへ送ります。
 
@@ -457,40 +457,40 @@ agent process が Docker の別 network namespace で動く場合は、README �
 
 `run-operator-once.sh` の profile 対応:
 
-- `--profile default`: Kokoro TTS + batch ASR のみ
-- `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
-- `--profile qwen3`: Qwen3 TTS + batch ASR のみ
-- `--profile qwen3-realtime`: Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback
+- `--profile default`: Kokoro TTS + バッチ ASR のみ
+- `--profile realtime`: Kokoro TTS + Voxtral リアルタイム ASR + Parakeet フォールバック
+- `--profile qwen3`: Qwen3 TTS + バッチ ASR のみ
+- `--profile qwen3-realtime`: Qwen3 TTS + Voxtral リアルタイム ASR + Parakeet フォールバック
 
 ### ASR モード
 
 ASR は 2 系統あります。
 
-batch ASR:
+バッチ ASR:
 
 - ブラウザが `MediaRecorder` で録音
 - `POST /api/operator/asr?lang=ja|en`
 - `face-app` から `asr-worker` へ転送
 - `asr-worker` が Parakeet で変換
-- AtomS3R の連続 VAD は WebSocket で `atom_audio_frame` PCM を送り、`face-app` で発話区間を切ってから同じ batch ASR と operator response 経路を再利用
+- AtomS3R の連続 VAD は WebSocket で `atom_audio_frame` PCM を送り、`face-app` で発話区間を切ってから同じバッチ ASR とオペレーター応答経路を再利用
 
-任意の realtime ASR:
+任意のリアルタイム ASR:
 
-- ブラウザが PCM16 チャンクを websocket で送る
-- `face-app` が Voxtral の vLLM realtime websocket へ中継
+- ブラウザが PCM16 チャンクを WebSocket で送る
+- `face-app` が Voxtral の vLLM リアルタイム WebSocket へ中継
 - 話している途中から増分テキストを表示
-- 空振りや明らかな誤認識時は batch 側へ再確認できる
+- 空振りや明らかな誤認識時はバッチ側へ再確認できる
 
-音声ターンの acknowledgement はローカルな固定テンプレートです。batch ASR が空でないターンを受理すると、`face-app` は要求または検出された ASR 言語に応じて `Checking.`、`One moment.`、`Let me check.`、`確認します。`、`少々お待ちください。`、`確認しますね。` のような短い固定フレーズを話し、同じ文を吹き出しにも表示します。文は言語と入力元ごとにローテーションするため、ミュート運用でも目で受理状態が分かります。無効化するには `MH_FIXED_ACK_ENABLED=0` を設定します。この経路では coding agent や LLM に acknowledgement 文を生成させません。
+音声ターンの受理応答はローカルな固定テンプレートです。バッチ ASR が空でないターンを受理すると、`face-app` は要求または検出された ASR 言語に応じて `Checking.`、`One moment.`、`Let me check.`、`確認します。`、`少々お待ちください。`、`確認しますね。` のような短い固定フレーズを話し、同じ文を吹き出しにも表示します。文は言語と入力元ごとにローテーションするため、ミュート運用でも目で受理状態が分かります。無効化するには `MH_FIXED_ACK_ENABLED=0` を設定します。この経路ではコーディングエージェントや LLM に受理応答文を生成させません。
 
-AtomS3R の連続 VAD は Atom firmware の `continuous_vad_enabled` 設定だけで制御されます（デバイス側のダブルタップ、または `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off` でトグル）。デバイス側 OFF のときマイクフレームは送られないので、PC 側のブリッジは常に install されたまま no-op として動きます。
+AtomS3R の連続 VAD は Atom ファームウェアの `continuous_vad_enabled` 設定だけで制御されます（デバイス側のダブルタップ、または `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off` でトグル）。デバイス側 OFF のときマイクフレームは送られないので、PC 側のブリッジは常に組み込まれたまま何もしない経路として動きます。
 
-PC 側 bridge には差し替え可能な VAD バックエンドが 2 つあります。`MH_ATOM_VAD_BACKEND` で選択:
+PC 側ブリッジには差し替え可能な VAD バックエンドが 2 つあります。`MH_ATOM_VAD_BACKEND` で選択:
 
 - `rms` (デフォルト): 組み込みの決定的 RMS エネルギーゲート。軽量で別ワーカー不要、静かな部屋向け。
-- `silero`: 各フレームを `silero-vad-worker` HTTP サービスに転送し、ML ベースで speech/非 speech を判定。駅・路上・カフェなど環境音がある場所で有効。CPU 1〜3 ms/フレーム。`scripts/run-silero-vad-worker.sh` で起動（このバックエンドを選ぶと `run-operator-stack.sh` が自動で立ち上げます）。`MH_SILERO_VAD_BASE_URL` (デフォルト `http://127.0.0.1:8092`) と `MH_SILERO_VAD_THRESHOLD` (デフォルト 0.5) で調整。
+- `silero`: 各フレームを `silero-vad-worker` HTTP サービスに転送し、ML ベースで発話/非発話を判定。駅・路上・カフェなど環境音がある場所で有効。CPU 1〜3 ms/フレーム。`scripts/run-silero-vad-worker.sh` で起動（このバックエンドを選ぶと `run-operator-stack.sh` が自動で立ち上げます）。`MH_SILERO_VAD_BASE_URL` (デフォルト `http://127.0.0.1:8092`) と `MH_SILERO_VAD_THRESHOLD` (デフォルト 0.5) で調整。
 
-AtomS3R firmware にも独自の RMS ゲート (`vad_rms`、NVS、`scripts/atoms3r-provision.mjs --vad-rms` で設定) が入っており、モバイル回線経由の帯域節約のため弱いフレームをそもそも送りません。`MH_ATOM_VAD_BACKEND=silero` を騒がしい場所で使う場合は、Silero の判別力を活かすため firmware 側ゲートを低め (~0.005) に保ちます。書き込み・USB プロビジョニング・ADPCM 圧縮・各チューニング (`MH_ATOM_VAD_END_SILENCE_MS` / `_THRESHOLD_RMS` / `_MAX_UTTERANCE_MS`、`vad_tail`)・PTT・トラブルシュートは **[AtomS3R Voice Guide](atoms3r-voice.md#japanese)** を参照。
+AtomS3R ファームウェアにも独自の RMS ゲート（`vad_rms`、NVS、`scripts/atoms3r-provision.mjs --vad-rms` で設定）が入っており、モバイル回線経由の帯域節約のため弱いフレームをそもそも送りません。`MH_ATOM_VAD_BACKEND=silero` を騒がしい場所で使う場合は、Silero の判別力を活かすためファームウェア側ゲートを低め（~0.005）に保ちます。書き込み・USB プロビジョニング・ADPCM 圧縮・各チューニング（`MH_ATOM_VAD_END_SILENCE_MS` / `_THRESHOLD_RMS` / `_MAX_UTTERANCE_MS`、`vad_tail`）・PTT・トラブルシュートは **[AtomS3R Voice Guide](atoms3r-voice.md#japanese)** を参照。
 
 主な batch ASR 変数:
 
@@ -502,10 +502,10 @@ AtomS3R firmware にも独自の RMS ゲート (`vad_rms`、NVS、`scripts/atoms
 - `MH_OPERATOR_ASR_TIMEOUT_MS`
 - `MH_OPERATOR_ASR_MODEL_JA`
 - `MH_OPERATOR_ASR_MODEL_EN`
-- `MH_FIXED_ACK_ENABLED=0`: 固定 acknowledgement 音声を無効化
+- `MH_FIXED_ACK_ENABLED=0`: 固定受理応答の音声を無効化
 - `MH_ATOM_VAD_BACKEND=rms|silero` (デフォルト `rms`): PC 側 VAD バックエンド選択
 - `MH_SILERO_VAD_BASE_URL`: silero-vad-worker URL (デフォルト `http://127.0.0.1:8092`)
-- `MH_SILERO_VAD_THRESHOLD`: Silero の speech 確率しきい値 (デフォルト `0.5`)
+- `MH_SILERO_VAD_THRESHOLD`: Silero の発話確率しきい値 (デフォルト `0.5`)
 - `MH_STACK_START_SILERO_VAD=0`: silero-vad-worker の自動起動をスキップ (外部で起動済みのとき)
 
 </details>

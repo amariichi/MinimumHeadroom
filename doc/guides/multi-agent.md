@@ -132,24 +132,24 @@ The detector posts reports; it never auto-presses keys. The operator (or the use
 
 ### 概要
 
-minimum-headroom は、分離された worktree に helper コーディングエージェントを生成する機能を備えています。各 helper は独自の tmux ペイン、顔タイル、権限設定を持ちます。operator はブラウザ UI または MCP ツールから helper を制御します。
+minimum-headroom は、分離されたワークツリーにヘルパーのコーディングエージェントを生成する機能を備えています。各ヘルパーは独自の tmux ペイン、顔タイル、権限設定を持ちます。オペレーターはブラウザ画面または MCP ツールからヘルパーを制御します。
 
-minimum-headroom の operator/helper runtime を使う場合は、`minimum-headroom-ops` スキルも導入してください。operator 主導フローで使う標準 MCP ライフサイクルと helper reporting contract をまとめています。
+minimum-headroom のオペレーター/ヘルパー実行環境を使う場合は、`minimum-headroom-ops` スキルも導入してください。オペレーター主導フローで使う標準 MCP ライフサイクルとヘルパーレポート規約をまとめています。
 
-### Helper の生成
+### ヘルパーの生成
 
 - **Desktop:** 現在エージェントバーをクリック → Agents サーフェス → **+Agent**
 - **Mobile:** 現在エージェントバーをタップ → agent list → **+Agent**
-- **+Agent** は `helper-1`, `helper-2`, ... のような読みやすい自動 id と、branch / worktree のデフォルトを使用
-- `--repo` 付きで operator を起動した場合、helper は target repository を継承
-- Desktop は operator + helper 最大 7 体を同時表示（合計 8 タイル）
-- MCP の `agent.spawn` では canonical な helper 名フィールドは `id` ですが、互換 alias として `agent_id` も受け付けます
+- **+Agent** は `helper-1`, `helper-2`, ... のような読みやすい自動 ID と、ブランチ / ワークツリーの既定値を使用
+- `--repo` 付きでオペレーターを起動した場合、ヘルパーは対象リポジトリを継承
+- Desktop はオペレーター + ヘルパー最大 7 体を同時表示（合計 8 タイル）
+- MCP の `agent.spawn` では標準のヘルパー名フィールドは `id` ですが、互換エイリアスとして `agent_id` も受け付けます
 
 ### 権限プリセット
 
 `agent.spawn` で `permission_preset`（`reviewer` / `implementer` / `full`）を指定すると、ツール承認を自動設定します。
 
-Claude Code / Antigravity CLI / Codex CLI では、これらのプリセットは各ランタイムのセットアップを補完するものであり、置き換えるものではありません。project-local の `AGENTS.md` や `doc/examples/AGENT_RULES.md` のようなエージェント指示もあわせて設定してください。
+Claude Code / Antigravity CLI / Codex CLI では、これらのプリセットは各ランタイムのセットアップを補完するものであり、置き換えるものではありません。プロジェクトローカルの `AGENTS.md` や `doc/examples/AGENT_RULES.md` のようなエージェント指示もあわせて設定してください。
 
 | プリセット | Claude Code | Antigravity CLI | Codex CLI |
 |--------|-------------|------------|-----------|
@@ -157,22 +157,22 @@ Claude Code / Antigravity CLI / Codex CLI では、これらのプリセット�
 | `implementer` | + Edit, Write, Bash; `git push` を拒否 | sandboxed commands, deny `git push`, append `--dangerously-skip-permissions` | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
 | `full` | `implementer` と同一 | `implementer` と同一 | `--dangerously-bypass-approvals-and-sandbox` |
 
-Codex のプリセット suffix は、以下の環境変数で丸ごと置き換えできます。
+Codex のプリセット末尾引数は、以下の環境変数で丸ごと置き換えできます。
 
 - `MH_CODEX_PRESET_REVIEWER`
 - `MH_CODEX_PRESET_IMPLEMENTER`
 - `MH_CODEX_PRESET_FULL`
 
-Codex コマンドが `-s read-only` または `-s workspace-write` を要求する場合、helper 生成時にサーバープロセスごとに一度だけ `timeout 15 codex sandbox -- echo __mh_userns_ok__` を実行して sandbox を事前確認します。token が確認できない場合、その sandbox mode を `-s danger-full-access` に書き換え、spawn 結果に `sandbox_fallback: true` と理由を含め、helper の status message にも downgrade の理由を残します。user namespace が制限されたホストでも、コマンド実行不能な Codex helper を無言で作らないためです。
+Codex コマンドが `-s read-only` または `-s workspace-write` を要求する場合、ヘルパー生成時にサーバープロセスごとに一度だけ `timeout 15 codex sandbox -- echo __mh_userns_ok__` を実行してサンドボックスを事前確認します。確認トークンが見つからない場合、そのサンドボックスモードを `-s danger-full-access` に書き換え、生成結果に `sandbox_fallback: true` と理由を含め、ヘルパーの状態メッセージにも権限緩和の理由を残します。user namespace が制限されたホストでも、コマンド実行不能な Codex ヘルパーを無言で作らないためです。
 
-tmux pane 作成後、helper 生成は CLI が実際に起動したかを確認します。約 15 秒間 `pane_current_command` を polling し、plain shell（`bash`, `zsh`, `sh`, `dash`, `fish`）のままなら `launch_failed` として扱います。helper record は調査用に残し、spawn 結果には pane 末尾が含まれます。
+tmux ペイン作成後、ヘルパー生成は CLI が実際に起動したかを確認します。約 15 秒間 `pane_current_command` をポーリングし、素のシェル（`bash`, `zsh`, `sh`, `dash`, `fish`）のままなら `launch_failed` として扱います。ヘルパー記録は調査用に残し、生成結果にはペイン末尾が含まれます。
 
 各ランタイムの詳細設定:
 - [Claude Code セットアップ](../examples/claude-code/README.md)
 - [Antigravity セットアップ](../examples/antigravity/README.md)
 - [Codex セットアップ](../examples/codex/config.toml)
 
-Antigravity CLI helper は、権限プリセットを使っても初回だけ対話が必要になることがあります。新規生成された worktree では mission 注入前に workspace trust prompt が出る場合があり、最初の MCP tool call でも conversation-scoped approval を求められます。生成された helper worktree を trust し、最低限 `minimum_headroom/agent_report` を許可してください。helper が face tool を呼ぶ場合は `face_ping` / `face_event` / `face_say` も個別に承認が出ることがあります。
+Antigravity CLI ヘルパーは、権限プリセットを使っても初回だけ対話が必要になることがあります。新規生成されたワークツリーではミッション注入前にワークスペース信頼プロンプトが出る場合があり、最初の MCP ツール呼び出しでも会話単位の承認を求められます。生成されたヘルパーワークツリーを信頼し、最低限 `minimum_headroom/agent_report` を許可してください。ヘルパーがフェイスツールを呼ぶ場合は `face_ping` / `face_event` / `face_say` も個別に承認が出ることがあります。
 
 ### ミッション割当と配信
 
@@ -182,38 +182,38 @@ Antigravity CLI helper は、権限プリセットを使っても初回だけ対
   - `completion_criteria` — 成功の定義
   - `timebox_minutes` — 現在のパスの制限時間
   - `max_findings` — 報告前の findings 上限
-- `agent.inject` で制御された tmux paste-buffer 注入により配信
+- `agent.inject` で制御された tmux ペーストバッファ注入により配信
 - 配信状態は `pending` → `sent_to_tmux` → `acked` / `failed` / `timeout` で追跡
-- delivery acknowledgment timeout の既定値は 120 秒です。cold start する CLI が読み込まれる前に timeout 扱いになるのを避けます
-- `agent.inject` は、pane の current command が plain shell の場合、mission text の paste を拒否して `injection_refused_shell_pane` と短い pane tail を返します。shell recovery として意図的に入力したい場合だけ `force_shell_inject: true` を指定してください
-- これらの配信状態や ack は `agent.assignment.list` で確認
-- helper からの `agent.report` の一致で ack（受領確認）
+- 配信の受領確認タイムアウトの既定値は 120 秒です。コールドスタートする CLI が読み込まれる前にタイムアウト扱いになるのを避けます
+- `agent.inject` は、ペインの現在コマンドが素のシェルの場合、ミッション文の貼り付けを拒否して `injection_refused_shell_pane` と短いペイン末尾を返します。シェル復旧として意図的に入力したい場合だけ `force_shell_inject: true` を指定してください
+- これらの配信状態や受領確認は `agent.assignment.list` で確認
+- ヘルパーからの `agent.report` の一致で受領確認
 
-### Helper レポートと Owner Inbox
+### ヘルパーレポートと Owner Inbox
 
-- helper は `agent.report` で以下のタイプで報告:
-  - `progress` — 作業中。最初の report はミッション受諾のハンドシェイク
+- ヘルパーは `agent.report` で以下のタイプで報告:
+  - `progress` — 作業中。最初のレポートはミッション受諾のハンドシェイク
   - `blocked` — owner のアクションなしでは続行不可
   - `question` — 確認が必要
   - `done` — ミッション完了
   - `review_findings` — レビュー結果の提出
-- レポートは durable な owner inbox に保存（ブラウザリロード後も維持）
+- レポートは永続化された owner inbox に保存（ブラウザリロード後も維持）
 - `owner.inbox.resolve` で解決
-- 未解決項目は helper / owner の attention を UI 上で維持
+- 未解決項目はヘルパー / オーナーの注意喚起を UI 上で維持
 
 ### フォーカスとリターゲット
 
-- タイルまたはリスト行をクリック・タップして operator の接続先を切り替え
-- `agent.focus` は表示を変更するだけで ownership は変わらない
-- helper にフォーカスしてもユーザー対面の権限は移譲されない。ユーザーに話しかけるのは operator のみ
+- タイルまたはリスト行をクリック・タップしてオペレーターの接続先を切り替え
+- `agent.focus` は表示を変更するだけで所有権は変わらない
+- ヘルパーにフォーカスしてもユーザー対面の権限は移譲されない。ユーザーに話しかけるのはオペレーターのみ
 
-### Stuck 検出と Pane 制御
+### 停止検出とペイン制御
 
-helper は CLI レベルのモーダル（ツール承認プロンプト、モデルピッカー、利用上限通知、CLI フィードバックサーベイなど）に入るとそこで停止し、内側の LLM は入力を読まなくなります。injection したミッション文はモデルに届かず、`agent.assignment.list` ではただ `delivery_state=timeout` になるだけで原因は分かりません。これを MCP クライアント側から見えて復旧可能にするために、ランタイムは3つの仕組みを提供します。
+ヘルパーは CLI レベルのモーダル（ツール承認プロンプト、モデルピッカー、利用上限通知、CLI フィードバックサーベイなど）に入るとそこで停止し、内側の LLM は入力を読まなくなります。注入したミッション文はモデルに届かず、`agent.assignment.list` ではただ `delivery_state=timeout` になるだけで原因は分かりません。これを MCP クライアント側から見えて復旧可能にするために、ランタイムは3つの仕組みを提供します。
 
-- バックグラウンドの **stuck-detector** が face-app 内で動作します（既定 5 秒間隔、`MH_HELPER_STUCK_DETECTOR=off` で無効化可能）。tick ごとに全アクティブ helper の pane 末尾を取得し、小さなパターン集合（`Do you want to proceed?` / `Switch to gpt-…` / `You've hit your usage limit` / `How's the CLI experience` / `Press enter to confirm`）と照合します。新規ヒットがあると `kind=blocked` レポートを owner inbox に投函し、`detail` に一致行と pane の周辺コンテキストを入れます。同一の `(agent, pattern, matched line)` は約 30 秒間 dedupe されるので inbox が荒れません。
-- **`agent.pane_snapshot { agent_id, tail_lines? }`** は helper の pane 末尾 N 行（既定 40、最大 400）を ANSI 除去で返します。inbox の `blocked` レポートが指し示した helper のモーダル本文を確認してから対応を決めるために使います。
-- **`agent.pane_send_key { agent_id, keys, literal? }`** は helper の pane に生の tmux キーを送信します。`keys` は印字可能 ASCII（`"2"`, `"hello world"`）と名前付きキーの allowlist（`Enter`, `Escape`, `Tab`, `BSpace`, `Space`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `C-c`, `C-m`, `C-d`）を受け付けます。`literal: true` を指定すると tmux に `-l --` を付けて文字列をテキストとして扱うので、CLI セレクタへの自由入力に向きます。このツールは **CLI モーダルへの応答用** であって、ミッション配信には使いません。ミッションは `agent.inject` を使ってください。
+- バックグラウンドの **停止検出器** が face-app 内で動作します（既定 5 秒間隔、`MH_HELPER_STUCK_DETECTOR=off` で無効化可能）。tick ごとに全アクティブヘルパーのペイン末尾を取得し、小さなパターン集合（`Do you want to proceed?` / `Switch to gpt-…` / `You've hit your usage limit` / `How's the CLI experience` / `Press enter to confirm`）と照合します。新規ヒットがあると `kind=blocked` レポートを owner inbox に投函し、`detail` に一致行とペインの周辺コンテキストを入れます。同一の `(agent, pattern, matched line)` は約 30 秒間重複排除されるので inbox が荒れません。
+- **`agent.pane_snapshot { agent_id, tail_lines? }`** はヘルパーのペイン末尾 N 行（既定 40、最大 400）を ANSI 除去で返します。inbox の `blocked` レポートが指し示したヘルパーのモーダル本文を確認してから対応を決めるために使います。
+- **`agent.pane_send_key { agent_id, keys, literal? }`** はヘルパーのペインに生の tmux キーを送信します。`keys` は印字可能 ASCII（`"2"`, `"hello world"`）と名前付きキーの許可リスト（`Enter`, `Escape`, `Tab`, `BSpace`, `Space`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `C-c`, `C-m`, `C-d`）を受け付けます。`literal: true` を指定すると tmux に `-l --` を付けて文字列をテキストとして扱うので、CLI セレクタへの自由入力に向きます。このツールは **CLI モーダルへの応答用** であって、ミッション配信には使いません。ミッションは `agent.inject` を使ってください。
 
 典型的な復旧フロー:
 
@@ -227,21 +227,21 @@ helper は CLI レベルのモーダル（ツール承認プロンプト、モ�
 
 ### Worktree 分離とセキュリティ
 
-- 各 helper は独自ブランチ上の分離された git worktree を取得
-- assignment の target paths は stream root 配下の read reference です。helper は編集と commit を、source repository checkout ではなく割り当てられた worktree 上の helper branch で行います
+- 各ヘルパーは独自ブランチ上の分離された git ワークツリーを取得
+- assignment の target paths は stream root 配下の読み取り参照です。ヘルパーは編集とコミットを、元リポジトリのチェックアウトではなく割り当てられたワークツリー上のヘルパーブランチで行います
 - `git push` は全プリセットで拒否:
   - **Claude Code:** `deniedTools` に `Bash(git push*)` を含む
   - **Antigravity / Codex:** エージェント指示で制約
-- 権限設定ファイル（例: `.claude/settings.json`）は書き込み後 `chmod 444` で保護され、helper が自身の権限を変更できない
+- 権限設定ファイル（例: `.claude/settings.json`）は書き込み後 `chmod 444` で保護され、ヘルパーが自身の権限を変更できない
 
-### Helper の削除
+### ヘルパーの削除
 
-- **Delete** ボタンで tmux ペイン、worktree、runtime record、assignment record、owner inbox record をまとめて削除
+- **Delete** ボタンで tmux ペイン、ワークツリー、実行時記録、割当記録、owner inbox 記録をまとめて削除
 - MCP 経由: `agent.delete`
 
 ### シャットダウンと復旧
 
-- 起動時の既定動作は cleanup-first です。以前の helper は自動復元せず、削除または state から purge します
-- active stream の helper は tmux / worktree / runtime state / assignment state / owner inbox state から除去されます
-- 他 repository に属する hidden helper record も、現在の repository 側 state には残さず purge します
-- 将来 resume を足す場合でも、起動時の自動復元ではなく operator の明示操作で行う想定です
+- 起動時の既定動作は cleanup-first です。以前のヘルパーは自動復元せず、削除または状態から消去します
+- active stream のヘルパーは tmux / ワークツリー / 実行時状態 / 割当状態 / owner inbox 状態から除去されます
+- 他リポジトリに属する非表示ヘルパー記録も、現在のリポジトリ側の状態には残さず消去します
+- 将来 resume を足す場合でも、起動時の自動復元ではなくオペレーターの明示操作で行う想定です

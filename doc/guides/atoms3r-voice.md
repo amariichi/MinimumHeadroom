@@ -284,7 +284,7 @@ NVS 設定（Wi-Fi・URL・VAD 設定）は再書き込みでも保持されま�
 ### リリース用イメージのビルド（メンテナ向け）
 
 通常ビルドは `headroom_config.local.h`（あなたの Wi-Fi・認証トークン・PC の URL）を文字列
-としてバイナリに焼き込みます。自分の端末用なら問題ありませんが、**そのバイナリを commit
+としてバイナリに焼き込みます。自分の端末用なら問題ありませんが、**そのバイナリをコミット
 したり共有したりしないでください**。ブラウザインストール用の秘密なしバンドルは、プレース
 ホルダの example 設定でビルドします：
 
@@ -293,10 +293,10 @@ scripts/build-release-firmware.sh        # -> dist/atoms3r-firmware/
 ```
 
 このスクリプトは example 設定を強制し、**`local.h` の実値が1つでもバイナリに漏れていれば
-ビルドを fail で止め**、esp-web-tools 用の成果物（`bootloader.bin`／`partitions.bin`／
+ビルドを失敗扱いで止め**、esp-web-tools 用の成果物（`bootloader.bin`／`partitions.bin`／
 `boot_app0.bin`／`firmware.bin`）・`manifest.json`・`index.html` インストールページを出力します。
 実 Wi-Fi/トークンは端末の NVS にあり、これら app 成果物には含まれないので、バンドルに
-秘密は入りません（書き込み後に端末側で provision。下記セットアップポータル参照）。
+秘密は入りません（書き込み後に端末側でプロビジョニング。下記セットアップポータル参照）。
 
 ### ブラウザ簡易インストール（ツール不要）
 
@@ -328,7 +328,7 @@ python3 -m http.server 8099        # 空いているポートなら何でも可
    自動で起動します。
 2. スマホ/PC から端末の Wi-Fi アクセスポイント **`RMH-SETUP-XXXX`** に接続。
 3. キャプティブ画面が開きます（または AP の IP、通常 `http://192.168.4.1` を開く）。
-4. Wi-Fi SSID/パスワードと Face HTTP base / WebSocket URL（任意で mDNS host・認証トークン・
+4. Wi-Fi SSID/パスワードと Face HTTP base / WebSocket URL（任意で mDNS ホスト・認証トークン・
    VAD 設定）を入力し、**Save** して再起動。
 
 **項目リファレンス** — 必須は3つだけ。残りは既定のままでOK：
@@ -338,13 +338,13 @@ python3 -m http.server 8099        # 空いているポートなら何でも可
 | Wi-Fi SSID / password（#1〜#3） | 繋ぐネットワーク（上から順に試行） | **必須** |
 | Face HTTP base / WebSocket URL | PC の `:8765` — `http://<pc>:8765` と `ws://<pc>:8765/ws`。屋外も使うなら安定アドレス（例: Tailscale IP）を指定 | **必須** |
 | Auth token | `MH_FACE_AUTH_TOKEN` の値（空だと PC が 401） | **必須** |
-| PC mDNS host | 例 `my-pc.local` — 自宅LANで PC の IP を自動追従。空で無効 | 任意 |
+| PC mDNS host | 例 `my-pc.local` — 自宅 LAN で PC の IP を自動追従。空で無効 | 任意 |
 | **Continuous hands-free VAD**（チェック） | **ハンズフリーにするならチェック**（発話を検出して自動送信）。外すと PTT（長押し）専用。見落とし注意。 | 任意 |
 | Firmware VAD RMS threshold | 端末側エネルギーゲート。バックエンドに合わせる：**RMS（既定）→ ~0.025**／**Silero → ~0.005**（低くして PC の Silero に微弱フレームを渡す） | 既定 |
 | VAD audio encoding | `pcm16`（既定）／`ima_adpcm`（4:1、モバイル・Silero 向け） | 既定 |
 | Device ID / agent ID / ASR / TTS / 回転 / pose | 妥当な既定値。必要が無ければそのまま | 既定 |
 
-VAD **バックエンド**（RMS / Silero）は PC 側の選択で、**既定は RMS**。Silero は opt-in
+VAD **バックエンド**（RMS / Silero）は PC 側の選択で、**既定は RMS**。Silero は任意有効化
 （`silero-vad-worker` を導入し `MH_ATOM_VAD_BACKEND=silero`。下の *バックエンド: RMS と
 Silero* 参照）。端末側の *Firmware VAD RMS threshold* はバックエンドに合わせる（RMS≈0.025／
 Silero≈0.005）。
@@ -388,15 +388,15 @@ VAD 系フラグ: `--vad-on` / `--vad-off`、`--vad-rms <0..1>`、`--vad-tail <0
 
 - **rms** — エネルギー閾値。境界の判定が速く CPU も軽い。静かな部屋なら十分。声と
   大きな非発話音は区別しません。
-- **silero** — フレーム毎に ML で speech/非 speech 判定（ワーカー側 1〜3 ms/フレーム）。
+- **silero** — フレーム毎に ML で発話/非発話判定（ワーカー側 1〜3 ms/フレーム）。
   路上・駅・カフェの環境音に強い。初回のみ `uv sync --project silero-vad-worker`。
   このバックエンド選択時はスタックが `:8092` でワーカーを自動起動します
   （`MH_STACK_START_SILERO_VAD`）。
 
-Silero は声の余韻も speech と判定するため**境界がやや遅め**。静かな部屋ではむしろ
+Silero は声の余韻も発話と判定するため**境界がやや遅め**。静かな部屋ではむしろ
 RMS の方がキビキビします。
 
-### チューニング — PC 側（env、デバイス再起動不要）
+### チューニング — PC 側（環境変数、デバイス再起動不要）
 
 共有 env ファイル（`~/.config/minimum-headroom.env`）に設定し、
 `scripts/restart-operator-stack-in-place.sh` でスタック再起動:
@@ -424,10 +424,10 @@ RMS の方がキビキビします。
 - ファームのゲートと PC の RMS バックエンドは**同一の RMS 式**なので、両方とも実際の
   発話エネルギーより下に置く必要があります。立ち上がりを切らないよう、ファーム側は
   PC 閾値より少し下に。共有既定の 0.025 だとマイクを口元に近づける必要がありました。
-- **`endSilenceMs` は PC 側だけのノブ**です。ブリッジの受信ギャップ・タイマーが、
+- **`endSilenceMs` は PC 側だけの調整値**です。ブリッジの受信ギャップ・タイマーが、
   デバイスが送信を止めても最終フレームから `endSilenceMs` 後に確定するため、`vad_tail`
   は `endSilenceMs` を超える必要がなくなりました（余韻を運ぶだけ）。ポーズ耐性は
-  env ＋スタック再起動だけで変更でき、デバイス再起動は不要です。
+  環境変数＋スタック再起動だけで変更でき、デバイス再起動は不要です。
 - `vad_rms > 0` ＋ 非ゼロの `vad_tail` で、**待機中は送信ゼロ**かつ**ポーズで途切れ
   ない**を両立します。
 
@@ -457,21 +457,21 @@ RMS の方がキビキビします。
 ### トラブルシュート
 
 - **エンコード列は動くのに文字起こしが出ない** — 多くはデバイスを何度も再起動した後の
-  ブリッジセッション古化。`scripts/restart-operator-stack-in-place.sh` で解消、デバイス
+  ブリッジセッションの古い状態。`scripts/restart-operator-stack-in-place.sh` で解消、デバイス
   はクリーンに再接続します。
 - **VAD が勝手にオフ**（`RMHCFG?` で `vad_on=false`）— 画面の単タップで無効化された
   状態。`--vad-on --reboot` で再プロビジョン。書き込み後にも起きがちです。
 - **PC の IP が変わった**（DHCP）— 今はほぼ自動です。デバイスは起動時に **mDNS** で PC の
   現 IP を解決して `ws_url`＋`http_base` を書き換え（`--mdns-host <PCのホスト名>.local` で
-  プロビジョン、自宅 LAN 用）、PC 側 bridge は `device_id` で**デバイスを自動発見**
-  （`ATOM_HEADROOM_DISCOVERY_SUBNETS` で routed なサブネット＝トラベルルーター LAN 等を
+  プロビジョニング、自宅 LAN 用）、PC 側ブリッジは `device_id` で**デバイスを自動発見**
+  （`ATOM_HEADROOM_DISCOVERY_SUBNETS` で経路設定済みのサブネット＝トラベルルーター LAN 等を
   探索対象に追加、端末が移動しても自己修復）。mDNS はサブネットを越えないので、屋外用に
   静的 `ws_url`/`http_base` のフォールバックは安定アドレス（例: Tailscale IP）にしておき
   ます。それでも音声 WS が切れるときは PC 側で
-  `ss -tn state established | grep :8765 | grep -v 127.0.0.1`（peer 無し＝断）を確認し、
+  `ss -tn state established | grep :8765 | grep -v 127.0.0.1`（接続相手なし＝断）を確認し、
   手動フォールバックとして `--ws-url`/`--http-base` を再プロビジョン。リモート（Tailscale）
   では Atom→PC の WS に ACL 許可も必要 —
   [Tailscale トラベルルーター手順](tailscale-travel-router-setup.md) を参照。
 - **TTS がホワイトノイズ／無線機のような音**になる（発話と TTS がかち合った時）— ES8311
-  の ADC→DAC 切替の settle レース。マイク→スピーカー切替後に 30 ms の DAC settle を入れて
+  の ADC→DAC 切替時の安定化待ち競合。マイク→スピーカー切替後に 30 ms の DAC 安定化待ちを入れて
   緩和済み。間欠的。
