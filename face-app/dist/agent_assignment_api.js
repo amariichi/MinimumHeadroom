@@ -82,6 +82,7 @@ function statusCodeFromError(error) {
     case 'agent_not_found':
       return 404;
     case 'invalid_state':
+    case 'injection_refused_shell_pane':
       return 409;
     default:
       return 500;
@@ -269,6 +270,7 @@ export function renderAssignmentPrompt(assignment, options = {}) {
     `- Stream root: ${streamRoot ?? '(not available)'}.`,
     `- Target paths are stream-root anchored: ${targetPathDescription}.`,
     '- Read the exact target path under the stream root even if it sits outside your helper worktree.',
+    '- Target paths are READ references; make all edits and commits inside the assigned worktree on the helper branch, never in the source repository checkout.',
     `- Timebox: ${assignment.timebox_minutes ?? '(not specified)'} minute(s).`,
     `- Completion criteria: ${assignment.completion_criteria ?? '(not specified)'}.`,
     `- Max findings this pass: ${assignment.max_findings ?? '(not specified)'}.`,
@@ -307,6 +309,7 @@ export function renderAssignmentPrompt(assignment, options = {}) {
   }
   if (targetPaths.length > 0) {
     lines.push(`Target paths (stream-root anchored): ${targetPathDescription}`);
+    lines.push('Target paths are READ references; make all edits and commits inside the assigned worktree on the helper branch, never in the source repository checkout.');
   }
   if (assignment.expected_output) {
     lines.push(`Expected output: ${assignment.expected_output}`);
@@ -329,6 +332,7 @@ export function renderAssignmentPrompt(assignment, options = {}) {
   lines.push('Scoping rules:');
   lines.push('- Start with the minimum files or commands needed to answer the goal.');
   lines.push('- If target paths are given, do not roam outside them without explaining why in your next report.');
+  lines.push('- Target paths are READ references; make all edits and commits inside the assigned worktree on the helper branch, never in the source repository checkout.');
   lines.push('- Prefer returning one concrete result quickly unless the owner explicitly asked for a broader sweep.');
   lines.push('- If max_findings is 1 or the completion criteria say "one finding or done", stop after the first qualifying result and report it immediately.');
   lines.push('- If no qualifying finding appears within the scoped pass, send done with a concise no-findings summary instead of waiting silently.');
@@ -413,10 +417,11 @@ export function createAgentAssignmentApi(options = {}) {
           const text = renderAssignmentPrompt(assignment, {
             followup_mode: followupMode
           });
-          const ackTimeoutMs = parseInteger(body.ack_timeout_ms, 20_000, 1000);
+          const ackTimeoutMs = parseInteger(body.ack_timeout_ms, 120_000, 1000);
           const submit = normalizeBoolean(body.submit, true);
           const reinforceSubmit = normalizeBoolean(body.reinforce_submit, false);
           const probeBeforeSend = normalizeBoolean(body.probe_before_send, false);
+          const forceShellInject = normalizeBoolean(body.force_shell_inject, false);
           const rescueSubmitIfBuffered = normalizeBoolean(body.rescue_submit_if_buffered, false);
           const deliveryId = asNonEmptyString(body.delivery_id) ?? randomUUID();
 
@@ -426,6 +431,7 @@ export function createAgentAssignmentApi(options = {}) {
               submit,
               reinforce_submit: reinforceSubmit,
               probe_before_send: probeBeforeSend,
+              force_shell_inject: forceShellInject,
               probe_timeout_ms: body.probe_timeout_ms,
               probe_poll_ms: body.probe_poll_ms,
               rescue_submit_if_buffered: rescueSubmitIfBuffered,

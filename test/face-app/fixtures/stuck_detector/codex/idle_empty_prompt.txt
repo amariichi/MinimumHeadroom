@@ -1,10 +1,10 @@
 export MH_FACE_AGENT_ID='helper-1' MH_FACE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response'
 env MH_FACE_AGENT_ID='helper-1' MH_FACE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response' codex
--a untrusted
+-s read-only -a never
 user@devbox:~/github/minimum-headroom/.agent/worktrees/helper-1$ export MH_FACE_AGENT_ID='helper-1' MH
 _FACE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response'
 user@devbox:~/github/minimum-headroom/.agent/worktrees/helper-1$ env MH_FACE_AGENT_ID='helper-1' MH_FA
-CE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response' codex -a untrusted
+CE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response' codex -s read-only -a never
 ⚠ Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.
 
 ╭─────────────────────────────────────────────────╮
@@ -20,7 +20,6 @@ CE_AGENT_LABEL='helper-1' MH_HOOK_SUPPRESS_EVENTS='idle_after_response' codex -a
 › Explain this codebase
 
   gpt-5.5 high · ~/github/minimum-headroom/.agent/worktrees/helper-1
-
 
 
 

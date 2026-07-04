@@ -10,10 +10,11 @@ when the agent forgets to call `face_say` voluntarily.
 
 - `claude-settings.json.example` — paste into `~/.claude/settings.json` (merge
   with existing `hooks` block). Wires Claude Code's `Notification` and `Stop`
-  events.
+  events, and optionally injects the M12 situation/companion brief through
+  `UserPromptSubmit`.
 - `codex-config.toml.example` — paste into `~/.codex/config.toml`. Wires the new
-  Codex `hooks` system (`PermissionRequest` + `Stop`) and keeps the legacy
-  `notify` line as a fallback.
+  Codex `hooks` system (`PermissionRequest`, `UserPromptSubmit`, and `Stop`) and
+  keeps the legacy `notify` line as a fallback.
 - `antigravity-hooks.json.example` — copy into an Antigravity `hooks.json`. Wires `Stop` and includes a disabled `PreToolUse` approval-attention example.
 
 ## Codex-specific: trust grant required (one time, user-level)
@@ -40,7 +41,7 @@ It spawns Codex inside a private tmux server, opens the `/hooks` lifecycle brows
 
 Either way Codex writes a SHA-256 hash under `[hooks.state.<key>]` in `~/.codex/config.toml`. From that point on every Codex session for that user — operator and every helper — will execute the hooks. Re-grant only when you change a hook's command or matcher (the hash is identity-based; editing the command invalidates the stored hash).
 
-Note: the feature flag is `[features] hooks = true`. Codex < 0.131 also accepts the deprecated alias `codex_hooks = true` with a startup warning.
+Note: the feature flag is `[features] hooks = true`. Codex < 0.131 also accepts the deprecated alias `codex_hooks = true` with a startup warning. For optional M12 situation/companion brief injection, use `scripts/situation-context-hook-codex.mjs`; it returns `UserPromptSubmit.hookSpecificOutput.additionalContext` JSON around the plain text produced by `scripts/situation-context-hook.sh`.
 
 Source: `codex-rs/hooks/src/engine/discovery.rs` (`HookTrustStatus` filter), `codex-rs/tui/src/bottom_pane/hooks_browser_view.rs` (`t` keymap), and `codex-rs/features/src/legacy.rs` (alias) in <https://github.com/openai/codex>.
 
@@ -54,13 +55,16 @@ Source: `codex-rs/hooks/src/engine/discovery.rs` (`HookTrustStatus` filter), `co
   helpers; for the operator agent it is set by `scripts/run-operator-once.sh`.
 - Replace `/abs/path/to/scripts/mh-hook.mjs` in every example with the absolute
   path to `scripts/mh-hook.mjs` in your clone.
+- The Claude `UserPromptSubmit` situation hook only emits context when the
+  launched process has `MH_SITUATION_INJECT=1`. Set `VISION_BASE_URL` only if
+  your vision worker is not at `http://127.0.0.1:8095`.
 - Templates (the lines spoken on each event) live at
   `~/.minimum-headroom/face-templates.json`. If the file is absent, the
   built-in defaults (Japanese + English) are used.
 
 ## Output discipline
 
-`mh-hook.mjs` always exits `0`. For Claude Code and Codex it writes nothing to stdout, preserving their hook contracts. For Antigravity CLI, `--runtime antigravity` writes the minimal JSON that Antigravity expects for `PreToolUse` and `Stop` hooks while still forwarding the face hook payload.
+`mh-hook.mjs` always exits `0`. For Claude Code and Codex it writes nothing to stdout, preserving their hook contracts. Claude's M12 `UserPromptSubmit` context, when enabled, comes from `scripts/situation-context-hook.sh`, not from `mh-hook.mjs`. For Antigravity CLI, `--runtime antigravity` writes the minimal JSON that Antigravity expects for `PreToolUse` and `Stop` hooks while still forwarding the face hook payload.
 
 This is required because:
 
@@ -98,8 +102,8 @@ falling back to `MH_FACE_LANG` when the agent has not spoken yet.
 
 ### 同梱ファイル
 
-- `claude-settings.json.example` — `~/.claude/settings.json` にマージ。Claude Code の `Notification` / `Stop` イベントを配線。
-- `codex-config.toml.example` — `~/.codex/config.toml` に追記。Codex の新 `hooks` 系（`PermissionRequest` + `Stop`）を配線。互換のため legacy `notify` フォールバック行もコメント付きで掲載。
+- `claude-settings.json.example` — `~/.claude/settings.json` にマージ。Claude Code の `Notification` / `Stop` イベントと、任意の M12 状況・会話ブリーフ `UserPromptSubmit` 注入を配線。
+- `codex-config.toml.example` — `~/.codex/config.toml` に追記。Codex の新 `hooks` 系（`PermissionRequest` + `UserPromptSubmit` + `Stop`）を配線。互換のため legacy `notify` フォールバック行もコメント付きで掲載。
 - `antigravity-hooks.json.example` — Antigravity の `hooks.json` として利用。`Stop` と、無効化済みの `PreToolUse` 承認通知例を含みます。
 
 ### Codex 固有：trust 付与は1回だけ・user 単位・helper にも自動継承
@@ -126,7 +130,7 @@ trust は user 単位で `~/.codex/config.toml` の `[hooks.state.*]` に永続�
 
 どちらの方法でも、Codex は `[hooks.state.<key>]` に SHA-256 ハッシュを書き込みます。再付与が必要になるのは hook の command や matcher を **編集したとき** だけ（ハッシュが変わって untrusted に戻る）。
 
-機能フラグは `[features] hooks = true`。Codex < 0.131 では deprecated alias の `codex_hooks = true` も受け付けますが起動時に警告が出ます。
+機能フラグは `[features] hooks = true`。Codex < 0.131 では deprecated alias の `codex_hooks = true` も受け付けますが起動時に警告が出ます。M12 の状況・会話ブリーフ注入では `scripts/situation-context-hook-codex.mjs` を使ってください。この wrapper は `scripts/situation-context-hook.sh` が出した plain text を `UserPromptSubmit.hookSpecificOutput.additionalContext` JSON に包んで返します。
 
 ソース：`codex-rs/hooks/src/engine/discovery.rs`（`HookTrustStatus` フィルタ）、`codex-rs/tui/src/bottom_pane/hooks_browser_view.rs`（`t` キーマップ）、`codex-rs/features/src/legacy.rs`（alias 定義）。<https://github.com/openai/codex>
 
@@ -135,11 +139,14 @@ trust は user 単位で `~/.codex/config.toml` の `[hooks.state.*]` に永続�
 - face-app と MCP server が起動していること（operator stack が両方を立ち上げます）。動いていない場合、wrapper は stderr に1行残して exit 0 で抜けるので agent runtime 側は止まりません。
 - `MH_FACE_AGENT_ID` が agent process の環境変数として設定されていること。`scripts/run-bound-mcp-server.sh` が helper 用に、`scripts/run-operator-once.sh` が operator 用に設定済みです。
 - 設定例の `/abs/path/to/scripts/mh-hook.mjs` は各自の clone の絶対パスに置換してください。
+- Claude の `UserPromptSubmit` 状況 hook は、起動した process に
+  `MH_SITUATION_INJECT=1` がある場合だけ文脈を出力します。vision worker が
+  `http://127.0.0.1:8095` 以外にある場合だけ `VISION_BASE_URL` も設定してください。
 - 発話テンプレートは `~/.minimum-headroom/face-templates.json` に置けます。無ければ組込みデフォルト（日本語＋英語）が使われます。
 
 ### 出力規律（重要）
 
-`mh-hook.mjs` は **どんな状況でも exit 0** に固定されています。Claude Code / Codex では stdout に何も出しません。Antigravity CLI では `--runtime antigravity` のときだけ、`PreToolUse` / `Stop` が要求する最小 JSON を stdout に返しながら face hook payload を転送します。
+`mh-hook.mjs` は **どんな状況でも exit 0** に固定されています。Claude Code / Codex では stdout に何も出しません。Claude の M12 `UserPromptSubmit` 文脈注入は `mh-hook.mjs` ではなく `scripts/situation-context-hook.sh` が担当します。Antigravity CLI では `--runtime antigravity` のときだけ、`PreToolUse` / `Stop` が要求する最小 JSON を stdout に返しながら face hook payload を転送します。
 
 理由：
 

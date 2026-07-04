@@ -88,6 +88,100 @@ test('operator ASR proxy converts binary upload to JSON request and routes by la
   assert.equal(body.confidence, 0.91);
 });
 
+test('operator ASR proxy uses MH_LANG as the query language fallback', async () => {
+  const captured = [];
+  const proxy = createOperatorAsrProxy({
+    baseUrl: 'http://127.0.0.1:8091',
+    env: { MH_LANG: 'ja' },
+    fetchImpl: async (url, options) => {
+      captured.push({ url: String(url), options });
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: '了解', confidence: 0.8 });
+        }
+      };
+    }
+  });
+
+  const request = createMockRequest({
+    method: 'POST',
+    url: '/api/operator/asr',
+    headers: { 'content-type': 'audio/webm' },
+    body: Buffer.from('sample-audio')
+  });
+  const response = createMockResponse();
+
+  await proxy.handleHttpRequest(request, response);
+  assert.equal(captured.length, 1);
+  assert.match(captured[0].url, /\/v1\/asr\/ja$/);
+  const body = JSON.parse(response.result().body);
+  assert.equal(body.language, 'ja');
+});
+
+test('operator ASR proxy keeps explicit query language over MH_LANG', async () => {
+  const captured = [];
+  const proxy = createOperatorAsrProxy({
+    baseUrl: 'http://127.0.0.1:8091',
+    env: { MH_LANG: 'ja' },
+    fetchImpl: async (url) => {
+      captured.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: 'hello', confidence: 0.8 });
+        }
+      };
+    }
+  });
+
+  const request = createMockRequest({
+    method: 'POST',
+    url: '/api/operator/asr?lang=en',
+    headers: { 'content-type': 'audio/webm' },
+    body: Buffer.from('sample-audio')
+  });
+  const response = createMockResponse();
+
+  await proxy.handleHttpRequest(request, response);
+  assert.equal(captured.length, 1);
+  assert.match(captured[0], /\/v1\/asr\/en$/);
+  const body = JSON.parse(response.result().body);
+  assert.equal(body.language, 'en');
+});
+
+test('operator ASR proxy defaults to English when MH_LANG is unset', async () => {
+  const captured = [];
+  const proxy = createOperatorAsrProxy({
+    baseUrl: 'http://127.0.0.1:8091',
+    env: {},
+    fetchImpl: async (url) => {
+      captured.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: 'hello', confidence: 0.8 });
+        }
+      };
+    }
+  });
+
+  const request = createMockRequest({
+    method: 'POST',
+    url: '/api/operator/asr',
+    headers: { 'content-type': 'audio/webm' },
+    body: Buffer.from('sample-audio')
+  });
+  const response = createMockResponse();
+
+  await proxy.handleHttpRequest(request, response);
+  assert.equal(captured.length, 1);
+  assert.match(captured[0], /\/v1\/asr\/en$/);
+});
+
 test('operator ASR proxy returns 503 when upstream is not configured', async () => {
   const proxy = createOperatorAsrProxy({
     baseUrl: '',

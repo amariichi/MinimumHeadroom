@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.19.1';
+const SERVER_VERSION = '1.20.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_AUTH_TOKEN = (() => {
@@ -25,6 +25,11 @@ const FACE_HTTP_BASE_URL = (() => {
   } catch {
     return 'http://127.0.0.1:8765';
   }
+})();
+const VISION_BASE_URL = (() => {
+  const raw = process.env.VISION_BASE_URL;
+  const value = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : 'http://127.0.0.1:8095';
+  return value.replace(/\/+$/, '');
 })();
 const TOOL_NAME_STYLE = (process.env.MCP_TOOL_NAME_STYLE ?? 'dot').toLowerCase() === 'underscore' ? 'underscore' : 'dot';
 const DEFAULT_SAY_TTL_MS = (() => {
@@ -145,6 +150,33 @@ const BASE_TOOL_DEFINITIONS = [
         session_id: { type: ['string', 'null'] },
         runtime: { type: ['string', 'null'], enum: ['claude', 'codex', 'antigravity', null] },
         meta: { type: 'object' }
+      }
+    }
+  },
+  {
+    name: 'vision.situation',
+    description: 'Read the AtomS3R-M12 vision-worker situation digest from the host side. Use this instead of inferring camera state from processes, browser tabs, or screenshots.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      required: [],
+      properties: {
+        format: { type: ['string', 'null'], enum: ['text', 'json', null] },
+        since: { type: ['string', 'null'] },
+        timeout_ms: { type: ['integer', 'null'], minimum: 100, maximum: 10000 }
+      }
+    }
+  },
+  {
+    name: 'vision.look',
+    description: 'Ask vision-worker to capture one fresh AtomS3R-M12 frame and describe it. This is a deliberate fresh look; prefer vision.situation for cheap context.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      required: [],
+      properties: {
+        store: { type: ['boolean', 'null'] },
+        timeout_ms: { type: ['integer', 'null'], minimum: 1000, maximum: 60000 }
       }
     }
   },
@@ -387,6 +419,12 @@ function canonicalizeToolName(toolName) {
   if (toolName === 'face_hook') {
     return 'face.hook';
   }
+  if (toolName === 'vision_situation') {
+    return 'vision.situation';
+  }
+  if (toolName === 'vision_look') {
+    return 'vision.look';
+  }
   if (toolName === 'agent_list') {
     return 'agent.list';
   }
@@ -620,6 +658,7 @@ function redactedUrl(rawUrl) {
 }
 
 const FACE_WS_DISPLAY_URL = redactedUrl(FACE_WS_URL);
+const VISION_DISPLAY_URL = redactedUrl(VISION_BASE_URL);
 
 async function callFaceHttp(pathname, options = {}) {
   const url = new URL(pathname, `${FACE_HTTP_BASE_URL}/`);
@@ -636,6 +675,30 @@ async function callFaceHttp(pathname, options = {}) {
   });
   const payload = await response.json().catch(() => null);
   return { response, payload, url: url.toString() };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 2000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function callVision(pathname, options = {}) {
+  const url = new URL(pathname, `${VISION_BASE_URL}/`);
+  const timeoutMs = options.timeout_ms ?? 2000;
+  const response = await fetchWithTimeout(url, {
+    method: options.method ?? 'GET',
+    headers: options.headers,
+    body: options.body
+  }, timeoutMs);
+  return { response, url: url.toString() };
 }
 
 async function forwardToFace(payload, options = {}) {
@@ -887,6 +950,36 @@ function normalizePingPayload(rawArguments) {
     ts: Date.now()
   };
   return { payload, identity };
+}
+
+function normalizeVisionSituationPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const format = args.format ?? 'text';
+  if (format !== 'text' && format !== 'json') {
+    throw new Error('format must be "text" or "json"');
+  }
+  const since = args.since ?? null;
+  if (since !== null && typeof since !== 'string') {
+    throw new Error('since must be string or null');
+  }
+  const timeoutMs = optionalInteger(args, 'timeout_ms', 2000);
+  if (timeoutMs < 100 || timeoutMs > 10000) {
+    throw new Error('timeout_ms must be between 100 and 10000');
+  }
+  return { format, since, timeout_ms: timeoutMs };
+}
+
+function normalizeVisionLookPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const store = args.store ?? true;
+  if (typeof store !== 'boolean') {
+    throw new Error('store must be boolean or null');
+  }
+  const timeoutMs = optionalInteger(args, 'timeout_ms', 30000);
+  if (timeoutMs < 1000 || timeoutMs > 60000) {
+    throw new Error('timeout_ms must be between 1000 and 60000');
+  }
+  return { store, timeout_ms: timeoutMs };
 }
 
 function normalizeAgentReportPayload(rawArguments) {
@@ -1279,6 +1372,92 @@ async function handleToolCall(params) {
       return toolTextResult(faceToolFailureText('face.hook', error), {
         isError: true,
         structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, ...faceIdentityStructured(error.faceIdentity) }
+      });
+    }
+  }
+
+  if (toolName === 'vision.situation') {
+    try {
+      const payload = normalizeVisionSituationPayload(rawArguments);
+      const query = new URLSearchParams();
+      if (payload.format === 'text') {
+        query.set('format', 'text');
+      }
+      if (payload.since) {
+        query.set('since', payload.since);
+      }
+      const path = query.size > 0 ? `/situation?${query.toString()}` : '/situation';
+      const { response, url } = await callVision(path, { timeout_ms: payload.timeout_ms });
+      const watermark = response.headers.get('x-situation-watermark');
+
+      if (payload.format === 'text') {
+        const text = await response.text();
+        if (!response.ok) {
+          return toolTextResult(`vision.situation failed: http_${response.status}`, {
+            isError: true,
+            structuredContent: { ok: false, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, text }
+          });
+        }
+        const body = text.trim();
+        return toolTextResult(body || '[カメラの状況] 新しい注入テキストはありません。', {
+          structuredContent: { ok: true, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, format: 'text', watermark, text: body }
+        });
+      }
+
+      const apiPayload = await response.json().catch(() => null);
+      if (!response.ok || apiPayload === null) {
+        return toolTextResult(`vision.situation failed: http_${response.status}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, payload: apiPayload }
+        });
+      }
+      return toolTextResult(JSON.stringify(apiPayload, null, 2), {
+        structuredContent: { ok: true, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, format: 'json', watermark, payload: apiPayload }
+      });
+    } catch (error) {
+      const reason = error?.name === 'AbortError' ? 'timeout' : error.message;
+      return toolTextResult(`vision.situation failed: ${reason}`, {
+        isError: true,
+        structuredContent: { ok: false, vision_base_url: VISION_DISPLAY_URL, reason }
+      });
+    }
+  }
+
+  if (toolName === 'vision.look') {
+    try {
+      const payload = normalizeVisionLookPayload(rawArguments);
+      const path = payload.store ? '/look' : '/look?store=0';
+      const { response, url } = await callVision(path, {
+        method: 'POST',
+        timeout_ms: payload.timeout_ms
+      });
+      const apiPayload = await response.json().catch(() => null);
+      if (!response.ok || apiPayload === null) {
+        return toolTextResult(`vision.look failed: http_${response.status}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, payload: apiPayload }
+        });
+      }
+
+      const overview = typeof apiPayload.overview === 'string' && apiPayload.overview.trim() !== ''
+        ? apiPayload.overview.trim()
+        : null;
+      const change = typeof apiPayload.change_from_prev === 'string' && apiPayload.change_from_prev.trim() !== ''
+        ? apiPayload.change_from_prev.trim()
+        : null;
+      const text = [
+        overview ? `[カメラの現在] ${overview}` : 'vision.look completed.',
+        change ? `[直前との差] ${change}` : null
+      ].filter(Boolean).join('\n');
+
+      return toolTextResult(text, {
+        structuredContent: { ok: true, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, store: payload.store, payload: apiPayload }
+      });
+    } catch (error) {
+      const reason = error?.name === 'AbortError' ? 'timeout' : error.message;
+      return toolTextResult(`vision.look failed: ${reason}`, {
+        isError: true,
+        structuredContent: { ok: false, vision_base_url: VISION_DISPLAY_URL, reason }
       });
     }
   }

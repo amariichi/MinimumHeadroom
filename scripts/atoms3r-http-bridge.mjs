@@ -5,12 +5,13 @@ import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 
 const DEFAULT_FACE_WS_URL = 'ws://127.0.0.1:8765/ws';
-const DEFAULT_ATOM_URL = 'http://192.168.1.33';
+const DEFAULT_ATOM_URL = 'http://atom-headroom.local';
 const DEFAULT_MAX_PAYLOAD_BYTES = 1_050_000;
 const DEFAULT_MOUTH_INTERVAL_MS = 80;
 
 const faceWsUrlInput = process.env.FACE_WS_URL ?? process.env.MH_FACE_WS_URL ?? DEFAULT_FACE_WS_URL;
-const configuredAtomBaseUrl = normalizeBaseUrl(process.env.ATOM_HEADROOM_URL ?? DEFAULT_ATOM_URL);
+const atomUrlInput = process.env.ATOM_HEADROOM_URL;
+const configuredAtomBaseUrl = normalizeBaseUrl(isAutoValue(atomUrlInput) ? DEFAULT_ATOM_URL : (atomUrlInput ?? DEFAULT_ATOM_URL));
 const localConfigToken = readLocalHeadroomToken();
 const faceAuthToken = process.env.MH_FACE_AUTH_TOKEN ?? tokenFromUrl(faceWsUrlInput) ?? localConfigToken ?? '';
 const atomAuthToken = process.env.ATOM_HEADROOM_AUTH_TOKEN ?? faceAuthToken;
@@ -600,6 +601,14 @@ async function dataToString(data) {
 function positiveInt(value, fallback) {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isAutoValue(value) {
+  if (typeof value !== "string") {
+    return true;
+  }
+  const trimmed = value.trim().toLowerCase();
+  return trimmed === "" || trimmed === "auto";
 }
 
 function normalizeOptionalString(value) {

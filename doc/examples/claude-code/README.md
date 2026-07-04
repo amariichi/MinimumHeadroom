@@ -51,11 +51,15 @@ This prevents helper agents from pushing to remote repositories without operator
 
 After writing `settings.json`, the operator sets `chmod 444` on the file so that helper agents cannot modify their own permission configuration during a session.
 
-## Hook bridge (face safety net)
+## Hook bridge and M12 situation injection
 
 Wire the minimum-headroom hook bridge so the face speaks even when the agent
-forgets to call `face_say` voluntarily. Merge the following into your
-`~/.claude/settings.json` (top-level `hooks` key):
+forgets to call `face_say` voluntarily. The same settings can also wire the M12
+camera situation hook for `UserPromptSubmit`; it emits nothing unless
+`MH_SITUATION_INJECT=1`, so it is safe to leave installed. Merge the following
+into your `~/.claude/settings.json` (top-level `hooks` key), or prefer
+`examples/rmh-voice-mode/start-rmh.sh --agent claude --with-vision`, which
+generates an equivalent per-launch settings file without editing global config:
 
 ```json
 {
@@ -81,9 +85,28 @@ forgets to call `face_say` voluntarily. Merge the following into your
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABS/PATH/minimum-headroom/scripts/situation-context-hook.sh"
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
 `mh-hook.mjs` is silent and exits 0 on every error path, so it never blocks Claude Code. It only fires when `MH_FACE_AGENT_ID` is set in the agent process environment (which `scripts/run-operator-once.sh` already does for the operator pane). See `doc/hook-bridge/` for cross-runtime details.
+
+`situation-context-hook.sh` is also safe-by-default: if the vision worker is
+down or `MH_SITUATION_INJECT` is false, it exits 0 without stdout. Enable it for
+a manual Claude launch by exporting `MH_SITUATION_INJECT=1` and, if needed,
+`VISION_BASE_URL=http://127.0.0.1:8095`. In RMH voice-first mode,
+`start-rmh.sh --with-vision` sets `MH_SITUATION_INJECT=1` and
+`MH_VISION_COMPANION=1` for the launched Claude process, so the generated hook
+injects both `[カメラの状況 ...]` and `[共有視界ブリーフ]` when the M12 backend is
+available.

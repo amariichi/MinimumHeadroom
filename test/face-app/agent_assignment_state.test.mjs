@@ -189,6 +189,33 @@ test('agent assignment store marks sent deliveries and acknowledges them through
   cleanup(rootDir);
 });
 
+test('agent assignment store defaults delivery ack timeout to 120 seconds', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-default-ack-');
+  const store = createAgentAssignmentStateStore({
+    statePath,
+    now: createClock(),
+    log: quietLog
+  });
+  store.load();
+
+  store.upsertAssignment({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-default-ack',
+    owner_agent_id: '__operator__',
+    agent_id: 'helper-default-ack',
+    goal: 'Wait for default timeout'
+  });
+  const sent = store.markDeliverySent({
+    stream_id: 'repo:/tmp/target',
+    mission_id: 'mission-default-ack',
+    agent_id: 'helper-default-ack'
+  });
+
+  assert.equal(sent.assignment.ack_deadline_at - sent.assignment.last_sent_at, 120_000);
+
+  cleanup(rootDir);
+});
+
 test('agent assignment store lazily times out unacknowledged deliveries', () => {
   const { rootDir, statePath } = createTempStatePath('mh-agent-assignment-timeout-');
   let tick = 1_700_400_000_000;

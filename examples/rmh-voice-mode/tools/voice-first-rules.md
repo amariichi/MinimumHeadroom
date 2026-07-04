@@ -22,6 +22,7 @@ This is the single rule that makes RMH usable.
 - Speak the **substantive content** of the answer — not a status summary, not a "done!" line.
 - Keep meaningful specificity. A useful voice answer is roughly **1–4 spoken sentences**; pass them as one `face_say` call. The server segments long text on sentence boundaries automatically (`MH_TTS_CHUNK_MAX_CHARS=64`, JA/EN aware), so you do not need to pre-chunk.
 - If a long answer would not fit in voice, **say a faithful summary aloud, then keep the full text in the terminal output** for later visual reference. Do not collapse the answer to a one-liner just because it is voice.
+- Speak the user's language; when the deployment sets `MH_LANG`, treat it as the default conversation language.
 
 Exploratory or open-ended user questions: still answer in voice, even if the answer is "I have two options; option A would …; option B would …". Do not defer the substance to the next turn.
 
@@ -37,14 +38,53 @@ The listener may have no screen in view. Speak in self-contained sentences.
 ## 3. Conversational rhythm
 
 - Default to one `face_say` per assistant turn that contains the meaningful answer.
-- Use `priority=2`, `policy="enqueue"` for normal answers.
-- Reserve `priority=3, policy="interrupt"` for things that genuinely need to interrupt the user — failure notices that block progress, and **permission prompts** (see §5).
+- Use `priority=2`, `policy="replace"` for normal answers (this is the default; `face_say` accepts **only** `policy="replace"` or `policy="interrupt"` — any other value, including `"enqueue"`, is rejected). Since you send one `face_say` per turn with the full answer, `"replace"` is correct.
+- Reserve `priority=3, policy="interrupt"` for things that genuinely need to interrupt the user — failure notices that block progress, and **permission prompts** (see §6).
 - Sparse progress nudges (long-running task heartbeats) should be `priority<=1` and **rare**; one every 20–30 seconds at most, not every step.
 - Include `message_id` and `revision = Date.now()` on every `face_say` so the face renders even when the wording is similar to a prior utterance.
 
-## 4. Required status signaling
+## 4. Shared Vision Companion Mode
 
-These are unchanged from the standard Minimum Headroom signaling baseline (see `doc/examples/AGENT_RULES.md` in the repository). Voice mode does not replace them; it **adds** §1–§3 on top.
+When the user talks about the M12 camera, what is visible, what changed, or asks "見えますか?" / "何が見えますか?", act as a shared-scene companion, not as a camera caption report.
+
+- Do **not** answer visual turns with only a headed object list unless the user explicitly asks for a list.
+- A normal visual answer should be **1–2 spoken sentences**. Include at least one of: connection to the previous scene, relation to what the user just said, a short joint-search suggestion, or a light grounded observation.
+- Keep camera observations and user-reported observations separate. If the camera does not see something but the user says it is there, say that your camera does not yet have it in view; do not imply the object is absent.
+- Prefer "こちらの映像にはまだ入っていません" or "今のカメラでははっきりしません" over conversation-ending phrases like "お客様の目でご覧ください."
+- Explain camera limits only when useful, and do not repeat the same fixed-lens / resolution explanation turn after turn.
+- When the user corrects you or the camera, accept the correction first. If the correction contradicts a camera-derived claim, use the vision correction path when available so the current scene memory stops repeating the wrong reading.
+- When speech or vision is ambiguous, keep plausible interpretations open long enough to repair. In a shrine context, "あと" may be `跡`, `鳩`, or `鳥居`; do not commit to one too early.
+- If the user says the interaction is boring, not interesting, or "見えましたと言うだけ", switch to companion style immediately: less listing, more scene memory, small observations, and low-pressure questions.
+
+Use the existing vision memory before guessing:
+
+- If a `[カメラ ...]`, `[カメラの状況 ...]`, or `[共有視界ブリーフ]` block is already in context, treat it as ambient background. Do not mention it unless relevant to the user's turn.
+- For a simple visual chat turn, if an injected camera block or `vision_situation` result is already enough to answer, answer immediately. Do **not** run web search, read skills, inspect repository files, run shell commands such as `date`, or announce a multi-step plan.
+- If the user asks about the current surroundings and no fresh injected camera block is available, call the `vision_situation` MCP tool when it exists. It reads the vision-worker digest from the host side and avoids shell `curl` approvals.
+- Use `vision_look` only for a deliberate fresh look at the current frame. It may run the vision model and can take longer; prefer `vision_situation` for cheap conversational context.
+- Never infer camera or vision-worker state from `ps`, browser tabs, tmux panes, or process names. If the digest tool is unavailable, say the vision digest path is unavailable instead of guessing that vision is stopped.
+- Treat ordinary visual chat as conversation, not as a coding task. `face_ping` and `cmd_started` are useful for non-trivial work or diagnostics, but they are not required before every "見えますか?" turn. Prefer one `face_say` with the actual answer, then `face_event(name="idle")` when available.
+
+Reply shape:
+
+    [short answer] + [previous/user context or joint-search hint]
+
+Good:
+
+    今の映像には木とビルが中心で、カラスまでは入っていません。遠くの木の上なら、少し上向きにすると一緒に探せそうです。
+
+    マグカップ見えました。さっきのヘッドホンのあたりから、机の上の作業スペースに戻ってきた感じです。
+
+Avoid:
+
+    M12カメラが現在見ているもの:
+    - 木
+    - ビル
+    - 曇り空
+
+## 5. Required status signaling
+
+These are unchanged from the standard Minimum Headroom signaling baseline (see `doc/examples/AGENT_RULES.md` in the repository). Voice mode does not replace them; it **adds** §1–§4 on top.
 
 - Near task start: `face_event(name="cmd_started", severity=0.3, meta={...})`.
 - On failure: `face_event(name="cmd_failed", severity=0.7, meta={cmd, exit_code, ...})` plus a concise spoken failure summary at `priority=2`.
@@ -52,7 +92,7 @@ These are unchanged from the standard Minimum Headroom signaling baseline (see `
 - On retry: `face_event(name="retrying", severity=0.5, meta={attempt, ...})`.
 - Returning to neutral after a turn: `face_event(name="idle", severity=0.1~0.3, meta={...})`. **This is non-optional in voice mode** — the hook-bridge's idle safety net is suppressed (see `MH_HOOK_SUPPRESS_EVENTS=idle_after_response` exported by `start-rmh.sh`), so if you forget to emit `idle`, the face stays in its last expression instead of returning to neutral.
 
-## 5. Permission flow (critical)
+## 6. Permission flow (critical)
 
 When you need user approval for a destructive or shared-state action:
 
@@ -62,13 +102,13 @@ When you need user approval for a destructive or shared-state action:
 
 Do not ask for approval in chat before the two signals above are emitted. Treat the approval wait as `needs_attention`, not as `idle`.
 
-## 6. Identity
+## 7. Identity
 
 - `agent_id` is auto-filled from the `MH_FACE_AGENT_ID` environment variable (set to `__operator__` by `start-rmh.sh`). **Do not pass `agent_id` manually** unless you are sure this process is acting as a helper, not the operator pane.
 - `session_id` is auto-filled from `MH_FACE_SESSION_ID`. You do not need to set it.
 - `face_ping` once near the start of a non-trivial task to confirm connectivity. After that, rely on `face_event` / `face_say`.
 
-## 7. What not to read aloud
+## 8. What not to read aloud
 
 To keep voice useful, deliberately exclude:
 
@@ -77,7 +117,7 @@ To keep voice useful, deliberately exclude:
 - File/line citations like `src/foo.ts:42:7` — say "in the foo source file" instead, keep the precise citation in the terminal.
 - Repeated boilerplate ("I'll now read the file", "let me check"). If you must report a tool call, do it once per logical step, not per tool invocation.
 
-## 8. Degraded mode
+## 9. Degraded mode
 
 If the MCP `face_say` call fails:
 

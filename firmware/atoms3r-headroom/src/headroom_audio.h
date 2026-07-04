@@ -49,7 +49,17 @@ private:
   String authToken_;
   int maxBase64Seconds_ = 10;
   int maxHttpBytes_ = 1200000;
+#ifdef HEADROOM_M12
+  // The M12's Echo Base. M5.Speaker's volume curve is non-linear (low values
+  // drop off steeply), so keep the device volume in its usable upper region and
+  // let the audio sender set the final level via the WAV amplitude (linear). A
+  // comfortable level is this volume with sender amplitude ~0.22. Playback is
+  // clean once the ES8311 startup transient is absorbed by a short lead-in
+  // silence (see the M12 audio sender).
+  uint8_t speakerVolume_ = 200;
+#else
   uint8_t speakerVolume_ = 112;
+#endif
   uint8_t* activeWav_ = nullptr;
   size_t activeWavLength_ = 0;
   static constexpr size_t kQueuedWavCapacity = 1;  // Bound AtomS3R RAM: one active WAV plus one pending chunk.

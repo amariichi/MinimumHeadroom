@@ -1,14 +1,16 @@
-# Project-local Codex config used by start-rmh.sh --agent codex.
-# Loaded via CODEX_HOME=<runtime-dir>. Keep tokens out of this template;
-# run-bound-mcp-server.sh forwards MH_FACE_AUTH_TOKEN from the env or from
-# ~/.config/minimum-headroom.env at launch time.
+# Reference Codex config for RMH voice mode.
+# start-rmh.sh no longer loads this through a temporary CODEX_HOME, because
+# CODEX_HOME also contains auth, state DBs, memories, MCP approvals, and hook
+# trust. The launcher passes equivalent per-session values with `codex -c`.
+# Keep tokens out of this template; run-bound-mcp-server.sh forwards
+# MH_FACE_AUTH_TOKEN from the env or from ~/.config/minimum-headroom.env.
 
 model = "__CODEX_MODEL__"
 
 [mcp_servers.minimum_headroom]
 command = "__MH_REPO_ROOT__/scripts/run-bound-mcp-server.sh"
 args = []
-env = { "FACE_WS_URL" = "__FACE_WS_URL__", "MCP_TOOL_NAME_STYLE" = "underscore" }
+env = { "FACE_WS_URL" = "__FACE_WS_URL__", "VISION_BASE_URL" = "__VISION_BASE_URL__", "MCP_TOOL_NAME_STYLE" = "underscore" }
 
 [features]
 hooks = true
@@ -19,6 +21,13 @@ matcher = ".*"
 [[hooks.PermissionRequest.hooks]]
 type = "command"
 command = "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime codex --event permission_required"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "__MH_REPO_ROOT__/scripts/situation-context-hook-codex.mjs"
 timeout = 5
 
 [[hooks.Stop]]

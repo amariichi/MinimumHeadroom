@@ -35,8 +35,8 @@ fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 # Forward only the overrides that are explicitly set; the bridge has sane
-# defaults (face ws 127.0.0.1:8765, Atom 192.168.1.33) and resolves the
-# auth token from the shared env file sourced below.
+# defaults (face ws 127.0.0.1:8765, Atom auto-discovery via /health) and
+# resolves the auth token from the shared env file sourced below.
 tmux_env=()
 for v in ATOM_HEADROOM_URL FACE_WS_URL MH_FACE_WS_URL ATOM_HEADROOM_AUTH_TOKEN \
          ATOM_HEADROOM_FETCH_AUDIO_REF ATOM_HEADROOM_FORWARD_AUDIO MH_FACE_AUTH_TOKEN; do

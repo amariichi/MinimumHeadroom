@@ -709,7 +709,16 @@ operatorRealtimeAsrProxy = createOperatorRealtimeAsrProxy({
 });
 
 if (ttsEnabled) {
-  const kokoroVoice = typeof process.env.MH_KOKORO_VOICE === 'string' && process.env.MH_KOKORO_VOICE.trim() !== '' ? process.env.MH_KOKORO_VOICE.trim() : 'jf_alpha';
+  const explicitKokoroVoice = typeof process.env.MH_KOKORO_VOICE === 'string' && process.env.MH_KOKORO_VOICE.trim() !== '' ? process.env.MH_KOKORO_VOICE.trim() : null;
+  const kokoroVoice = explicitKokoroVoice ?? ((process.env.MH_LANG ?? '').trim().toLowerCase() === 'en' ? 'af_heart' : 'jf_alpha');
+  const workerEnv = {
+    MH_AUDIO_TARGET: audioTarget,
+    MH_KOKORO_MODEL: path.resolve(repoRoot, 'assets/kokoro/kokoro-v1.0.onnx'),
+    MH_KOKORO_VOICES: path.resolve(repoRoot, 'assets/kokoro/voices-v1.0.bin')
+  };
+  if (explicitKokoroVoice) {
+    workerEnv.MH_KOKORO_VOICE = explicitKokoroVoice;
+  }
   ttsController = createTtsController({
     log: console,
     audioTarget,
@@ -724,12 +733,7 @@ if (ttsEnabled) {
     maxChunkChars: Number.parseInt(process.env.MH_TTS_CHUNK_MAX_CHARS ?? '120', 10),
     gateConfig: faceConfig.speechGate,
     workerCwd: repoRoot,
-    workerEnv: {
-      MH_AUDIO_TARGET: audioTarget,
-      MH_KOKORO_VOICE: kokoroVoice,
-      MH_KOKORO_MODEL: path.resolve(repoRoot, 'assets/kokoro/kokoro-v1.0.onnx'),
-      MH_KOKORO_VOICES: path.resolve(repoRoot, 'assets/kokoro/voices-v1.0.bin')
-    }
+    workerEnv
   });
 } else {
   console.info('[face-app] tts disabled by FACE_TTS_ENABLED=0');

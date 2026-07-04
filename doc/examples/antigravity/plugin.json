@@ -1,7 +1,7 @@
 {
   "name": "minimum-headroom",
-  "version": "1.16.0",
-  "description": "AtomS3R / face-app desk frontend signaling: face_event / face_say / face_ping plus multi-agent orchestration tools, with the minimum-headroom-ops skill for runtime diagnosis.",
+  "version": "1.20.0",
+  "description": "AtomS3R / face-app voice signaling, multi-agent orchestration, and M12 shared-vision MCP tools, with runtime and vision skills.",
   "author": {
     "name": "minimum-headroom contributors"
   },
@@ -12,6 +12,7 @@
     "minimum-headroom",
     "atom",
     "voice",
+    "vision",
     "face_say"
   ]
 }

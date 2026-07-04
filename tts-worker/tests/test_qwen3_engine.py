@@ -37,13 +37,27 @@ class KokoroVoiceConfigTests(unittest.TestCase):
     with patch.dict(os.environ, {}, clear=True):
       self.assertEqual(resolve_kokoro_voice(), "jf_alpha")
 
+  def test_mh_lang_english_defaults_kokoro_voice_to_af_heart(self) -> None:
+    self.assertEqual(resolve_kokoro_voice({"MH_LANG": "EN"}), "af_heart")
+
+  def test_non_english_mh_lang_defaults_kokoro_voice_to_jf_alpha(self) -> None:
+    self.assertEqual(resolve_kokoro_voice({"MH_LANG": "fr"}), "jf_alpha")
+
   def test_explicit_kokoro_voice_override_is_preserved(self) -> None:
+    with patch.dict(os.environ, {"MH_KOKORO_VOICE": "jf_alpha", "MH_LANG": "en"}, clear=True):
+      self.assertEqual(resolve_kokoro_voice(), "jf_alpha")
+
+  def test_explicit_kokoro_voice_mapping_override_is_preserved(self) -> None:
     with patch.dict(os.environ, {"MH_KOKORO_VOICE": "af_heart"}, clear=True):
       self.assertEqual(resolve_kokoro_voice(), "af_heart")
 
   def test_blank_kokoro_voice_uses_default(self) -> None:
     with patch.dict(os.environ, {"MH_KOKORO_VOICE": "   "}, clear=True):
       self.assertEqual(resolve_kokoro_voice(), "jf_alpha")
+
+  def test_blank_kokoro_voice_uses_mh_lang_default(self) -> None:
+    with patch.dict(os.environ, {"MH_KOKORO_VOICE": "   ", "MH_LANG": "en"}, clear=True):
+      self.assertEqual(resolve_kokoro_voice(), "af_heart")
 
 
 if __name__ == "__main__":

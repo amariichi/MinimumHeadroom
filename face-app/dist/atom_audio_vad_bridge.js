@@ -20,6 +20,14 @@ function normalizeLanguage(value, fallback = 'ja') {
   return fallback === 'en' ? 'en' : 'ja';
 }
 
+function languageDefaultFromMhLang(value, fallback = 'ja') {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (normalized === '') {
+    return fallback === 'en' ? 'en' : 'ja';
+  }
+  return normalized === 'en' ? 'en' : 'ja';
+}
+
 function writeLe16(buffer, offset, value) {
   buffer.writeUInt16LE(value, offset);
 }
@@ -249,6 +257,8 @@ export function createAtomAudioVadBridge(options = {}) {
   const fetchImpl = typeof options.fetchImpl === 'function' ? options.fetchImpl : globalThis.fetch;
   const baseUrl = typeof options.asrBaseUrl === 'string' ? options.asrBaseUrl : '';
   const endpointUrl = typeof options.asrEndpointUrl === 'string' ? options.asrEndpointUrl : '';
+  const env = options.env && typeof options.env === 'object' ? options.env : process.env;
+  const fallbackLanguage = languageDefaultFromMhLang(env.MH_LANG, 'ja');
   const onOperatorResponse = typeof options.onOperatorResponse === 'function' ? options.onOperatorResponse : null;
   const onAcceptedSpeech = typeof options.onAcceptedSpeech === 'function' ? options.onAcceptedSpeech : null;
   // thresholdRms: RMS energy floor a frame must exceed to count as speech.
@@ -292,7 +302,7 @@ export function createAtomAudioVadBridge(options = {}) {
         id: key,
         active: false,
         sampleRate: 16000,
-        language: 'ja',
+        language: fallbackLanguage,
         buffers: [],
         speechMs: 0,
         silenceMs: 0,
@@ -323,7 +333,7 @@ export function createAtomAudioVadBridge(options = {}) {
   }
 
   async function submitUtterance(session, pcmBuffer) {
-    const language = normalizeLanguage(session.language, 'ja');
+    const language = normalizeLanguage(session.language, fallbackLanguage);
     const upstreamUrl = resolveUpstreamUrl({ endpointUrl, baseUrl, language });
     if (!upstreamUrl) {
       log.warn('[face-app] Atom VAD utterance dropped: ASR upstream is not configured');

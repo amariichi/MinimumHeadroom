@@ -516,7 +516,7 @@ export function createAgentAssignmentStateStore(options = {}) {
       throw createStoreError('invalid_request', `assignment target mismatch for ${streamId}:${missionId}`);
     }
     const ts = nowMs(now);
-    const ackTimeoutMs = asInteger(input.ack_timeout_ms, 20_000, 1000) ?? 20_000;
+    const ackTimeoutMs = asInteger(input.ack_timeout_ms, 120_000, 1000) ?? 120_000;
     assignment.delivery_state = 'sent_to_tmux';
     assignment.delivery_attempts += 1;
     assignment.last_delivery_id = asNonEmptyString(input.delivery_id) ?? randomUUID();

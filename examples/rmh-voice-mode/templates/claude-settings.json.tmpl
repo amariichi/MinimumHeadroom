@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime claude --event permission_required"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime claude --event idle_after_response"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__MH_REPO_ROOT__/scripts/situation-context-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

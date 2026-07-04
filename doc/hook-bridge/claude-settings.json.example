@@ -21,6 +21,16 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/scripts/situation-context-hook.sh"
+          }
+        ]
+      }
     ]
   }
 }

@@ -30,9 +30,19 @@ For Claude Code, Antigravity CLI, and Codex CLI, these presets complement the ru
 
 | Preset | Claude Code | Antigravity CLI | Codex CLI |
 |--------|-------------|------------|-----------|
-| `reviewer` | Read, Glob, Grep, agent\_report (allow); no Bash | sandboxed read-oriented command allow-list | `-a untrusted` |
-| `implementer` | + Edit, Write, Bash; deny `git push` | sandboxed commands, deny `git push`, append `--dangerously-skip-permissions` | `--full-auto` |
-| `full` | same as `implementer` | same as `implementer` | `--full-auto` |
+| `reviewer` | Read, Glob, Grep, agent\_report (allow); no Bash | sandboxed read-oriented command allow-list | `-s read-only -a never` |
+| `implementer` | + Edit, Write, Bash; deny `git push` | sandboxed commands, deny `git push`, append `--dangerously-skip-permissions` | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
+| `full` | same as `implementer` | same as `implementer` | `--dangerously-bypass-approvals-and-sandbox` |
+
+Codex preset suffixes can be replaced completely with environment overrides:
+
+- `MH_CODEX_PRESET_REVIEWER`
+- `MH_CODEX_PRESET_IMPLEMENTER`
+- `MH_CODEX_PRESET_FULL`
+
+For Codex commands that request `-s read-only` or `-s workspace-write`, helper spawn runs a one-time server-process sandbox preflight: `timeout 15 codex sandbox -- echo __mh_userns_ok__`. If the token is not observed, spawn rewrites that sandbox mode to `-s danger-full-access`, records `sandbox_fallback: true` and a reason in the spawn result, and sets the helper's status message to explain the downgrade. This prevents a preset from silently launching a Codex helper that cannot run commands on hosts where user namespaces are blocked.
+
+After tmux pane creation, helper spawn verifies that the CLI actually took over the pane. It polls `pane_current_command` for up to about 15 seconds and treats a remaining plain shell (`bash`, `zsh`, `sh`, `dash`, or `fish`) as `launch_failed`. The helper record is kept for inspection, and the spawn result includes the last pane lines so the operator can see why launch failed.
 
 For detailed per-runtime setup, see:
 - [Claude Code setup](../examples/claude-code/README.md)
@@ -51,6 +61,8 @@ Antigravity CLI helpers may require first-run interaction even with permission p
   - `max_findings` — cap on findings before the helper should report back
 - Deliver missions via `agent.inject` using controlled tmux paste-buffer injection
 - Delivery is tracked through states: `pending` → `sent_to_tmux` → `acked` / `failed` / `timeout`
+- The default delivery acknowledgment timeout is 120 seconds, which allows cold-starting CLIs time to load before a delivery is marked timed out
+- `agent.inject` refuses to paste mission text into a pane whose current command is a plain shell, returning `injection_refused_shell_pane` with a short pane tail; pass `force_shell_inject: true` only for intentional shell recovery
 - Check those delivery and ack states with `agent.assignment.list`
 - A matching `agent.report` from the helper acknowledges the mission
 
@@ -93,6 +105,7 @@ The detector posts reports; it never auto-presses keys. The operator (or the use
 ### Worktree Isolation and Security
 
 - Each helper gets an isolated git worktree on its own branch
+- Assignment target paths are read references under the stream root; helpers should make edits and commits only inside their assigned worktree on the helper branch, never in the source repository checkout
 - `git push` is denied for all helper permission presets:
   - **Claude Code:** `deniedTools` includes `Bash(git push*)`
   - **Antigravity / Codex:** constrained by agent instructions
@@ -140,9 +153,19 @@ Claude Code / Antigravity CLI / Codex CLI では、これらのプリセット�
 
 | プリセット | Claude Code | Antigravity CLI | Codex CLI |
 |--------|-------------|------------|-----------|
-| `reviewer` | Read, Glob, Grep, agent\_report (allow); Bash なし | sandboxed read-oriented command allow-list | `-a untrusted` |
-| `implementer` | + Edit, Write, Bash; `git push` を拒否 | sandboxed commands, deny `git push`, append `--dangerously-skip-permissions` | `--full-auto` |
-| `full` | `implementer` と同一 | `implementer` と同一 | `--full-auto` |
+| `reviewer` | Read, Glob, Grep, agent\_report (allow); Bash なし | sandboxed read-oriented command allow-list | `-s read-only -a never` |
+| `implementer` | + Edit, Write, Bash; `git push` を拒否 | sandboxed commands, deny `git push`, append `--dangerously-skip-permissions` | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
+| `full` | `implementer` と同一 | `implementer` と同一 | `--dangerously-bypass-approvals-and-sandbox` |
+
+Codex のプリセット suffix は、以下の環境変数で丸ごと置き換えできます。
+
+- `MH_CODEX_PRESET_REVIEWER`
+- `MH_CODEX_PRESET_IMPLEMENTER`
+- `MH_CODEX_PRESET_FULL`
+
+Codex コマンドが `-s read-only` または `-s workspace-write` を要求する場合、helper 生成時にサーバープロセスごとに一度だけ `timeout 15 codex sandbox -- echo __mh_userns_ok__` を実行して sandbox を事前確認します。token が確認できない場合、その sandbox mode を `-s danger-full-access` に書き換え、spawn 結果に `sandbox_fallback: true` と理由を含め、helper の status message にも downgrade の理由を残します。user namespace が制限されたホストでも、コマンド実行不能な Codex helper を無言で作らないためです。
+
+tmux pane 作成後、helper 生成は CLI が実際に起動したかを確認します。約 15 秒間 `pane_current_command` を polling し、plain shell（`bash`, `zsh`, `sh`, `dash`, `fish`）のままなら `launch_failed` として扱います。helper record は調査用に残し、spawn 結果には pane 末尾が含まれます。
 
 各ランタイムの詳細設定:
 - [Claude Code セットアップ](../examples/claude-code/README.md)
@@ -161,6 +184,8 @@ Antigravity CLI helper は、権限プリセットを使っても初回だけ対
   - `max_findings` — 報告前の findings 上限
 - `agent.inject` で制御された tmux paste-buffer 注入により配信
 - 配信状態は `pending` → `sent_to_tmux` → `acked` / `failed` / `timeout` で追跡
+- delivery acknowledgment timeout の既定値は 120 秒です。cold start する CLI が読み込まれる前に timeout 扱いになるのを避けます
+- `agent.inject` は、pane の current command が plain shell の場合、mission text の paste を拒否して `injection_refused_shell_pane` と短い pane tail を返します。shell recovery として意図的に入力したい場合だけ `force_shell_inject: true` を指定してください
 - これらの配信状態や ack は `agent.assignment.list` で確認
 - helper からの `agent.report` の一致で ack（受領確認）
 
@@ -203,6 +228,7 @@ helper は CLI レベルのモーダル（ツール承認プロンプト、モ�
 ### Worktree 分離とセキュリティ
 
 - 各 helper は独自ブランチ上の分離された git worktree を取得
+- assignment の target paths は stream root 配下の read reference です。helper は編集と commit を、source repository checkout ではなく割り当てられた worktree 上の helper branch で行います
 - `git push` は全プリセットで拒否:
   - **Claude Code:** `deniedTools` に `Bash(git push*)` を含む
   - **Antigravity / Codex:** エージェント指示で制約

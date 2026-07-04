@@ -178,6 +178,66 @@ test('Atom audio VAD bridge submits a completed utterance to ASR and operator re
   assert.equal(operatorResponses[0].source, 'atom-vad');
 });
 
+test('Atom audio VAD bridge uses MH_LANG as the default ASR language', async () => {
+  const fetches = [];
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    env: { MH_LANG: 'EN' },
+    thresholdRms: 0.01,
+    endSilenceMs: 200,
+    minSpeechMs: 50,
+    fetchImpl: async (url) => {
+      fetches.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: 'hello', confidence: 0.9 });
+        }
+      };
+    }
+  });
+
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1, language: undefined }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3200 }), { seq: 2, language: undefined }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 3, language: undefined }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 4, language: undefined }));
+  await bridge.drain();
+
+  assert.equal(fetches.length, 1);
+  assert.match(fetches[0], /\/v1\/asr\/en$/);
+});
+
+test('Atom audio VAD bridge keeps explicit payload language over MH_LANG', async () => {
+  const fetches = [];
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    env: { MH_LANG: 'en' },
+    thresholdRms: 0.01,
+    endSilenceMs: 200,
+    minSpeechMs: 50,
+    fetchImpl: async (url) => {
+      fetches.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: '了解', language: 'ja', confidence: 0.9 });
+        }
+      };
+    }
+  });
+
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1, language: 'ja' }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3200 }), { seq: 2, language: 'ja' }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 3, language: 'ja' }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 4, language: 'ja' }));
+  await bridge.drain();
+
+  assert.equal(fetches.length, 1);
+  assert.match(fetches[0], /\/v1\/asr\/ja$/);
+});
+
 test('Atom audio VAD bridge suppresses relay for audio frames', () => {
   const bridge = createAtomAudioVadBridge({
     asrBaseUrl: 'http://127.0.0.1:8091',

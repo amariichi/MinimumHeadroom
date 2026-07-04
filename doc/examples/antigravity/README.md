@@ -14,7 +14,7 @@ Files shipped here:
 | File                                | Purpose                                                       |
 |-------------------------------------|---------------------------------------------------------------|
 | `plugin.json`                       | plugin manifest (name, version, description, etc.)            |
-| `mcp_config.json`                   | MCP server registration for `minimum_headroom`                |
+| `mcp_config.json`                   | MCP server registration for `minimum_headroom`, including `VISION_BASE_URL` for host-side vision tools |
 | `hooks.json`                        | Antigravity JSON Hooks example for plugin/workspace installs  |
 | `settings-hooks.snippet.json`       | Compatibility hook entries to merge into `~/.gemini/settings.json` |
 | (skill source)                      | `doc/examples/skills/minimum-headroom-ops/SKILL.md`           |
@@ -33,11 +33,26 @@ From the repository root:
 
     agy plugin list   # → minimum-headroom, source "local-install"
 
-Optional: install the skill alongside the MCP plugin so `/skills` lists it from agy:
+On agy 1.0.16, `agy plugin install` may validate hooks/skills but still leave
+the CLI plugin directory with only `plugin.json` and `mcp_config.json`.
+`examples/rmh-voice-mode/start-rmh.sh --agent agy` works around that by copying
+the rendered plugin into `~/.gemini/antigravity-cli/plugins/minimum-headroom/`
+after install. If you install manually and `agy plugin validate
+~/.gemini/antigravity-cli/plugins/minimum-headroom` reports `skills: skipped`
+or `hooks: skipped`, copy the rendered plugin files into that directory too.
+
+The plugin includes MCP server registration. If you install through
+`examples/rmh-voice-mode/start-rmh.sh --agent agy`, the launcher also copies the
+`minimum-headroom-ops` and `atoms3r-vision` skills into the generated plugin so
+`/skills` can see both. For a manual install from this directory, install those
+skills alongside the MCP plugin if your `agy` build does not copy them:
 
     mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
+    mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/atoms3r-vision
     cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
        ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
+    cp doc/examples/skills/atoms3r-vision/SKILL.md \
+       ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/atoms3r-vision/SKILL.md
 
 Restart `agy`, type `/mcp` inside the TUI to confirm `minimum_headroom` is loaded.
 
@@ -96,6 +111,9 @@ In the chat, ask:
     List every skill you have access to.
 
 A working setup shows `face_event`, `face_say`, `face_ping`, the `agent_*` lifecycle tools, and `minimum-headroom-ops` in the skill list, plus `face_ping` returning `forwarded face.ping`.
+For M12 vision sessions it should also show `vision_situation` and `vision_look`;
+ask the agent to call `vision_situation` rather than inferring camera state from
+`ps`, browser tabs, or process names.
 
 ---
 
@@ -150,8 +168,10 @@ The project `AGENTS.md` (or `GEMINI.md`) rules remain part of the security model
 | Step | Command | Expected |
 |------|---------|----------|
 | CLI plugin valid | `agy plugin validate doc/examples/antigravity` | `mcpServers: 1 processed`; hooks may be processed or skipped depending on agy build |
+| CLI installed plugin complete | `agy plugin validate ~/.gemini/antigravity-cli/plugins/minimum-headroom` | `skills: 2 processed`, `mcpServers: 1 processed`, `hooks: 2 processed` for the voice-mode launcher install |
 | CLI plugin installed | `agy plugin list` | `minimum-headroom` listed as `local-install` |
 | GUI MCP file valid | `node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME+"/.gemini/config/mcp_config.json","utf8"))'` | exits 0 |
 | GUI sees server | chat prompt in GUI: `List every MCP tool you can call right now` | response includes `face_event`, `face_say`, `face_ping` |
-| GUI sees skill | chat prompt in GUI: `List every skill you have access to` | response includes `minimum-headroom-ops` |
+| GUI sees vision tools | chat prompt in GUI: `List every MCP tool you can call right now` | response includes `vision_situation` and `vision_look` |
+| GUI sees skill | chat prompt in GUI: `List every skill you have access to` | response includes `minimum-headroom-ops` and `atoms3r-vision` |
 | End-to-end voice | chat prompt: `Call face_say with text="テストです" priority=2` | AtomS3R speaks |

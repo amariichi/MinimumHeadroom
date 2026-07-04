@@ -17,6 +17,7 @@ asr-worker/.venv/
 # Local tool configs and caches
 .codex_/
 .claude/
+.playwright-cli/
 .cache/huggingface/
 .cache/vllm/
 .env
@@ -33,6 +34,12 @@ GEMINI.local.md
 # Large local model assets (downloaded manually)
 assets/kokoro/kokoro-v1.0.onnx
 assets/kokoro/voices-v1.0.bin
+
+# Vision dev-tool scratch — live camera captures and probe output may contain
+# personal frames; never track them. The runtime frame cache lives outside the
+# repo (~/.cache/minimum-headroom/vision) and is not affected by this.
+vision-worker/tools/real-frames/
+vision-worker/tools/probe-report.md
 
 # Generated closed-loop reports
 test/tts-asr-loop/latest-*.md

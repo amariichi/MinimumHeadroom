@@ -1,0 +1,26 @@
+{
+  "minimum-headroom-idle": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime antigravity --event idle_after_response",
+        "timeout": 5
+      }
+    ]
+  },
+  "minimum-headroom-approval-attention-optional": {
+    "enabled": false,
+    "PreToolUse": [
+      {
+        "matcher": "ask_permission|run_command|write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime antigravity --event permission_required",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

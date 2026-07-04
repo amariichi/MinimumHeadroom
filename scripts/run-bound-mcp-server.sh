@@ -139,6 +139,9 @@ env_args=(
   "FACE_WS_URL=$FACE_WS_URL"
   "MCP_TOOL_NAME_STYLE=$MCP_TOOL_NAME_STYLE"
 )
+if [[ -n "${VISION_BASE_URL:-}" ]]; then
+  env_args+=("VISION_BASE_URL=$VISION_BASE_URL")
+fi
 if [[ -n "${FACE_HTTP_BASE_URL:-}" ]]; then
   env_args+=("FACE_HTTP_BASE_URL=$FACE_HTTP_BASE_URL")
 fi
