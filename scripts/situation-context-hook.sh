@@ -30,6 +30,11 @@ case "${MH_SITUATION_INJECT:-0}" in
   *) exit 0 ;;
 esac
 
+HOOK_STDIN=""
+if [ ! -t 0 ]; then
+  HOOK_STDIN="$(cat 2>/dev/null || true)"
+fi
+
 BASE="${VISION_BASE_URL:-http://127.0.0.1:8095}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
 STATE_DIR="$RUNTIME_DIR/minimum-headroom-situation"
@@ -62,3 +67,12 @@ if [ -n "$watermark" ]; then
 fi
 
 cat "$body"
+
+case "${MH_VISION_COMPANION:-0}" in
+  1 | true | yes | on)
+    companion_hook="$(dirname "$0")/vision-companion-context-hook.py"
+    if [ -x "$companion_hook" ]; then
+      printf '%s' "$HOOK_STDIN" | "$companion_hook" 2>/dev/null || true
+    fi
+    ;;
+esac

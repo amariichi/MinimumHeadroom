@@ -25,6 +25,12 @@ This is informational/assistive only. The camera samples slowly (~0.5 fps) over 
 
 Default base URL: `http://127.0.0.1:8095` (override with `VISION_BASE_URL`). When the camera is carried standalone, the service still runs on the home PC and is reached over Tailscale, so the base URL may be a Tailscale address.
 
+When the `minimum_headroom` MCP server exposes `vision_situation` and
+`vision_look`, prefer those tools over shell `curl`: they read `VISION_BASE_URL`
+from the host-side MCP process and avoid per-agent localhost/network approval
+differences. Never infer camera availability from process lists, browser tabs,
+or tmux panes; use the digest tool or say the digest path is unavailable.
+
 ```bash
 BASE="${VISION_BASE_URL:-http://127.0.0.1:8095}"
 curl -s "$BASE/healthz"
@@ -76,10 +82,13 @@ condensing text during idle moments and cached, so reading is always free.
   user refers to what is around them, what is on screen, "now", or "how long has
   it been like this" / "what changed earlier". You can answer from the digest
   without taking a fresh picture.
+- If the MCP `vision_situation` tool is available, use it for the same purpose
+  instead of shelling out to `curl`.
 - This digest can also be **auto-injected** into your context every turn (Design
-  B) via `scripts/situation-context-hook.sh` wired as a `UserPromptSubmit` hook
-  (set `MH_SITUATION_INJECT=1`). When that is on, you already have the current
-  situation each turn and need not call anything.
+  B) via a `UserPromptSubmit` hook (set `MH_SITUATION_INJECT=1`). Use
+  `scripts/situation-context-hook.sh` for Claude-style plain-text hooks and
+  `scripts/situation-context-hook-codex.mjs` for Codex. When that is on, you
+  already have the current situation each turn and need not call anything.
 - For a deliberate fresh look — "what do you see **right now**?" — use
   `POST /look`: it grabs one frame, runs the model immediately, returns its
   description, and (by default) commits it to the shared rolling memory so the
@@ -87,6 +96,8 @@ condensing text during idle moments and cached, so reading is always free.
   the camera's in step. An unchanged scene adds no duplicate. Pass `?store=0`
   for a purely ephemeral peek. For accuracy-sensitive reads, still fetch the full
   frame and read it yourself.
+- If the MCP `vision_look` tool is available, use it for the same deliberate
+  fresh-look path.
 
 Always relay the safety boundary when relevant; the digest text already carries a
 short disclaimer.
@@ -133,8 +144,12 @@ documentation snippet only — do not edit user settings programmatically:
 ```
 
 Codex and agy agents should use this skill's pull-based fallback unless their
-runtime has an equivalent prompt-submit hook: call `GET /situation` when the user
-asks about the surroundings, and `POST /look` for a deliberate fresh view.
+runtime has an equivalent prompt-submit hook. For Codex, use
+`scripts/situation-context-hook-codex.mjs`, which wraps the plain situation hook
+output as `UserPromptSubmit.hookSpecificOutput.additionalContext`. Otherwise,
+call the MCP `vision_situation` tool, or `GET /situation` when the MCP tool is
+unavailable, when the user asks about the surroundings. Use `vision_look`, or
+`POST /look` when the MCP tool is unavailable, for a deliberate fresh view.
 
 ## Two ways to use the camera
 

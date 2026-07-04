@@ -27,8 +27,10 @@ Optional flags:
 
 ```bash
 start-rmh.sh --agent claude --model sonnet           # heavier model for a hard task
+start-rmh.sh --agent claude --with-vision            # start/reuse M12 vision and inject the situation brief
 start-rmh.sh --agent codex  --model gpt-5            # override the default light model
-start-rmh.sh --agent codex  --with-vision            # start/reuse the M12 vision backend first
+start-rmh.sh --agent codex  --with-vision            # start/reuse M12 vision and inject the situation brief
+start-rmh.sh --agent agy    --with-vision            # agy can read vision via MCP vision_situation
 start-rmh.sh --agent codex  -- exec "fix the failing test"   # extra args after -- pass through
 ```
 
@@ -68,15 +70,32 @@ Cold-boot sequence:
 
 The vision startup path calls `scripts/run-vision-stack.sh` synchronously. A cold diffusiongemma/vLLM load can take several minutes; if the vision backend fails to become available, the launcher prints a warning and continues into voice mode without vision. For detailed vision-worker environment variables, see `vision-worker/README.md`.
 
+When the `minimum_headroom` MCP server is loaded, the agent gets host-side vision
+tools:
+
+- `vision_situation` reads the cheap `/situation` digest and is the preferred way to answer "今なにが見える?" without shell `curl`.
+- `vision_look` captures one fresh frame and runs the vision model; use it for deliberate "look now" requests.
+
+Agents should not infer camera state from process lists, browser tabs, or tmux panes. If no injected camera block is present, ask them to call `vision_situation`.
+
+For Claude Code and Codex CLI, `start-rmh.sh --with-vision` also wires
+per-prompt situation injection. Claude receives a generated `--settings` file
+whose `UserPromptSubmit` hook runs `scripts/situation-context-hook.sh`. Codex
+receives `scripts/situation-context-hook-codex.mjs` through `codex -c`; that
+wrapper runs the same plain hook and returns the result as
+`hookSpecificOutput.additionalContext`. In both cases the `[カメラの状況 ...]`
+and `[共有視界ブリーフ]` blocks are available before the model decides whether
+to call `vision_situation`.
+
 ## What the script does
 
 1. Resolves `MH_REPO_ROOT` from its own location (override with `MH_REPO_ROOT=...`).
-2. Exports `MH_FACE_AGENT_ID=__operator__`, `MH_FACE_SESSION_ID=operator`, `FACE_WS_URL`, so the MCP server can auto-fill `agent_id` / `session_id` on every `face_say` / `face_event` / `face_ping`.
-3. When `--with-vision` or `RMH_WITH_VISION=1` is set, runs `scripts/run-vision-stack.sh` before launching the CLI.
-4. Renders per-CLI runtime config from `templates/` into a temporary runtime directory (`$XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/`) — never written into the repo. Codex gets MCP + hook config; Claude and agy get MCP config, with agy hooks handled as a one-time Antigravity setup because the hook file is shared with the user's other customizations.
+2. Exports `MH_FACE_AGENT_ID=__operator__`, `MH_FACE_SESSION_ID=operator`, `FACE_WS_URL`, and `VISION_BASE_URL`, so the MCP server can auto-fill `agent_id` / `session_id` and read the M12 vision digest from the host side.
+3. When `--with-vision` or `RMH_WITH_VISION=1` is set, runs `scripts/run-vision-stack.sh` before launching the CLI and defaults `MH_SITUATION_INJECT=1` plus `MH_VISION_COMPANION=1` unless you explicitly set either one to `0`, `false`, `no`, or `off`.
+4. Renders per-CLI runtime config from `templates/` into a temporary runtime directory (`$XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/`) when the runtime needs files. Claude receives generated MCP config plus a generated settings file with RMH hooks, including the optional `UserPromptSubmit` situation hook. Codex does **not** get a temporary `CODEX_HOME`; it keeps the user's normal `~/.codex` auth/state and receives RMH MCP + hook settings through `codex -c` overrides. When `MH_SITUATION_INJECT=1`, Codex also receives a `UserPromptSubmit` situation hook through those overrides. Agy gets a rendered plugin with MCP config, hook examples, and the RMH skills.
 5. Launches the chosen CLI from this directory, so the agent picks up the voice-first rules in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`.
 
-For agy, the script renders the minimum-headroom plugin from `templates/antigravity-plugin/` into a per-launch temp dir (with `MH_REPO_ROOT` resolved) and runs `agy plugin install` on it. The plugin is installed idempotently into `~/.gemini/antigravity-cli/plugins/minimum-headroom/`, so re-launches simply overwrite the previous install. Hooks are NOT touched: Antigravity hook configuration is shared with the user's other customizations. Use `doc/examples/antigravity/hooks.json`, or merge `doc/examples/antigravity/settings-hooks.snippet.json` into `~/.gemini/settings.json` if your installed agy build does not load plugin hooks. See `doc/examples/antigravity/README.md` for details.
+For agy, the script renders the minimum-headroom plugin from `templates/antigravity-plugin/` into a per-launch temp dir (with `MH_REPO_ROOT` resolved), runs `agy plugin install` on it, and then explicitly syncs the same rendered files into `~/.gemini/antigravity-cli/plugins/minimum-headroom/`. This extra sync is intentional: agy 1.0.16 can process hooks/skills during install while leaving the CLI plugin directory stale. The rendered plugin includes `mcp_config.json`, `hooks.json`, `minimum-headroom-ops`, and `atoms3r-vision`. Shared `~/.gemini/settings.json` is NOT touched because it is shared with the user's other customizations. Merge `doc/examples/antigravity/settings-hooks.snippet.json` manually only if your installed agy build does not load plugin hooks. See `doc/examples/antigravity/README.md` for details.
 
 ## The voice-first rules
 
@@ -87,6 +106,7 @@ For agy, the script renders the minimum-headroom plugin from `templates/antigrav
 - avoid screen-only language ("as shown", "the diff below");
 - emit `face_event(permission_required)` plus `face_say(priority=3, policy=interrupt)` before every approval prompt;
 - summarize stack traces / diffs / URLs verbally instead of reading them character-by-character.
+- answer M12 visual questions as a shared-scene companion: use recent context, user-reported observations, and `vision_situation` / `vision_look` instead of only listing objects.
 
 After editing the source, regenerate the three CLI-facing copies:
 
@@ -101,7 +121,7 @@ The script picks light models by default — adequate for short conversational t
 | CLI    | Default                  | Override                        |
 |--------|--------------------------|---------------------------------|
 | claude | `haiku`                  | `--model sonnet` etc.            |
-| codex  | `gpt-5-mini`             | `--model <id>` or `-c model=...` |
+| codex  | `gpt-5.4-mini`           | `--model <id>` or `-c model=...` |
 | agy    | (read from `~/.gemini/antigravity-cli/settings.json`) | edit settings.json — agy has no `--model` flag |
 
 Override the script defaults globally with environment variables:
@@ -129,9 +149,9 @@ If `face-app` is bound outside loopback and requires `MH_FACE_AUTH_TOKEN`, the b
 
 ## First-launch quirks
 
-- **Codex hook trust.** Codex marks user-defined hooks as untrusted until you trust them inside the TUI. After the first launch, run `scripts/grant-codex-hook-trust.sh` once, or open codex interactively and type `/hooks` to trust each event row.
-- **Agy MCP loaded.** After `--agent agy` starts, type `/mcp` inside the agy TUI to confirm `minimum_headroom` is listed. If it shows zero servers, the plugin install step probably failed — run `agy plugin list` to check, and `agy plugin validate $XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/agy-plugin/minimum-headroom` to see the error. The plugin install is idempotent; you can also install manually with `agy plugin install doc/examples/antigravity` (after editing the absolute path in `mcp_config.json`).
-- **Claude MCP scope.** This script uses `claude --mcp-config <generated.json>` so the MCP registration is scoped to the launched process; nothing is added to your global `~/.claude.json`.
+- **Codex hook trust.** Codex marks user-defined hooks as untrusted until you trust them inside the TUI. For hooks supplied by `start-rmh.sh` through `codex -c`, trust them from the first launched Codex session: type `/hooks`, open each event row with pending hooks, and press `t`. `scripts/grant-codex-hook-trust.sh` is still useful for hooks that you have written directly into `~/.codex/config.toml`.
+- **Agy MCP loaded.** After `--agent agy` starts, type `/mcp` inside the agy TUI to confirm `minimum_headroom` is listed. It should include `face_say`, `vision_situation`, and `vision_look`. If it shows zero servers, the plugin install step probably failed — run `agy plugin list` to check, and `agy plugin validate $XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/agy-plugin/minimum-headroom` to see the error. The plugin install is idempotent; you can also install manually with `agy plugin install doc/examples/antigravity` (after editing the absolute path in `mcp_config.json`).
+- **Claude config scope.** This script uses `claude --mcp-config <generated.json> --settings <generated.json>` so the MCP registration and RMH hooks are scoped to the launched process; nothing is added to your global `~/.claude.json` or project `.claude/settings.local.json`. If another settings source also registers `scripts/situation-context-hook.sh` as a `UserPromptSubmit` hook, disable one copy to avoid duplicate camera blocks.
 
 ## Troubleshooting
 

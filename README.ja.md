@@ -478,7 +478,7 @@ AtomS3R に `firmware/atoms3r-headroom/` のファームを焼いた物理デバ
 
 RMH は LLM とハンズフリーで日常的に会話するための推奨経路です。画面を見ながら作業する場合、terminal mirror や承認操作が必要な場合は mobile operator stack（Path B）を使ってください。`--with-vision` を付けると CLI 起動前に `scripts/run-vision-stack.sh` を開始し、M12 の situation context と alert を利用できます。
 
-スクリプトはリポジトリのルートを自動検出（ハードコーディングなし）し、`MH_FACE_AGENT_ID=__operator__` を export、CLI 別の MCP 設定をランタイムディレクトリへ展開してから、このフォルダ内で CLI を起動します。Codex では生成 config に hook も含めます。agy では MCP plugin をインストールし、hook 設定は上記 Antigravity 手順の 1 回限りの設定として残します。これにより `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` の voice-first ルールが読み込まれ、回答は `face_say` で音声化されます。軽量モデル既定（Claude=`haiku`, Codex=`gpt-5-mini`）で RMH 会話のレスポンスを軽快に保ちます。詳細は `examples/rmh-voice-mode/README.md` を参照。
+スクリプトはリポジトリのルートを自動検出（ハードコーディングなし）し、`MH_FACE_AGENT_ID=__operator__` を export、CLI 別のランタイム設定を生成してから、このフォルダ内で CLI を起動します。Claude は生成 `--mcp-config` と `--settings` を受け取り、Codex は通常の `~/.codex` auth/state を保ったまま `codex -c` で MCP + hook を受け取り、agy は MCP・hook・RMH skill を含む plugin を install/sync します。`--with-vision` では Claude と Codex に M12 situation/companion context が受動注入され、agy は MCP の `vision_situation` / `vision_look` で取得できます。これにより `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` の voice-first ルールが読み込まれ、回答は `face_say` で音声化されます。軽量モデル既定（Claude=`haiku`, Codex=`gpt-5.4-mini`）で RMH 会話のレスポンスを軽快に保ちます。詳細は `examples/rmh-voice-mode/README.md` を参照。
 
 ### ツール名スタイル
 

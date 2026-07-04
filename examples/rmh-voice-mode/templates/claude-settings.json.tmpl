@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event permission_required"
+            "command": "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime claude --event permission_required"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event idle_after_response"
+            "command": "__MH_REPO_ROOT__/scripts/mh-hook.mjs --runtime claude --event idle_after_response"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/abs/path/to/scripts/situation-context-hook.sh"
+            "command": "__MH_REPO_ROOT__/scripts/situation-context-hook.sh"
           }
         ]
       }

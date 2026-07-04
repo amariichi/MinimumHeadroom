@@ -5,7 +5,7 @@
 [mcp_servers.minimum_headroom]
 command = "/ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh"
 args = []
-env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "MCP_TOOL_NAME_STYLE" = "underscore" }
+env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "VISION_BASE_URL" = "http://127.0.0.1:8095", "MCP_TOOL_NAME_STYLE" = "underscore" }
 
 # The wrapper preserves MH_FACE_AGENT_ID / MH_FACE_AGENT_LABEL from the current
 # agent process or its parent when available, so face_* tools can omit agent_id.
@@ -31,6 +31,13 @@ matcher = ".*"
 [[hooks.PermissionRequest.hooks]]
 type = "command"
 command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event permission_required"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/ABS/PATH/minimum-headroom/scripts/situation-context-hook-codex.mjs"
 timeout = 5
 
 [[hooks.Stop]]

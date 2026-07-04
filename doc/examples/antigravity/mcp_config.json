@@ -5,6 +5,7 @@
       "args": [],
       "env": {
         "FACE_WS_URL": "ws://127.0.0.1:8765/ws",
+        "VISION_BASE_URL": "http://127.0.0.1:8095",
         "MCP_TOOL_NAME_STYLE": "underscore"
       }
     }
