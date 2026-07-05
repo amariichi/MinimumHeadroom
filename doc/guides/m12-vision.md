@@ -1,10 +1,14 @@
 # AtomS3R-M12 Vision Guide
 
+[English](#english) | [日本語](#japanese)
+
 This guide explains the AtomS3R-M12 vision subsystem: a small ambient scene
 memory that local coding agents and the conversational LLM can query. The M12
 camera provides frames, `vision-worker` turns changed scenes into structured
 records with diffusiongemma, SQLite stores the short-term memory, and
 `GET /situation` exposes a cheap digest for agents.
+
+<a id="english"></a>
 
 ## English
 

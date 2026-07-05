@@ -20,7 +20,7 @@ A face and operator companion app for coding agents.
 - [Quick Start](#en-quick-start)
 - [Agent Setup](#en-agent-setup)
 - [Detailed Guides](#en-detailed-guides)
-- [Documentation Index](doc/README.md)
+- [Documentation Index](doc/README.md#english)
 
 <a id="en-at-a-glance"></a>
 ## At a Glance
@@ -30,7 +30,7 @@ A face and operator companion app for coding agents.
 - **tmux operator bridge** relays input/output between the browser UI and the agent pane.
 - **3D face + TTS + MCP signaling** give your agent a voice and expressions that reflect its state.
 - **Optional AtomS3R desk devices** — two similarly-named M5Stack boards you can add: **AtomS3R** (face + voice I/O — the physical desk face you talk to) and **AtomS3R-M12** (camera + voice output — ambient scene awareness, no microphone). See [AtomS3R Devices](doc/guides/atom-devices.md#english).
-- **M12 vision subsystem** adds AtomS3R-M12 camera awareness: diffusiongemma (vLLM) captions, hierarchical situation memory, `GET /situation` agent-context injection, and spoken alerts through the M12 Echo Base. See [M12 Vision Guide](doc/guides/m12-vision.md#english) and [vision-worker README](vision-worker/README.md).
+- **M12 vision subsystem** adds AtomS3R-M12 camera awareness: diffusiongemma (vLLM) captions, hierarchical situation memory, `GET /situation` agent-context injection, and spoken alerts through the M12 Echo Base. See [M12 Vision Guide](doc/guides/m12-vision.md#english) and [vision-worker README](vision-worker/README.md#english).
 - **Multi-agent support** (experimental) — spawn helper agents in isolated worktrees with permission presets and durable mission tracking. See [Multi-Agent Guide](doc/guides/multi-agent.md).
 - **Tailscale Serve** for secure remote access from phone or tablet.
 
@@ -215,6 +215,7 @@ The 32 GB figure is the default configuration, not an architectural requirement:
 <a id="en-quick-start"></a>
 ## Quick Start
 
+<a id="en-language-mh-lang"></a>
 ### Language: Japanese / English (MH_LANG)
 
 Set the deployment language in `~/.config/minimum-headroom.env`:
@@ -475,7 +476,7 @@ If your MCP client rejects tool names with dots (for example `face.event`), set 
 <a id="en-detailed-guides"></a>
 ## Detailed Guides
 
-- [Documentation Index](doc/README.md) — full map of repository docs, guides, examples, specs, firmware, and vision-worker references
+- [Documentation Index](doc/README.md#english) — full map of repository docs, guides, examples, specs, firmware, and vision-worker references
 - [AtomS3R Devices](doc/guides/atom-devices.md#english) — the two physical Atom devices (face vs M12 camera), which docs belong to which, and the `--asr-lang` gotcha
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english) — launcher choice, tmux bridge, operator UI, keyboard shortcuts, hidden mobile recovery, batch/realtime ASR, Tailscale remote operation
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization

@@ -68,7 +68,7 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 --device-id atom-... [opt
 the **AtomS3R-M12 has no microphone**, this option only matters for the **face
 AtomS3R**. Provision `--asr-lang` on the face device only; setting it on the
 M12 has no effect. When you change the deployment language (see
-[`MH_LANG`](../../README.md#language-japanese--english-mh_lang)), re-provision
+[`MH_LANG`](../../README.md#en-language-mh-lang)), re-provision
 the face device once.
 
 ### Where each device's docs live (reading paths)
@@ -144,7 +144,7 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 --device-id atom-... [opt
 `--asr-lang ja|en` は**デバイスが取り込む音声**の言語を設定します。**AtomS3R-M12 は
 マイクを持たない**ため、このオプションは**顔 AtomS3R でのみ**意味を持ちます。`--asr-lang`
 は顔デバイスにだけプロビジョンしてください（M12 に設定しても効果はありません）。
-デプロイ言語を変えたとき（[`MH_LANG`](../../README.ja.md#言語-日本語--英語-mh_lang) 参照）は、
+デプロイ言語を変えたとき（[`MH_LANG`](../../README.ja.md#ja-language-mh-lang) 参照）は、
 顔デバイスを一度だけ再プロビジョンします。
 
 ### 各デバイスのドキュメントの所在（読む順）

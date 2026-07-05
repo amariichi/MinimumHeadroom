@@ -1,5 +1,25 @@
 # Multi-Agent Orchestration Spec (Draft)
 
+[English](#english) | [日本語概要](#japanese)
+
+<a id="japanese"></a>
+
+## 日本語概要
+
+この文書は ExecPlan ではなく、operator が helper agent を率いる multi-agent
+運用の製品・プロトコル仕様です。中心原則は「ユーザーと直接会話する owner は
+1つの stream に1人だけ」というものです。通常は `operator` が owner で、helper
+は owner にだけ進捗・完了・質問・block を報告します。helper が直接ユーザーへ質問
+しない設計にすることで、会話の所有権、判断責任、作業統合の流れを崩さないように
+しています。
+
+主な論点は、helper の mission 構造、owner inbox、停止や承認待ちの扱い、pane control、
+desktop/mobile UI の attention 表示、異種 agent runtime への対応です。現行実装では
+`agent.assign` / `agent.inject` / `agent.report` / `owner.inbox.*` / stuck detector
+などにこの仕様の考え方が反映されています。詳細な MUST/SHOULD/MAY は英語本文を正とします。
+
+<a id="english"></a>
+
 This document is a design specification, not an ExecPlan. Its job is to freeze the product and protocol rules for operator-led multi-agent work before implementation planning begins.
 
 The target outcome is a system where a user continues to interact primarily with one visible `operator`, while that operator can create helper agents, collect their results, and surface only the necessary decisions back to the user without exposing helper-internal confusion or half-formed questions.
