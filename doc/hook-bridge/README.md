@@ -1,12 +1,33 @@
 # Hook bridge configuration
 
+[English](#english) | [日本語](#japanese)
+
+<a id="english"></a>
+
+## English
+
 This directory contains example configuration snippets that wire each supported
 agent runtime's hook system to `scripts/mh-hook.mjs`. The wrapper translates a
 canonical hook event (`permission_required` or `idle_after_response`) into a
 `face_say` + `face_event` and, for helper agents, an owner-inbox entry — even
 when the agent forgets to call `face_say` voluntarily.
 
-## Files
+### Runtime coverage
+
+This bridge covers all three supported agent runtimes:
+
+- **Claude Code**: `Notification`, `Stop`, and optional `UserPromptSubmit`
+  situation injection through the example settings file.
+- **Codex CLI**: `PermissionRequest`, `UserPromptSubmit`, and `Stop` through the
+  hook system, plus a legacy `notify` fallback. Codex additionally requires a
+  one-time hook trust grant, documented below.
+- **Antigravity CLI / agy**: JSON hooks for `Stop`, with a disabled
+  `PreToolUse` approval-attention example.
+
+The Codex section is longer because Codex has an extra trust model; it is not
+the only runtime supported by this directory.
+
+### Files
 
 - `claude-settings.json.example` — paste into `~/.claude/settings.json` (merge
   with existing `hooks` block). Wires Claude Code's `Notification` and `Stop`
@@ -17,7 +38,7 @@ when the agent forgets to call `face_say` voluntarily.
   keeps the legacy `notify` line as a fallback.
 - `antigravity-hooks.json.example` — copy into an Antigravity `hooks.json`. Wires `Stop` and includes a disabled `PreToolUse` approval-attention example.
 
-## Codex-specific: trust grant required (one time, user-level)
+### Codex-specific: trust grant required (one time, user-level)
 
 Codex (verified against rust-v0.130.0 and main branch as of 2026-05-10) treats every user-defined hook as **untrusted** until the user explicitly approves it. Untrusted hooks are silently filtered out at startup — they will not fire even when the config is correct.
 
@@ -45,7 +66,7 @@ Note: the feature flag is `[features] hooks = true`. Codex < 0.131 also accepts 
 
 Source: `codex-rs/hooks/src/engine/discovery.rs` (`HookTrustStatus` filter), `codex-rs/tui/src/bottom_pane/hooks_browser_view.rs` (`t` keymap), and `codex-rs/features/src/legacy.rs` (alias) in <https://github.com/openai/codex>.
 
-## Common prerequisites
+### Common prerequisites
 
 - The face-app and MCP server must be running (the operator stack does both).
   Without them, the wrapper exits silently with a stderr note and the agent
@@ -62,7 +83,7 @@ Source: `codex-rs/hooks/src/engine/discovery.rs` (`HookTrustStatus` filter), `co
   `~/.minimum-headroom/face-templates.json`. If the file is absent, the
   built-in defaults (Japanese + English) are used.
 
-## Output discipline
+### Output discipline
 
 `mh-hook.mjs` always exits `0`. For Claude Code and Codex it writes nothing to stdout, preserving their hook contracts. Claude's M12 `UserPromptSubmit` context, when enabled, comes from `scripts/situation-context-hook.sh`, not from `mh-hook.mjs`. For Antigravity CLI, `--runtime antigravity` writes the minimal JSON that Antigravity expects for `PreToolUse` and `Stop` hooks while still forwarding the face hook payload.
 
@@ -74,7 +95,7 @@ This is required because:
 
 If you customize the wrapper, preserve these invariants.
 
-## Templates file
+### Templates file
 
 Example `~/.minimum-headroom/face-templates.json`:
 
@@ -96,9 +117,26 @@ falling back to `MH_FACE_LANG` when the agent has not spoken yet.
 
 ---
 
+<a id="japanese"></a>
+
 ## 日本語
 
 このディレクトリには、各 agent runtime（Claude Code / Codex / Antigravity CLI）の hook 機構を `scripts/mh-hook.mjs` に配線するための設定例が入っています。wrapper は canonical な hook event（`permission_required` または `idle_after_response`）を `face_say` + `face_event`、helper の場合はさらに owner inbox エントリに変換します。agent 自身が `face_say` を呼び忘れたときの安全網。
+
+### 対象 runtime
+
+この bridge は 3 種類の runtime を対象にしています。
+
+- **Claude Code**: `Notification` / `Stop` と、任意の `UserPromptSubmit`
+  状況注入を設定例で配線します。
+- **Codex CLI**: `PermissionRequest` / `UserPromptSubmit` / `Stop` と legacy
+  `notify` fallback を配線します。Codex だけは user 単位の trust 付与が必要なので、
+  下の Codex 固有セクションが長めです。
+- **Antigravity CLI / agy**: `Stop` 用 JSON hook と、無効化済みの
+  `PreToolUse` 承認通知例を提供します。
+
+Codex の説明が目立つのは trust モデルの差分があるためで、このディレクトリが Codex
+専用という意味ではありません。
 
 ### 同梱ファイル
 

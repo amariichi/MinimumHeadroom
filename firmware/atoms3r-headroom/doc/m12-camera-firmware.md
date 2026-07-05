@@ -18,6 +18,8 @@ This spec extends the existing firmware project `firmware/atoms3r-headroom/`
 `../../../doc/guides/atoms3r-voice.md` for the audio path, the WebServer patch,
 provisioning, and the release build.
 
+<a id="japanese"></a>
+
 ## 日本語（概要）
 
 これは **AtomS3R-M12（カメラ＋音声出力）** のファームウェア仕様です。もう一方の

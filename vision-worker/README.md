@@ -1,5 +1,11 @@
 # vision-worker
 
+[English](#english) | [日本語](#japanese)
+
+<a id="english"></a>
+
+## English
+
 Continuous camera perception for the **AtomS3R-M12 Camera Kit**. It pulls
 frames, gates on visual change, asks a vision-language model for a structured
 record (full OCR + scene overview + change-from-previous), and keeps a small
@@ -15,7 +21,7 @@ See the public guide in
 [`doc/guides/m12-vision.md`](../doc/guides/m12-vision.md), which covers the
 perception flow, the tiered situation memory, corrections, and alerts.
 
-## Run (mock backend, no GPU)
+### Run (mock backend, no GPU)
 
     ./scripts/run-vision-worker.sh                # HTTP server on VISION_PORT (default 8095)
 
@@ -30,11 +36,11 @@ Then query it:
     curl -s "http://127.0.0.1:8095/diffs?n=50"
     curl -s http://127.0.0.1:8095/frame/1 --output /tmp/frame1.jpg
 
-## Tests
+### Tests
 
     uv run --project vision-worker pytest
 
-## Real model: diffusiongemma via vLLM
+### Real model: diffusiongemma via vLLM
 
 The default real-model path uses NVIDIA's NVFP4 diffusiongemma checkpoint:
 [`nvidia/diffusiongemma-26B-A4B-it-NVFP4`](https://huggingface.co/nvidia/diffusiongemma-26B-A4B-it-NVFP4).
@@ -79,7 +85,7 @@ when the endpoint supports it. Runtime knobs such as `VLLM_DGEMMA_PORT`,
 `scripts/run-vllm-diffusiongemma.sh`, which is the source of truth for the
 repository's pinned vLLM options.
 
-## Full M12 Vision Stack
+### Full M12 Vision Stack
 
 The reboot-safe stack entrypoint is:
 
@@ -135,7 +141,7 @@ Deferred live smoke checklist for the next physical M12 pass:
 5. Trigger a vision alert or narration and confirm speech reaches the M12 Echo
    Base.
 
-## Key environment variables
+### Key environment variables
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -155,3 +161,93 @@ Deferred live smoke checklist for the next physical M12 pass:
 | `VISION_MAX_CHANGES` | `50` | rolling change-window size |
 | `VISION_GATE_HAMMING` | `6` | perceptual-hash change threshold |
 | `VISION_GATE_PIXELDIFF` | `0.06` | pixel-diff change threshold |
+
+<a id="japanese"></a>
+
+## 日本語
+
+`vision-worker` は **AtomS3R-M12 Camera Kit** 用の継続視覚ワーカーです。
+M12 から JPEG フレームを取得し、安価な変化判定で不要なモデル呼び出しを避け、
+必要なときだけ視覚言語モデルに構造化観測を作らせます。観測結果とフレームは
+SQLite に保存され、Claude / Codex / agy などのエージェントは skill や HTTP API
+から現在状況と最近の変化を読めます。
+
+既定は **GPU 不要の mock backend** です。実モデルを使う場合は、標準構成として
+NVIDIA の NVFP4 版 diffusiongemma
+[`nvidia/diffusiongemma-26B-A4B-it-NVFP4`](https://huggingface.co/nvidia/diffusiongemma-26B-A4B-it-NVFP4)
+を vLLM の OpenAI 互換 endpoint として起動します。モデルの利用条件、対応 GPU、
+vLLM 側の最新注意点は Hugging Face のモデルカードを参照してください。
+
+詳しい認識フロー、階層化された状況メモリ、訂正、キーワード監視、音声アラートは
+[M12 Vision Guide](../doc/guides/m12-vision.md#japanese) にあります。
+
+### 起動（mock backend、GPU 不要）
+
+    ./scripts/run-vision-worker.sh
+
+録画済みフレームのフォルダを再生してパイプラインを通す場合:
+
+    VISION_FRAME_DIR=/path/to/frames ./scripts/run-vision-worker.sh --replay-once
+
+確認用 API:
+
+    curl -s http://127.0.0.1:8095/healthz
+    curl -s http://127.0.0.1:8095/latest
+    curl -s "http://127.0.0.1:8095/diffs?n=50"
+
+### 実モデル: diffusiongemma via vLLM
+
+標準の Docker 経路では、Docker と NVIDIA GPU が使える状態を事前に用意します。
+必要に応じて `HF_TOKEN` または `HUGGING_FACE_HUB_TOKEN` を設定してください。
+
+初回の image 取得:
+
+    ./scripts/setup-vllm-diffusiongemma.sh
+
+モデルサーバーの起動または再利用:
+
+    ./scripts/run-vllm-diffusiongemma.sh start
+
+ワーカーを実モデルに向けて起動:
+
+    VISION_MODEL_BACKEND=diffusiongemma VISION_MODEL_URL=http://127.0.0.1:8000/v1 \
+      ./scripts/run-vision-worker.sh
+
+M12 カメラ、`vision-worker`、M12 警告スピーカーブリッジまでまとめて使う通常経路では、
+`./scripts/run-vision-stack.sh` を使ってください。このスクリプトが diffusiongemma/vLLM
+を起動または再利用します。
+
+別のローカル VLM やホスト型 VLM に差し替える場合は、`VISION_MODEL_URL` と
+`VISION_MODEL_NAME` を変更できます。ただし endpoint は画像 + テキストの
+`/chat/completions` を受け、`is_text`, `ocr_full`, `overview`, `changed`,
+`change_from_prev` を持つ JSON オブジェクトを返す必要があります。
+`VISION_GUIDED_DECODING=1` は、対応する vLLM endpoint に `guided_json` でこの
+スキーマを強制するための設定です。
+
+### フル M12 視覚スタック
+
+再起動後も安全に使える上位入口:
+
+    ./scripts/run-vision-stack.sh --check
+    ./scripts/run-vision-stack.sh
+
+`--check` は何も起動せず、永続設定、M12 の発見、diffusiongemma の状態、
+`vision-worker` の health endpoint、M12 警告スピーカーの port を確認します。
+実行時は `~/.config/minimum-headroom.env` を読みます。ライブ運用では
+`MH_FACE_AUTH_TOKEN` が必要です。
+
+このスクリプトは Voxtral や ASR サービスを起動しません。ASR は operator stack の
+担当です。GPU メモリが厳しい場合、operator 側の Parakeet は `MH_ASR_DEVICE=cpu`
+にしてください。
+
+### 主要な環境変数（抜粋）
+
+| 変数 | 既定値 | 意味 |
+| --- | --- | --- |
+| `VISION_MODEL_BACKEND` | `mock` | `mock` または `diffusiongemma` |
+| `VISION_MODEL_URL` | `http://127.0.0.1:8000/v1` | OpenAI 互換 endpoint |
+| `VISION_MODEL_NAME` | `nvidia/diffusiongemma-26B-A4B-it-NVFP4` | モデル ID |
+| `VISION_GUIDED_DECODING` | `0` | vLLM guided JSON decoding を使う |
+| `VISION_CAMERA_URL` | unset/`auto` | M12 `/snapshot` URL。`run-vision-stack.sh` が自動発見可能 |
+| `VISION_CAMERA_REDISCOVER_AFTER_FAILURES` | `5` | 連続失敗後にカメラ URL を再探索する回数 |
+| `VISION_CACHE_DIR` | `~/.cache/minimum-headroom/vision` | フレームと SQLite DB の保存先 |

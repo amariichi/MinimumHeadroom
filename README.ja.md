@@ -20,7 +20,7 @@
 - [クイックスタート](#ja-quick-start)
 - [エージェント設定](#ja-agent-setup)
 - [詳細ガイド](#ja-detailed-guides)
-- [ドキュメント索引](doc/README.md)
+- [ドキュメント索引](doc/README.md#japanese)
 
 <a id="ja-overview"></a>
 ## 全体像（要点）
@@ -30,7 +30,7 @@
 - **tmux オペレーターブリッジ** がブラウザ画面とエージェントペイン間の入出力を中継します。
 - **3D フェイス + TTS + MCP シグナリング** でエージェントに声と表情を与え、状態をリアルタイムに反映します。
 - **任意の AtomS3R 卓上デバイス** — 名前のよく似た2種類の M5Stack 基板を追加できます: **AtomS3R**（顔＋音声入出力 — 話しかける物理の卓上フェイス）と **AtomS3R-M12**（カメラ＋音声出力 — 周囲状況の把握、マイク非搭載）。[AtomS3R Devices](doc/guides/atom-devices.md#japanese) を参照。
-- **M12 視覚サブシステム** — AtomS3R-M12 カメラ、diffusiongemma（vLLM）による画像説明、階層化された状況メモリ、`GET /situation` によるエージェント文脈への注入、M12 Echo Base への音声アラートを追加します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) と [vision-worker README](vision-worker/README.md) を参照。
+- **M12 視覚サブシステム** — AtomS3R-M12 カメラ、diffusiongemma（vLLM）による画像説明、階層化された状況メモリ、`GET /situation` によるエージェント文脈への注入、M12 Echo Base への音声アラートを追加します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) と [vision-worker README](vision-worker/README.md#japanese) を参照。
 - **マルチエージェント対応**（実験的） — 分離ワークツリーにヘルパーを生成し、権限プリセットとミッション追跡で管理します。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
 - **Tailscale Serve** でスマホ/タブレットから安全にリモートアクセス。
 
@@ -215,6 +215,7 @@ sequenceDiagram
 <a id="ja-quick-start"></a>
 ## クイックスタート
 
+<a id="ja-language-mh-lang"></a>
 ### 言語: 日本語 / 英語 (MH_LANG)
 
 デプロイ全体の既定言語は `~/.config/minimum-headroom.env` に設定します。
@@ -487,7 +488,7 @@ MCP クライアントがドット付きツール名（例: `face.event`）を�
 <a id="ja-detailed-guides"></a>
 ## 詳細ガイド
 
-- [ドキュメント索引](doc/README.md) — ガイド、設定例、仕様、ファームウェア、vision-worker への入口
+- [ドキュメント索引](doc/README.md#japanese) — ガイド、設定例、仕様、ファームウェア、vision-worker への入口
 - [AtomS3R Devices](doc/guides/atom-devices.md#japanese) — 2つの物理 Atom デバイス（顔 と M12 カメラ）の違い、どの文書がどちらのものか、`--asr-lang` の落とし穴
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) — 起動スクリプトの選び方、tmux ブリッジ、オペレーター画面、キーボードショートカット、バッチ / リアルタイム ASR、隠し復旧、Tailscale リモート運用
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化
