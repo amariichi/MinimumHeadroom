@@ -181,6 +181,20 @@ const BASE_TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'vision.correct',
+    description: 'Record a human correction of a camera-derived claim (e.g. the user says the reported laptop is not there). Scene-bound: the note retires automatically when the scene changes. Call this whenever the user contradicts something the camera reported, so the vision memory stops repeating the misread.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      required: ['text'],
+      properties: {
+        text: { type: 'string', minLength: 1 },
+        ttl_s: { type: ['number', 'null'], exclusiveMinimum: 0 },
+        timeout_ms: { type: ['integer', 'null'], minimum: 100, maximum: 10000 }
+      }
+    }
+  },
+  {
     name: 'agent.list',
     description: 'List managed helper agents visible to the current or requested stream.',
     inputSchema: {
@@ -424,6 +438,9 @@ function canonicalizeToolName(toolName) {
   }
   if (toolName === 'vision_look') {
     return 'vision.look';
+  }
+  if (toolName === 'vision_correct') {
+    return 'vision.correct';
   }
   if (toolName === 'agent_list') {
     return 'agent.list';
@@ -982,6 +999,20 @@ function normalizeVisionLookPayload(rawArguments) {
   return { store, timeout_ms: timeoutMs };
 }
 
+function normalizeVisionCorrectPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const text = requireString(args, 'text');
+  const ttlS = args.ttl_s ?? null;
+  if (ttlS !== null && (typeof ttlS !== 'number' || !(ttlS > 0))) {
+    throw new Error('ttl_s must be a positive number or null');
+  }
+  const timeoutMs = optionalInteger(args, 'timeout_ms', 3000);
+  if (timeoutMs < 100 || timeoutMs > 10000) {
+    throw new Error('timeout_ms must be between 100 and 10000');
+  }
+  return { text, ttl_s: ttlS, timeout_ms: timeoutMs };
+}
+
 function normalizeAgentReportPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const streamId = requireString(args, 'stream_id');
@@ -1456,6 +1487,47 @@ async function handleToolCall(params) {
     } catch (error) {
       const reason = error?.name === 'AbortError' ? 'timeout' : error.message;
       return toolTextResult(`vision.look failed: ${reason}`, {
+        isError: true,
+        structuredContent: { ok: false, vision_base_url: VISION_DISPLAY_URL, reason }
+      });
+    }
+  }
+
+  if (toolName === 'vision.correct') {
+    try {
+      const payload = normalizeVisionCorrectPayload(rawArguments);
+      const { response, url } = await callVision('/correction', {
+        method: 'POST',
+        timeout_ms: payload.timeout_ms,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          text: payload.text,
+          ...(payload.ttl_s !== null ? { ttl_s: payload.ttl_s } : {})
+        })
+      });
+      const apiPayload = await response.json().catch(() => null);
+      if (response.status === 409) {
+        // No scene observed yet: nothing to anchor the note to.
+        return toolTextResult('vision.correct failed: まだ観測がないため訂正を紐づけられません。', {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, payload: apiPayload }
+        });
+      }
+      if (!response.ok || apiPayload === null) {
+        return toolTextResult(`vision.correct failed: http_${response.status}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, payload: apiPayload }
+        });
+      }
+      return toolTextResult(
+        `[訂正を記録] ${payload.text}（現在のシーンに紐づけ・シーン変化で自動失効）`,
+        {
+          structuredContent: { ok: true, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, payload: apiPayload }
+        }
+      );
+    } catch (error) {
+      const reason = error?.name === 'AbortError' ? 'timeout' : error.message;
+      return toolTextResult(`vision.correct failed: ${reason}`, {
         isError: true,
         structuredContent: { ok: false, vision_base_url: VISION_DISPLAY_URL, reason }
       });

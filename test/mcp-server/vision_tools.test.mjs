@@ -78,6 +78,7 @@ function stopChild(child) {
 
 test('mcp vision tools read situation and fresh look from vision-worker host side', async (t) => {
   const requests = [];
+  const correctionTexts = [];
   const server = http.createServer((request, response) => {
     requests.push({ method: request.method, url: request.url });
 
@@ -87,6 +88,23 @@ test('mcp vision tools read situation and fresh look from vision-worker host sid
         'x-situation-watermark': 'wm-1'
       });
       response.end('[カメラの状況 12:34] 観測中\n現在:\n机の上にマグカップがある。');
+      return;
+    }
+
+    if (request.method === 'POST' && request.url === '/correction') {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => {
+        const parsed = JSON.parse(body);
+        if (parsed.text === 'trigger-409') {
+          response.writeHead(409, { 'content-type': 'application/json; charset=utf-8' });
+          response.end(JSON.stringify({ detail: 'no live scene to attach a correction to' }));
+          return;
+        }
+        correctionTexts.push(parsed.text);
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ ok: true, correction: { id: 1, text: parsed.text } }));
+      });
       return;
     }
 
@@ -133,6 +151,7 @@ test('mcp vision tools read situation and fresh look from vision-worker host sid
   const toolNames = toolsResponse.result.tools.map((tool) => tool.name);
   assert.ok(toolNames.includes('vision_situation'));
   assert.ok(toolNames.includes('vision_look'));
+  assert.ok(toolNames.includes('vision_correct'));
 
   const situationResponse = await rpc.call('tools/call', {
     name: 'vision_situation',
@@ -154,8 +173,31 @@ test('mcp vision tools read situation and fresh look from vision-worker host sid
   assert.match(lookResponse.result.content[0].text, /直前との差/);
   assert.equal(lookResponse.result.structuredContent.store, false);
 
+  const correctResponse = await rpc.call('tools/call', {
+    name: 'vision_correct',
+    arguments: {
+      text: 'ノートパソコンは存在しない'
+    }
+  });
+  assert.equal(correctResponse.result.isError, undefined);
+  assert.match(correctResponse.result.content[0].text, /訂正を記録/);
+  assert.match(correctResponse.result.content[0].text, /ノートパソコンは存在しない/);
+  assert.equal(correctResponse.result.structuredContent.ok, true);
+
+  const rejected = await rpc.call('tools/call', {
+    name: 'vision_correct',
+    arguments: {
+      text: 'trigger-409'
+    }
+  });
+  assert.equal(rejected.result.isError, true);
+  assert.match(rejected.result.content[0].text, /まだ観測がない/);
+
   assert.deepEqual(requests.map((item) => `${item.method} ${item.url}`), [
     'GET /situation?format=text',
-    'POST /look?store=0'
+    'POST /look?store=0',
+    'POST /correction',
+    'POST /correction'
   ]);
+  assert.deepEqual(correctionTexts, ['ノートパソコンは存在しない']);
 });
