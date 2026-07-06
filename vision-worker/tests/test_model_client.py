@@ -54,6 +54,19 @@ def test_instruction_and_schema_request_changed_verdict():
     assert "changed" in RESPONSE_SCHEMA["required"]
 
 
+def test_instruction_is_world_oriented_and_suppresses_ego_motion():
+    # The camera is hand-movable: memories must describe the world, and
+    # camera-only differences (motion/focus/blur/lighting) must not count as
+    # a change nor be described as one.
+    assert "WORLD" in INSTRUCTION
+    assert "Never describe the camera" in INSTRUCTION
+    assert "only by camera motion" in INSTRUCTION
+    assert "NEVER describe camera movement" in INSTRUCTION
+    assert "describe the new subject, not the movement" in INSTRUCTION
+    # The old frame-diff framing treated a mere angle change as a change.
+    assert "different view or camera angle" not in INSTRUCTION
+
+
 def test_looks_like_no_change_detects_en_and_ja():
     assert looks_like_no_change("前の状態から変化はありません。")
     assert looks_like_no_change("最初のフレームです。")

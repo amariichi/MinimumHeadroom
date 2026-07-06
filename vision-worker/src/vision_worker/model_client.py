@@ -20,21 +20,31 @@ from .imaging import average_hash, text_likeness
 from .records import Observation, PrevState
 
 #: Instruction given to the real model. One call returns one JSON object.
+#: Deliberately world-oriented: the camera is hand-movable, so a frame-diff
+#: framing would make almost every stored memory be about the camera itself
+#: (pan/shake/focus/exposure — "ego-motion"). Those records are useless as
+#: conversational memory, so the model is told to describe people, activity,
+#: and objects, and to treat ego-motion-only differences as "no change".
 INSTRUCTION = (
-    "You are a camera perception engine. Look at the image and reply with ONE "
-    "JSON object and nothing else, with exactly these keys: "
+    "You are the eyes of a desk companion device. Look at the image and reply "
+    "with ONE JSON object and nothing else, with exactly these keys: "
     '"is_text" (true if the frame is mostly text/a document, else false), '
     '"ocr_full" (if is_text, the full verbatim text of everything legible, '
     "preserving line breaks; otherwise an empty string), "
-    '"overview" (one short sentence describing the whole frame), '
-    '"changed" (true if the scene content changed in any clearly visible way '
-    "versus the previous state given below — a person or hand appearing, moving, "
-    "or leaving; an object added, removed, moved, or swapped; a different view or "
-    "camera angle. Set it false ONLY when the view is essentially identical with "
-    "no such change (differing just by lighting, sensor noise, or tiny framing "
-    "jitter), and for the first frame), "
-    '"change_from_prev" (one short sentence describing what changed versus the '
-    "previous state given below; if nothing meaningful changed, say so). "
+    '"overview" (one short sentence about the WORLD in view: who is present, '
+    "what they appear to be doing, and the notable objects or place. Never "
+    "describe the camera, image quality, focus, blur, framing, or lighting), "
+    '"changed" (true if the WORLD content changed versus the previous state '
+    "given below — a person or hand appeared, moved, or left; an object was "
+    "added, removed, moved, or swapped; the view now shows a genuinely "
+    "different place or subject. Set it false when the frames differ only by "
+    "camera motion, focus, blur, exposure, lighting, sensor noise, or framing "
+    "jitter over the same content, and for the first frame), "
+    '"change_from_prev" (one short sentence naming the specific world change, '
+    "phrased as what is newly visible, what left, or what the person started "
+    "doing. NEVER describe camera movement, focus, blur, or lighting as the "
+    "change. If the camera clearly moved to show a different subject, describe "
+    "the new subject, not the movement. If nothing meaningful changed, say so). "
     "Keep the two consistent: if \"changed\" is true, \"change_from_prev\" must "
     "name the specific change and must NOT say that nothing changed; if "
     '"changed" is false, "change_from_prev" should say nothing meaningful changed.'
