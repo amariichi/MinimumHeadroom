@@ -115,8 +115,9 @@ camera or its contents unless it is relevant to the user's turn. When the user
 refers to their surroundings, what is visible, what changed, or how long the
 scene has been stable, answer from the injected block or pull `GET /situation` /
 `POST /look` for more detail. When the user contradicts a camera-derived claim,
-post that clarification to `POST /correction` so the worker stops repeating the
-misread and the note reaches future summaries.
+post that clarification back — use the MCP `vision_correct` tool when it is
+available, else `POST /correction` — so the worker stops repeating the misread
+and the note reaches future summaries.
 
 ### Optional per-turn injection setup
 
@@ -215,7 +216,9 @@ read it, but your conversation never flows back to them. So if the model mislabe
 something (classic case: it calls an ambulance's flashing red beacon a "red
 traffic light") and you relay it, the user's correction ("no, that's an
 ambulance") would otherwise be lost — the digest keeps re-asserting the misread
-every turn. **Post the correction back** so the digest stops repeating it:
+every turn. **Post the correction back** so the digest stops repeating it.
+Prefer the MCP `vision_correct` tool (it wraps this endpoint and needs no shell
+approval); the raw HTTP equivalent is:
 
 ```bash
 curl -s -X POST "$BASE/correction" -H 'Content-Type: application/json' \
