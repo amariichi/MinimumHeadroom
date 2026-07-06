@@ -18,8 +18,7 @@ writeFileSync(process.env.RMH_FAKE_CODEX_ARGV, JSON.stringify({
   argv: process.argv.slice(2),
   env: {
     CODEX_HOME: process.env.CODEX_HOME || null,
-    MH_SITUATION_INJECT: process.env.MH_SITUATION_INJECT || null,
-    MH_VISION_COMPANION: process.env.MH_VISION_COMPANION || null
+    MH_SITUATION_INJECT: process.env.MH_SITUATION_INJECT || null
   }
 }, null, 2));
 `, 'utf8');
@@ -56,8 +55,7 @@ writeFileSync(process.env.RMH_FAKE_CODEX_ARGV, JSON.stringify({
 
 test('start-rmh codex keeps normal CODEX_HOME and adds UserPromptSubmit only when situation injection is enabled', async () => {
   const withInjection = await runLauncherWithFakeCodex({
-    MH_SITUATION_INJECT: '1',
-    MH_VISION_COMPANION: '1'
+    MH_SITUATION_INJECT: '1'
   });
   assert.equal(withInjection.env.CODEX_HOME, '/tmp/rmh-existing-codex-home');
   assert.equal(withInjection.env.MH_SITUATION_INJECT, '1');
@@ -65,8 +63,7 @@ test('start-rmh codex keeps normal CODEX_HOME and adds UserPromptSubmit only whe
   assert.ok(withInjection.argv.some((arg) => arg.includes('scripts/situation-context-hook-codex.mjs')));
 
   const withoutInjection = await runLauncherWithFakeCodex({
-    MH_SITUATION_INJECT: '0',
-    MH_VISION_COMPANION: '0'
+    MH_SITUATION_INJECT: '0'
   });
   assert.equal(withoutInjection.env.CODEX_HOME, '/tmp/rmh-existing-codex-home');
   assert.equal(withoutInjection.env.MH_SITUATION_INJECT, '0');

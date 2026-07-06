@@ -64,7 +64,6 @@ test('codex situation hook wraps situation text as UserPromptSubmit additionalCo
         input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: '今見える?' }),
         env: {
           MH_SITUATION_INJECT: '1',
-          MH_VISION_COMPANION: '0',
           VISION_BASE_URL: baseUrl,
           XDG_RUNTIME_DIR: tmp,
           MH_FACE_SESSION_ID: 'codex-wrapper-test'

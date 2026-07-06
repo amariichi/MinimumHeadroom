@@ -131,19 +131,7 @@ if [[ "${RMH_WITH_VISION:-0}" == "1" ]]; then
       export MH_SITUATION_INJECT=1
       ;;
   esac
-  case "${MH_VISION_COMPANION+x}:${MH_VISION_COMPANION:-}" in
-    x:0|x:false|x:False|x:FALSE|x:no|x:No|x:NO|x:off|x:Off|x:OFF)
-      ;;
-    x:)
-      export MH_VISION_COMPANION=1
-      ;;
-    x:*)
-      ;;
-    :)
-      export MH_VISION_COMPANION=1
-      ;;
-  esac
-  export MH_SITUATION_INJECT MH_VISION_COMPANION
+  export MH_SITUATION_INJECT
   echo "[start-rmh] starting vision backend (may take a few minutes on cold start)" >&2
   if ! "$MH_REPO_ROOT/scripts/run-vision-stack.sh"; then
     echo "[start-rmh] warning: vision backend unavailable; continuing without vision." >&2
