@@ -96,14 +96,20 @@ not the previous image, so every diffusiongemma call does one image prefill.
 
 ### Memory Lifecycle And Forgetting
 
-The worker keeps two related memories:
+The worker keeps three related memories:
 
 - Tier 0: raw change records plus frame paths.
 - Tiers 1-4: cached text summaries of closed time buckets.
+- Entities: a small callback index of named things (`salient_objects` from the
+  vision model, never people), one row per exact name with first/last seen and
+  a count. `/situation` returns them as `entities`, and the text digest renders
+  up to two `見覚え:` lines about things seen 1 hour to 14 days ago that are
+  not in the current view — material for natural conversational callbacks.
 
 Recent events stay verbatim. Older events are summarized into coarser buckets.
 Forgetting is explicit: old observations are pruned after they are safe to
-summarize, and each summary tier has a retention cap.
+summarize, each summary tier has a retention cap, and entities expire 14 days
+after they were last seen (40-row cap).
 
 ```mermaid
 flowchart TB
