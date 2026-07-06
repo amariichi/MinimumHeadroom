@@ -99,6 +99,7 @@ def compose_situation(
     recent: list[dict],
     summaries: list[dict] | None = None,
     stale_after_s: float = 30.0,
+    entities: list[dict] | None = None,
 ) -> dict:
     """Assemble the situation digest.
 
@@ -116,8 +117,28 @@ def compose_situation(
     when the loop is supposedly observing but no fresh frame has arrived for
     longer than `stale_after_s` (the camera is unreachable), so a reader knows
     the figures are not currently live.
+
+    `entities` is the callback index (`VisionDB.recent_entities`): named things
+    seen recently, each annotated here with `age_seconds` since `last_seen` so
+    renderers and API readers can say "最後は約2時間前" without re-parsing.
     """
     summaries = list(summaries or [])
+    entities_out = []
+    for e in entities or []:
+        last_seen = _parse_iso(e.get("last_seen"))
+        entities_out.append(
+            {
+                "name": e.get("name", ""),
+                "first_seen": e.get("first_seen"),
+                "last_seen": e.get("last_seen"),
+                "seen_count": e.get("seen_count", 1),
+                "age_seconds": (
+                    max(0, int((now - last_seen).total_seconds()))
+                    if last_seen is not None
+                    else None
+                ),
+            }
+        )
     if latest is None:
         return {
             "now": _iso(now),
@@ -125,6 +146,7 @@ def compose_situation(
             "current": None,
             "recent": [],
             "summaries": summaries,
+            "entities": entities_out,
         }
 
     # When the current scene began. Prefer the in-memory commit time; fall back
@@ -179,6 +201,7 @@ def compose_situation(
         "current": current,
         "recent": recent_out,
         "summaries": summaries,
+        "entities": entities_out,
     }
 
 
@@ -193,6 +216,14 @@ _T1_RENDER_LIMIT = 3
 #: Kept short so it costs few tokens when injected on every conversational turn.
 _TEXT_DISCLAIMER = "（情報提供のみ・安全用途不可）"
 _NARRATION_RECENT_SECONDS = 5 * 60
+
+#: 見覚え (callback) lines: named things seen before but NOT in the current
+#: view — material the conversational agent can call back to ("昨日の箱、
+#: 開けました？"). Younger than an hour it is probably still the current scene;
+#: older than the tier-4 horizon it is forgotten.
+_ENTITY_CALLBACK_MIN_AGE_S = 60 * 60
+_ENTITY_CALLBACK_MAX_AGE_S = 14 * 24 * 60 * 60
+_ENTITY_CALLBACK_LIMIT = 2
 
 
 def humanize_seconds(seconds: int | None) -> str:
@@ -231,6 +262,28 @@ def _render_summary_lines(summaries: list[dict]) -> list[str]:
         lines.append(f"{_TIER_LABELS[1]}: {joined}")
     lines.extend(other_lines)
     return lines[:_SUMMARY_LINE_LIMIT]
+
+
+def _render_entity_callback_lines(digest: dict) -> list[str]:
+    """Up to two 見覚え lines about remembered things not currently in view."""
+    current = digest.get("current") or {}
+    overview = current.get("overview") or ""
+    lines: list[str] = []
+    for e in digest.get("entities") or []:
+        name = (e.get("name") or "").strip()
+        age = e.get("age_seconds")
+        if not name or age is None:
+            continue
+        if not _ENTITY_CALLBACK_MIN_AGE_S <= age <= _ENTITY_CALLBACK_MAX_AGE_S:
+            continue
+        if name in overview:
+            continue
+        count = e.get("seen_count") or 1
+        suffix = f"・計{count}回" if count > 1 else ""
+        lines.append(f"見覚え: {name}（最後は{humanize_seconds(age)}前{suffix}）")
+        if len(lines) >= _ENTITY_CALLBACK_LIMIT:
+            break
+    return lines
 
 
 def render_situation_presence_line(digest: dict) -> str:
@@ -350,6 +403,7 @@ def render_situation_text(digest: dict, corrections: list[dict] | None = None) -
             lines.append("直近の変化: " + " / ".join(changes))
 
     lines.extend(_render_summary_lines(digest.get("summaries") or []))
+    lines.extend(_render_entity_callback_lines(digest))
 
     lines.append(_TEXT_DISCLAIMER)
     return "\n".join(lines)

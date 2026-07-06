@@ -27,7 +27,6 @@ writeFileSync(process.env.RMH_FAKE_CLAUDE_ARGV, JSON.stringify({
   cwd: process.cwd(),
   env: {
     MH_SITUATION_INJECT: process.env.MH_SITUATION_INJECT || null,
-    MH_VISION_COMPANION: process.env.MH_VISION_COMPANION || null,
     VISION_BASE_URL: process.env.VISION_BASE_URL || null
   },
   mcpConfig: mcpConfigPath ? JSON.parse(readFileSync(mcpConfigPath, 'utf8')) : null,
@@ -66,13 +65,11 @@ writeFileSync(process.env.RMH_FAKE_CLAUDE_ARGV, JSON.stringify({
 test('start-rmh claude passes generated MCP config and settings hooks', async () => {
   const captured = await runLauncherWithFakeClaude({
     MH_SITUATION_INJECT: '1',
-    MH_VISION_COMPANION: '1',
     VISION_BASE_URL: 'http://127.0.0.1:8095'
   });
 
   assert.equal(captured.cwd, path.join(repoRoot, 'examples/rmh-voice-mode'));
   assert.equal(captured.env.MH_SITUATION_INJECT, '1');
-  assert.equal(captured.env.MH_VISION_COMPANION, '1');
   assert.equal(captured.env.VISION_BASE_URL, 'http://127.0.0.1:8095');
   assert.ok(captured.argv.includes('--mcp-config'));
   assert.ok(captured.argv.includes('--settings'));

@@ -38,7 +38,10 @@ fi
 BASE="${VISION_BASE_URL:-http://127.0.0.1:8095}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
 STATE_DIR="$RUNTIME_DIR/minimum-headroom-situation"
-SESSION_KEY="${CLAUDE_SESSION_ID:-${MH_FACE_AGENT_ID:-${AGENT_ID:-pid-$$}}}"
+# MH_SITUATION_SESSION_KEY is an explicit override used by wrappers whose host
+# exposes a conversation id (the agy PreInvocation wrapper); without it, agy
+# would fall through to pid-$$ and restart the watermark on every invocation.
+SESSION_KEY="${MH_SITUATION_SESSION_KEY:-${CLAUDE_SESSION_ID:-${MH_FACE_AGENT_ID:-${AGENT_ID:-pid-$$}}}}"
 SAFE_KEY="$(printf '%s' "$SESSION_KEY" | tr -c 'A-Za-z0-9_.-' '_')"
 STATE_FILE="$STATE_DIR/watermark-$SAFE_KEY"
 
@@ -61,18 +64,11 @@ fi
 curl "${args[@]}" "$BASE/situation" 2>/dev/null || exit 0
 [ -s "$body" ] || exit 0
 
-watermark="$(awk 'BEGIN { IGNORECASE=1 } /^X-Situation-Watermark:/ { value=$0; sub(/^[^:]*:[[:space:]]*/, "", value); sub(/\r$/, "", value); last=value } END { if (last != "") print last }' "$headers")"
+# Header-name matching must be case-insensitive without gawk's IGNORECASE
+# (mawk ignores it, and HTTP/2 lowercases header names anyway).
+watermark="$(awk 'tolower($0) ~ /^x-situation-watermark:/ { value=$0; sub(/^[^:]*:[[:space:]]*/, "", value); sub(/\r$/, "", value); last=value } END { if (last != "") print last }' "$headers")"
 if [ -n "$watermark" ]; then
   printf '%s\n' "$watermark" >"$STATE_FILE" 2>/dev/null || true
 fi
 
 cat "$body"
-
-case "${MH_VISION_COMPANION:-0}" in
-  1 | true | yes | on)
-    companion_hook="$(dirname "$0")/vision-companion-context-hook.py"
-    if [ -x "$companion_hook" ]; then
-      printf '%s' "$HOOK_STDIN" | "$companion_hook" 2>/dev/null || true
-    fi
-    ;;
-esac

@@ -459,3 +459,15 @@ def test_situation_context_hook_roundtrips_watermark(tmp_path):
     log = log_path.read_text()
     assert log.count("format=text") == 2
     assert "since=2026-06-21T12:00:00+00:00" in log
+
+
+def test_situation_json_includes_entities_from_scene_ingest(tmp_path, monkeypatch, make_scene):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/ingest", files={"image": ("f.jpg", make_scene(1), "image/jpeg")})
+    body = client.get("/situation").json()
+    assert isinstance(body["entities"], list)
+    assert len(body["entities"]) == 1
+    entity = body["entities"][0]
+    assert entity["name"].startswith("mock-object-")
+    assert entity["seen_count"] == 1
+    assert entity["age_seconds"] is not None

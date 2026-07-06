@@ -106,7 +106,7 @@ generates an equivalent per-launch settings file without editing global config:
 down or `MH_SITUATION_INJECT` is false, it exits 0 without stdout. Enable it for
 a manual Claude launch by exporting `MH_SITUATION_INJECT=1` and, if needed,
 `VISION_BASE_URL=http://127.0.0.1:8095`. In RMH voice-first mode,
-`start-rmh.sh --with-vision` sets `MH_SITUATION_INJECT=1` and
-`MH_VISION_COMPANION=1` for the launched Claude process, so the generated hook
-injects both `[カメラの状況 ...]` and `[共有視界ブリーフ]` when the M12 backend is
+`start-rmh.sh --with-vision` sets `MH_SITUATION_INJECT=1` for the launched
+Claude process, so the generated hook injects the `[カメラの状況 ...]` block
+(including its `見覚え:` entity-callback lines) when the M12 backend is
 available.

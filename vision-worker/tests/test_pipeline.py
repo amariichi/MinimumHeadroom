@@ -269,3 +269,14 @@ def test_advisory_none_when_provider_returns_none(tmp_path, make_scene):
     pipeline.correction_provider = lambda: None
     pipeline.process_frame(make_scene(1))
     assert model.seen[-1] is None
+
+
+def test_committed_scene_observation_feeds_entity_memory(tmp_path, make_scene):
+    pipeline, db = _pipeline(tmp_path, gate=_AlwaysChanged())
+    pipeline.process_frame(make_scene(1))
+    entities = db.recent_entities(8)
+    assert len(entities) == 1
+    assert entities[0]["name"].startswith("mock-object-")
+    assert entities[0]["seen_count"] == 1
+    # The entity context carries the overview it was seen in.
+    assert entities[0]["last_context"] == db.latest()["overview"]

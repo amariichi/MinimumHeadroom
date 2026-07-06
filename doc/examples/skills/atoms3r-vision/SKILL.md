@@ -84,11 +84,16 @@ condensing text during idle moments and cached, so reading is always free.
   without taking a fresh picture.
 - If the MCP `vision_situation` tool is available, use it for the same purpose
   instead of shelling out to `curl`.
-- This digest can also be **auto-injected** into your context every turn (Design
-  B) via a `UserPromptSubmit` hook (set `MH_SITUATION_INJECT=1`). Use
-  `scripts/situation-context-hook.sh` for Claude-style plain-text hooks and
-  `scripts/situation-context-hook-codex.mjs` for Codex. When that is on, you
-  already have the current situation each turn and need not call anything.
+- This digest can also be **auto-injected** into your context every turn (set
+  `MH_SITUATION_INJECT=1`). Use `scripts/situation-context-hook.sh` for
+  Claude-style plain-text `UserPromptSubmit` hooks,
+  `scripts/situation-context-hook-codex.mjs` for Codex, and
+  `scripts/situation-context-hook-agy.mjs` for Antigravity (`PreInvocation` →
+  transient `ephemeralMessage`). When that is on, you already have the current
+  situation each turn and need not call anything.
+- The digest may include `見覚え:` lines — named things seen 1 hour to 14 days
+  ago that are NOT in the current view. They are callback material for natural
+  conversation ("そういえば昨日の箱、開けました?"), not a list to recite.
 - For a deliberate fresh look — "what do you see **right now**?" — use
   `POST /look`: it grabs one frame, runs the model immediately, returns its
   description, and (by default) commits it to the shared rolling memory so the
@@ -143,13 +148,18 @@ documentation snippet only — do not edit user settings programmatically:
 }
 ```
 
-Codex and agy agents should use this skill's pull-based fallback unless their
-runtime has an equivalent prompt-submit hook. For Codex, use
-`scripts/situation-context-hook-codex.mjs`, which wraps the plain situation hook
-output as `UserPromptSubmit.hookSpecificOutput.additionalContext`. Otherwise,
-call the MCP `vision_situation` tool, or `GET /situation` when the MCP tool is
-unavailable, when the user asks about the surroundings. Use `vision_look`, or
-`POST /look` when the MCP tool is unavailable, for a deliberate fresh view.
+Codex and agy have equivalent injection wrappers around the same plain hook.
+For Codex, use `scripts/situation-context-hook-codex.mjs`, which wraps the
+output as `UserPromptSubmit.hookSpecificOutput.additionalContext` (registered
+by `start-rmh.sh` via `codex -c`). For agy, use
+`scripts/situation-context-hook-agy.mjs`, registered as a `PreInvocation` hook
+in the minimum-headroom plugin's `hooks.json`; it injects the digest as a
+transient `ephemeralMessage` and keys the salience watermark to the agy
+conversation via `MH_SITUATION_SESSION_KEY`. When no injection hook is active,
+fall back to pull: call the MCP `vision_situation` tool, or `GET /situation`
+when the MCP tool is unavailable, when the user asks about the surroundings.
+Use `vision_look`, or `POST /look` when the MCP tool is unavailable, for a
+deliberate fresh view.
 
 ## Two ways to use the camera
 

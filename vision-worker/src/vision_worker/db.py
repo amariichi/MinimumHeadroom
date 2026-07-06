@@ -57,6 +57,15 @@ CREATE TABLE IF NOT EXISTS summaries (
     UNIQUE(level, period_start)
 );
 CREATE INDEX IF NOT EXISTS idx_summaries_level ON summaries(level, period_start DESC);
+CREATE TABLE IF NOT EXISTS entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    seen_count INTEGER NOT NULL DEFAULT 1,
+    last_context TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_entities_last_seen ON entities(last_seen DESC);
 """
 
 _SELECT = """
@@ -291,6 +300,68 @@ class VisionDB:
                 (ts_iso, ts_iso),
             )
             return int(cur.rowcount)
+
+    def upsert_entities(self, names: list[str], at_iso: str, context: str = "") -> None:
+        """Record named things seen at `at_iso` in the entity memory.
+
+        Entities are the callback index of the vision memory: unlike the
+        time-bucketed summaries (which average details away), they keep one row
+        per named thing so the conversational agent can refer back to it
+        ("昨日のAmazonの箱"). Dedup is by exact name; phrasing variants become
+        separate rows and simply age out (fuzzy merging is future work).
+        """
+        cleaned = []
+        for name in names:
+            text = (name or "").strip()[:64]
+            if text:
+                cleaned.append(text)
+        if not cleaned:
+            return
+        with self._conn() as conn:
+            for name in cleaned:
+                conn.execute(
+                    "INSERT INTO entities(name, first_seen, last_seen, seen_count, last_context)"
+                    " VALUES(?, ?, ?, 1, ?)"
+                    " ON CONFLICT(name) DO UPDATE SET"
+                    " last_seen = excluded.last_seen,"
+                    " seen_count = seen_count + 1,"
+                    " last_context = excluded.last_context",
+                    (name, at_iso, at_iso, context),
+                )
+
+    def recent_entities(self, n: int = 8) -> list[dict]:
+        """Most recently seen entities, newest `last_seen` first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT name, first_seen, last_seen, seen_count, last_context"
+                " FROM entities ORDER BY last_seen DESC, id DESC LIMIT ?",
+                (n,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def prune_entities(self, max_age_days: int = 14, keep: int = 40) -> None:
+        """Forget entities beyond the summary horizon and cap the table size.
+
+        14 days matches the tier-4 retention horizon: once every summary that
+        could mention a thing is gone, the callback row goes too.
+        """
+        with self._conn() as conn:
+            horizon = (
+                datetime.now(timezone.utc) - timedelta(days=max_age_days)
+            ).isoformat()
+            conn.execute("DELETE FROM entities WHERE last_seen < ?", (horizon,))
+            ids = [
+                r["id"]
+                for r in conn.execute(
+                    "SELECT id FROM entities ORDER BY last_seen DESC, id DESC LIMIT ?",
+                    (keep,),
+                ).fetchall()
+            ]
+            if ids:
+                placeholders = ",".join("?" * len(ids))
+                conn.execute(
+                    f"DELETE FROM entities WHERE id NOT IN ({placeholders})", ids
+                )
 
     def search(self, query: str, limit: int = 50) -> list[dict]:
         like = f"%{query}%"

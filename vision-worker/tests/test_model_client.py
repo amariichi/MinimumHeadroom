@@ -54,6 +54,19 @@ def test_instruction_and_schema_request_changed_verdict():
     assert "changed" in RESPONSE_SCHEMA["required"]
 
 
+def test_instruction_is_world_oriented_and_suppresses_ego_motion():
+    # The camera is hand-movable: memories must describe the world, and
+    # camera-only differences (motion/focus/blur/lighting) must not count as
+    # a change nor be described as one.
+    assert "WORLD" in INSTRUCTION
+    assert "Never describe the camera" in INSTRUCTION
+    assert "only by camera motion" in INSTRUCTION
+    assert "NEVER describe camera movement" in INSTRUCTION
+    assert "describe the new subject, not the movement" in INSTRUCTION
+    # The old frame-diff framing treated a mere angle change as a change.
+    assert "different view or camera angle" not in INSTRUCTION
+
+
 def test_looks_like_no_change_detects_en_and_ja():
     assert looks_like_no_change("前の状態から変化はありません。")
     assert looks_like_no_change("最初のフレームです。")
@@ -131,3 +144,36 @@ def test_mock_marks_changed_when_scene_differs(make_frame):
     diff = mock.observe(make_frame(0xF000), prev)
     assert same.changed is False
     assert diff.changed is True
+
+
+def test_instruction_and_schema_request_salient_objects():
+    assert '"salient_objects"' in INSTRUCTION
+    assert "Exclude people" in INSTRUCTION
+    assert "salient_objects" in RESPONSE_SCHEMA["properties"]
+    # Deliberately NOT required: models that omit it degrade to no entities.
+    assert "salient_objects" not in RESPONSE_SCHEMA["required"]
+
+
+def test_parse_salient_objects_bounds_and_cleans():
+    from vision_worker.model_client import parse_salient_objects
+
+    assert parse_salient_objects(None) == []
+    assert parse_salient_objects("not a list") == []
+    assert parse_salient_objects([1, "", "  "]) == []
+    assert parse_salient_objects([" マグカップ "]) == ["マグカップ"]
+    assert parse_salient_objects(["x" * 200]) == ["x" * 64]
+    assert parse_salient_objects([f"o{i}" for i in range(9)]) == [
+        "o0", "o1", "o2", "o3", "o4"
+    ]
+
+
+def test_mock_client_emits_salient_objects_for_scene_frames(make_scene, make_frame):
+    mock = MockModelClient()
+    scene = mock.observe(make_scene(1), None)
+    assert scene.is_text is False
+    assert len(scene.salient_objects) == 1
+    assert scene.salient_objects[0].startswith("mock-object-")
+    # Text frames carry no entities: OCR text is already stored verbatim.
+    text = mock.observe(make_frame(0xF0F0), None)
+    assert text.is_text is True
+    assert text.salient_objects == []

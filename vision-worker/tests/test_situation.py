@@ -477,3 +477,72 @@ def test_salience_reasons_future_last_narration_field():
         "last_narration": {"text": "机に本があります", "at": (since + timedelta(seconds=1)).isoformat()},
     }
     assert salience_reasons(digest, since=since) == ["narration"]
+
+
+def _digest_with_entities(entities, overview="机の上にノートPCがある。"):
+    from datetime import datetime, timezone
+
+    from vision_worker.situation import compose_situation
+
+    now = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
+    return compose_situation(
+        now=now,
+        observing=True,
+        latest={
+            "overview": overview,
+            "is_text": False,
+            "ocr_full": "",
+            "created_at": "2026-07-06T11:59:00+00:00",
+        },
+        last_change_at=now,
+        last_observed_at=now,
+        recent=[],
+        summaries=[],
+        entities=entities,
+    )
+
+
+def test_compose_situation_annotates_entity_age_seconds():
+    digest = _digest_with_entities(
+        [
+            {
+                "name": "イチゴ柄のマグカップ",
+                "first_seen": "2026-07-05T12:00:00+00:00",
+                "last_seen": "2026-07-06T10:00:00+00:00",
+                "seen_count": 3,
+            }
+        ]
+    )
+    entity = digest["entities"][0]
+    assert entity["name"] == "イチゴ柄のマグカップ"
+    assert entity["age_seconds"] == 2 * 60 * 60
+
+
+def test_render_entity_callbacks_only_for_out_of_view_older_things():
+    from vision_worker.situation import render_situation_text
+
+    entities = [
+        # Too fresh (< 1h): probably still the current scene — excluded.
+        {"name": "コーヒー", "last_seen": "2026-07-06T11:30:00+00:00", "seen_count": 2},
+        # In the current overview — excluded (not a callback, it is in view).
+        {"name": "ノートPC", "last_seen": "2026-07-06T09:00:00+00:00", "seen_count": 5},
+        # Good callback material.
+        {"name": "イチゴ柄のマグカップ", "last_seen": "2026-07-06T07:00:00+00:00", "seen_count": 3},
+        {"name": "Amazonの箱", "last_seen": "2026-07-05T12:00:00+00:00", "seen_count": 1},
+        # Would be third callback — capped at 2.
+        {"name": "三脚", "last_seen": "2026-07-04T12:00:00+00:00", "seen_count": 2},
+    ]
+    text = render_situation_text(_digest_with_entities(entities))
+    assert "見覚え: イチゴ柄のマグカップ（最後は約5時間前・計3回）" in text
+    assert "見覚え: Amazonの箱（最後は約24時間前）" in text
+    assert "コーヒー" not in text
+    assert "三脚" not in text
+    # ノートPC appears in the overview line but must not get a 見覚え line.
+    assert "見覚え: ノートPC" not in text
+
+
+def test_render_without_entities_has_no_callback_lines():
+    from vision_worker.situation import render_situation_text
+
+    text = render_situation_text(_digest_with_entities([]))
+    assert "見覚え" not in text

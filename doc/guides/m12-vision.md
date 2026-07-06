@@ -16,8 +16,9 @@ records with diffusiongemma, SQLite stores the short-term memory, and
 
 The M12 vision path is designed for ambient situational awareness, not high-risk
 automation. It lets an agent answer what the camera sees now, how long that view
-has been stable, what changed recently, whether a keyword watch fired, and
-whether a user correction is active.
+has been stable, what changed recently, which remembered things it could call
+back to (`見覚え` entities), whether a keyword watch fired, and whether a user
+correction is active.
 
 The worker is split into low-cost layers: `NetworkCaptureSource` pulls JPEGs,
 `ChangeGate` avoids unnecessary model calls, `Pipeline` reconciles structured
@@ -60,11 +61,12 @@ flowchart LR
   end
   subgraph Model["diffusiongemma via vLLM"]
     VLLM["OpenAI-compatible /chat/completions"]
-    Record["Observation JSON: is_text, ocr_full, overview, changed, change_from_prev"]
+    Record["Observation JSON: is_text, ocr_full, overview, changed, change_from_prev, salient_objects"]
   end
   subgraph Tier0["SQLite tier 0"]
     Frames["frames table + stored JPEG paths"]
     Observations["observations table"]
+    Entities["entities table: salient_objects upsert"]
   end
   Sensor --> Snapshot
   Net -- "HTTP GET with auth token" --> Snapshot
@@ -84,6 +86,7 @@ flowchart LR
   Commit -- "false or duplicate" --> Drop["nochange or dedup suppressed"]
   Commit -- "true or first baseline" --> Frames
   Commit -- "true or first baseline" --> Observations
+  Commit -- "salient_objects, exact-name dedup" --> Entities
 ```
 
 Implementation notes: `run-vision-stack.sh` resolves `VISION_CAMERA_URL` to
@@ -96,19 +99,26 @@ not the previous image, so every diffusiongemma call does one image prefill.
 
 ### Memory Lifecycle And Forgetting
 
-The worker keeps two related memories:
+The worker keeps three related memories:
 
 - Tier 0: raw change records plus frame paths.
 - Tiers 1-4: cached text summaries of closed time buckets.
+- Entities: a small callback index of named things (`salient_objects` from the
+  vision model, never people), one row per exact name with first/last seen and
+  a count. `/situation` returns them as `entities`, and the text digest renders
+  up to two `見覚え:` lines about things seen 1 hour to 14 days ago that are
+  not in the current view — material for natural conversational callbacks.
 
 Recent events stay verbatim. Older events are summarized into coarser buckets.
 Forgetting is explicit: old observations are pruned after they are safe to
-summarize, and each summary tier has a retention cap.
+summarize, each summary tier has a retention cap, and entities expire 14 days
+after they were last seen (40-row cap).
 
 ```mermaid
 flowchart TB
   Commit["Pipeline._commit writes a change point"]
   T0["Tier 0: frames + observations"]
+  Entities["entities: named things, first/last seen + count"]
   Recent["GET /situation recent[]"]
   Stable["stable_seconds = last_observed_at - changed_at"]
   Stale["stale when observing but frames stop arriving"]
@@ -129,8 +139,10 @@ flowchart TB
   Render["JSON or text digest"]
   PruneRaw["VisionDB.prune: keep recent rows, protect unconsolidated T1, hard limit 500"]
   PruneSummaries["prune_summaries retention: T1 12, T2 26, T3 12, T4 14"]
+  PruneEntities["prune_entities: 14 day horizon, 40 row cap"]
   Forgotten["forgotten from live digest and DB"]
   Commit --> T0
+  Commit -- "salient_objects" --> Entities
   Commit --> Stable
   T0 --> Recent
   T0 --> Band1
@@ -155,14 +167,18 @@ flowchart TB
   Stable --> Compose
   Stale --> Compose
   SituationSummaries --> Compose
+  Entities -- "見覚え lines: out of view, 1h-14d" --> Compose
   Compose --> Render
   T0 -- "only rows beyond the keep window" --> PruneRaw
   T1 -- "only bands beyond cap" --> PruneSummaries
   T2 -- "only bands beyond cap" --> PruneSummaries
   T3 -- "only bands beyond cap" --> PruneSummaries
   T4 -- "only bands beyond cap" --> PruneSummaries
+  Idle --> PruneEntities
+  Entities -- "rows beyond horizon or cap" --> PruneEntities
   PruneRaw --> Forgotten
   PruneSummaries --> Forgotten
+  PruneEntities --> Forgotten
 ```
 
 Tier 0 is the SQLite `frames` table plus `observations` table in `db.py`;
@@ -197,7 +213,7 @@ flowchart LR
     OnObservation["_on_observation callback"]
   end
   subgraph Agent["coding or conversational agent"]
-    Hook["scripts/situation-context-hook.sh"]
+    Hook["scripts/situation-context-hook.sh (claude) + -codex.mjs / -agy.mjs wrappers"]
     Context["LLM context"]
     UserAsk["user asks what is visible"]
     UserFix["user corrects a camera claim"]
@@ -242,7 +258,12 @@ flowchart LR
 
 Key details: the hook is opt-in through `MH_SITUATION_INJECT=1`, stores the
 `X-Situation-Watermark` header per session, and escalates from a one-line
-presence header to a full block only after salient events. `POST /look` captures
+presence header to a full block only after salient events. Claude Code runs
+the shell hook directly (`UserPromptSubmit`); Codex wraps it in
+`situation-context-hook-codex.mjs` (`hookSpecificOutput.additionalContext`);
+Antigravity wraps it in `situation-context-hook-agy.mjs` (`PreInvocation` →
+transient `ephemeralMessage`, watermark keyed by `MH_SITUATION_SESSION_KEY`
+derived from the agy conversation id). `POST /look` captures
 a fresh frame; default `store=1` sends it through the normal pipeline, while
 `store=0` is ephemeral. Watches are keyword-only today; `kind="enum"` returns
 501. `WatchRegistry.evaluate()` uses NFKC normalization and case folding over
@@ -316,12 +337,13 @@ M12 のレンズは、場面、物体、大きな文字を見る用途に向い�
 
 図は英語セクションの Mermaid 図「Memory Lifecycle And Forgetting」を参照してください。
 
-ワーカーは 2 種類の関連する記憶を持ちます。
+ワーカーは 3 種類の関連する記憶を持ちます。
 
 - 第 0 層: 生の変化記録とフレームの保存先。
 - 第 1-4 層: 閉じた時間区間ごとのキャッシュ済みテキスト要約。
+- エンティティ: 名前の付いた物のコールバック索引です。視覚モデルが返す `salient_objects`（目立つ物。人は含めません）を名前ごとに 1 行で保存し、初回・最終確認時刻と回数を持ちます。`/situation` は `entities` として返し、テキスト要約には「1 時間〜14 日前に見た・今は視界にない物」を最大 2 行の `見覚え:` 行として描画します。会話で自然に話を戻すための素材です。
 
-最近の出来事はそのまま残します。古い出来事は、より粗い時間区間へ要約します。忘却は明示的に行われます。古い観測は要約済みになってから削除され、要約層ごとに保持上限があります。
+最近の出来事はそのまま残します。古い出来事は、より粗い時間区間へ要約します。忘却は明示的に行われます。古い観測は要約済みになってから削除され、要約層ごとに保持上限があり、エンティティは最終確認から 14 日で失効します（上限 40 行）。
 
 第 0 層は `db.py` 内の SQLite `frames` テーブルと `observations` テーブルです。`observations.human_note` には、過去の記録へ紐づけた訂正を保持できます。第 1 層は生の観測を閉じた 10 分区間へ要約し、第 2 層は第 1 層を 1 時間区間へ、第 3 層は第 2 層を 6 時間区間へ、第 4 層は第 3 層を 1 日区間へ要約します。`/situation` には、最近の生の変化と、内容がある最新の要約区間が入ります。第 1 層は最大 3 区間、第 2 層は最大 2 区間、第 3 層と第 4 層は各 1 区間です。
 
@@ -333,7 +355,7 @@ LLM による要約は、場面が待機状態のときだけ予約されます�
 
 この記憶が役立つのは、エージェントが低コストで利用でき、人間が誤りを訂正できる場合だけです。英語版の図は、プロンプト投入時フック、`POST /look`、キーワード監視、変化の読み上げ、訂正の戻し経路を示しています。
 
-重要な点: フックは `MH_SITUATION_INJECT=1` で明示的に有効化し、セッションごとに `X-Situation-Watermark` ヘッダーを保存します。目立つ出来事があるまでは 1 行の存在通知に留め、必要になってから完全なブロックへ拡張します。`POST /look` は新しいフレームを取得します。既定の `store=1` は通常の処理経路に通し、`store=0` は一時的な観察だけを行います。監視は現在キーワードのみで、`kind="enum"` は 501 を返します。`WatchRegistry.evaluate()` は概要、OCR、変化テキストに対して NFKC 正規化と大文字小文字の統一を使います。
+重要な点: フックは `MH_SITUATION_INJECT=1` で明示的に有効化し、セッションごとに `X-Situation-Watermark` ヘッダーを保存します。目立つ出来事があるまでは 1 行の存在通知に留め、必要になってから完全なブロックへ拡張します。Claude Code はシェルフックを直接 `UserPromptSubmit` で実行し、Codex は `situation-context-hook-codex.mjs`（`additionalContext`）、Antigravity は `situation-context-hook-agy.mjs`（`PreInvocation` → 一時的な `ephemeralMessage`、watermark キーは会話 ID 由来の `MH_SITUATION_SESSION_KEY`）でラップします。`POST /look` は新しいフレームを取得します。既定の `store=1` は通常の処理経路に通し、`store=0` は一時的な観察だけを行います。監視は現在キーワードのみで、`kind="enum"` は 501 を返します。`WatchRegistry.evaluate()` は概要、OCR、変化テキストに対して NFKC 正規化と大文字小文字の統一を使います。
 
 `ChangeNarrator` は、信頼度が低い行、初回基準行、変化なしの行、短すぎる行を読み飛ばします。`WebhookAlertSink` は `{"text": ..., "watch": ...}` を設定済み Webhook へ POST します。実行中のスタックは `http://127.0.0.1:8096/alert` を使います。その後、スピーカーブリッジが Kokoro 音声を合成し、WAV バイト列を M12 の `/api/headroom/audio` エンドポイントへ `X-Headroom-Auth` 付きで送ります。
 

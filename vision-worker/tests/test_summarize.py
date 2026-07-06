@@ -356,3 +356,15 @@ def test_prune_hard_limit_bounds_unhealthy_summarizer_growth(tmp_path):
         _insert_change_at(db, at.isoformat(), f"scene-{i}", f"変化{i}")
     db.prune(max_changes=10, now=datetime(2026, 6, 22, 8, 25, tzinfo=UTC), hard_limit=60)
     assert db.counts()["observations"] == 60
+
+
+def test_llm_instruction_targets_world_events_not_camera_motion():
+    # The summary is conversational memory: it must keep real-world events,
+    # drop camera-only lines, and bind the on-camera person to the user.
+    from vision_worker.summarize import _INSTRUCTION_JA
+
+    assert "出来事" in _INSTRUCTION_JA
+    assert "カメラ自体の動き" in _INSTRUCTION_JA
+    assert "触れないでください" in _INSTRUCTION_JA
+    assert "ユーザーらしき人物" in _INSTRUCTION_JA
+    assert "大きな出来事はありませんでした" in _INSTRUCTION_JA

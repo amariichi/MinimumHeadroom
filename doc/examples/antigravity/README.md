@@ -122,6 +122,7 @@ ask the agent to call `vision_situation` rather than inferring camera state from
 
 Antigravity's current public hook format is `hooks.json`. This directory ships `hooks.json` for plugin/workspace installs:
 
+- `PreInvocation` → `situation-context-hook-agy.mjs`: injects the AtomS3R-M12 camera situation digest as a transient `ephemeralMessage` before each model invocation. Safe-by-default: the underlying `scripts/situation-context-hook.sh` prints nothing (and the wrapper emits `{}`) unless `MH_SITUATION_INJECT=1` is set in the agy process environment, so registering it costs nothing in ordinary sessions. The wrapper derives a stable watermark key from the agy `conversationId` and passes it to the plain hook via `MH_SITUATION_SESSION_KEY`, so the salience watermark survives across invocations of the same conversation.
 - `Stop` → `mh-hook.mjs --runtime antigravity --event idle_after_response`
 - a disabled `PreToolUse` example for approval attention, because enabling it can ask before matching tools and should be an explicit local choice.
 

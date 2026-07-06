@@ -31,7 +31,7 @@ the only runtime supported by this directory.
 
 - `claude-settings.json.example` — paste into `~/.claude/settings.json` (merge
   with existing `hooks` block). Wires Claude Code's `Notification` and `Stop`
-  events, and optionally injects the M12 situation/companion brief through
+  events, and optionally injects the M12 situation digest through
   `UserPromptSubmit`.
 - `codex-config.toml.example` — paste into `~/.codex/config.toml`. Wires the new
   Codex `hooks` system (`PermissionRequest`, `UserPromptSubmit`, and `Stop`) and
@@ -62,7 +62,7 @@ It spawns Codex inside a private tmux server, opens the `/hooks` lifecycle brows
 
 Either way Codex writes a SHA-256 hash under `[hooks.state.<key>]` in `~/.codex/config.toml`. From that point on every Codex session for that user — operator and every helper — will execute the hooks. Re-grant only when you change a hook's command or matcher (the hash is identity-based; editing the command invalidates the stored hash).
 
-Note: the feature flag is `[features] hooks = true`. Codex < 0.131 also accepts the deprecated alias `codex_hooks = true` with a startup warning. For optional M12 situation/companion brief injection, use `scripts/situation-context-hook-codex.mjs`; it returns `UserPromptSubmit.hookSpecificOutput.additionalContext` JSON around the plain text produced by `scripts/situation-context-hook.sh`.
+Note: the feature flag is `[features] hooks = true`. Codex < 0.131 also accepts the deprecated alias `codex_hooks = true` with a startup warning. For optional M12 situation digest injection, use `scripts/situation-context-hook-codex.mjs`; it returns `UserPromptSubmit.hookSpecificOutput.additionalContext` JSON around the plain text produced by `scripts/situation-context-hook.sh`. (Antigravity has an equivalent wrapper, `scripts/situation-context-hook-agy.mjs`, registered as a `PreInvocation` hook.)
 
 Source: `codex-rs/hooks/src/engine/discovery.rs` (`HookTrustStatus` filter), `codex-rs/tui/src/bottom_pane/hooks_browser_view.rs` (`t` keymap), and `codex-rs/features/src/legacy.rs` (alias) in <https://github.com/openai/codex>.
 
@@ -168,7 +168,7 @@ trust は user 単位で `~/.codex/config.toml` の `[hooks.state.*]` に永続�
 
 どちらの方法でも、Codex は `[hooks.state.<key>]` に SHA-256 ハッシュを書き込みます。再付与が必要になるのは hook の command や matcher を **編集したとき** だけ（ハッシュが変わって untrusted に戻る）。
 
-機能フラグは `[features] hooks = true`。Codex < 0.131 では deprecated alias の `codex_hooks = true` も受け付けますが起動時に警告が出ます。M12 の状況・会話ブリーフ注入では `scripts/situation-context-hook-codex.mjs` を使ってください。この wrapper は `scripts/situation-context-hook.sh` が出した plain text を `UserPromptSubmit.hookSpecificOutput.additionalContext` JSON に包んで返します。
+機能フラグは `[features] hooks = true`。Codex < 0.131 では deprecated alias の `codex_hooks = true` も受け付けますが起動時に警告が出ます。M12 の状況ダイジェスト注入では `scripts/situation-context-hook-codex.mjs` を使ってください。この wrapper は `scripts/situation-context-hook.sh` が出した plain text を `UserPromptSubmit.hookSpecificOutput.additionalContext` JSON に包んで返します。（Antigravity には同等の wrapper `scripts/situation-context-hook-agy.mjs` があり、`PreInvocation` フックとして登録します。）
 
 ソース：`codex-rs/hooks/src/engine/discovery.rs`（`HookTrustStatus` フィルタ）、`codex-rs/tui/src/bottom_pane/hooks_browser_view.rs`（`t` キーマップ）、`codex-rs/features/src/legacy.rs`（alias 定義）。<https://github.com/openai/codex>
 

@@ -54,9 +54,20 @@ TIER_RETENTION: dict[int, int] = {1: 12, 2: 26, 3: 12, 4: 14}
 #: T1 bucket could vanish until the coarser T2 bucket closed.
 SITUATION_SUMMARY_BANDS: dict[int, int] = {1: 3, 2: 2, 3: 1, 4: 1}
 
+#: World-oriented on purpose: the raw change log can contain camera-only lines
+#: (motion/focus/lighting — "ego-motion") and VLM typos; a naive "summarize the
+#: log" prompt compresses those faithfully into useless shot-log memories. The
+#: summary is conversational memory, so it must keep only real-world events and
+#: bind the recurring on-camera person to the user.
 _INSTRUCTION_JA = (
-    "次の時系列の変化ログを、1〜2文の自然な日本語で要約してください。"
-    "箇条書きや前置きは付けず、要約文だけを返してください。"
+    "以下は部屋に置かれた共有カメラが記録した変化ログです。"
+    "部屋で実際に起きた出来事だけを、1〜2文の自然な日本語で要約してください。"
+    "人の行動、現れたり消えたりした物、活動の変化を優先してください。"
+    "カメラ自体の動き・ピント・ぼけ・明るさ・角度の変化には触れないでください。"
+    "それしか書かれていない場合は「大きな出来事はありませんでした。」と返してください。"
+    "映っている人物は特に断りがなければこの部屋のユーザー本人である可能性が高いので、"
+    "「ユーザーらしき人物」のように表現してください。"
+    "入力の誤字は自然に直し、箇条書きや前置きは付けず、要約文だけを返してください。"
 )
 
 

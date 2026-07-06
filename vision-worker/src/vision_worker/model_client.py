@@ -20,21 +20,35 @@ from .imaging import average_hash, text_likeness
 from .records import Observation, PrevState
 
 #: Instruction given to the real model. One call returns one JSON object.
+#: Deliberately world-oriented: the camera is hand-movable, so a frame-diff
+#: framing would make almost every stored memory be about the camera itself
+#: (pan/shake/focus/exposure — "ego-motion"). Those records are useless as
+#: conversational memory, so the model is told to describe people, activity,
+#: and objects, and to treat ego-motion-only differences as "no change".
 INSTRUCTION = (
-    "You are a camera perception engine. Look at the image and reply with ONE "
-    "JSON object and nothing else, with exactly these keys: "
+    "You are the eyes of a desk companion device. Look at the image and reply "
+    "with ONE JSON object and nothing else, with exactly these keys: "
     '"is_text" (true if the frame is mostly text/a document, else false), '
     '"ocr_full" (if is_text, the full verbatim text of everything legible, '
     "preserving line breaks; otherwise an empty string), "
-    '"overview" (one short sentence describing the whole frame), '
-    '"changed" (true if the scene content changed in any clearly visible way '
-    "versus the previous state given below — a person or hand appearing, moving, "
-    "or leaving; an object added, removed, moved, or swapped; a different view or "
-    "camera angle. Set it false ONLY when the view is essentially identical with "
-    "no such change (differing just by lighting, sensor noise, or tiny framing "
-    "jitter), and for the first frame), "
-    '"change_from_prev" (one short sentence describing what changed versus the '
-    "previous state given below; if nothing meaningful changed, say so). "
+    '"overview" (one short sentence about the WORLD in view: who is present, '
+    "what they appear to be doing, and the notable objects or place. Never "
+    "describe the camera, image quality, focus, blur, framing, or lighting), "
+    '"changed" (true if the WORLD content changed versus the previous state '
+    "given below — a person or hand appeared, moved, or left; an object was "
+    "added, removed, moved, or swapped; the view now shows a genuinely "
+    "different place or subject. Set it false when the frames differ only by "
+    "camera motion, focus, blur, exposure, lighting, sensor noise, or framing "
+    "jitter over the same content, and for the first frame), "
+    '"change_from_prev" (one short sentence naming the specific world change, '
+    "phrased as what is newly visible, what left, or what the person started "
+    "doing. NEVER describe camera movement, focus, blur, or lighting as the "
+    "change. If the camera clearly moved to show a different subject, describe "
+    "the new subject, not the movement. If nothing meaningful changed, say so), "
+    '"salient_objects" (array of up to 5 short noun phrases, in the same '
+    "language as overview, naming distinctive objects or visible text in view "
+    "— things a person might refer back to later. Exclude people. Use [] when "
+    "nothing stands out). "
     "Keep the two consistent: if \"changed\" is true, \"change_from_prev\" must "
     "name the specific change and must NOT say that nothing changed; if "
     '"changed" is false, "change_from_prev" should say nothing meaningful changed.'
@@ -144,9 +158,34 @@ RESPONSE_SCHEMA = {
         "overview": {"type": "string"},
         "changed": {"type": "boolean"},
         "change_from_prev": {"type": "string"},
+        # Not in "required": models that omit it degrade to an empty entity list.
+        "salient_objects": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["is_text", "ocr_full", "overview", "changed", "change_from_prev"],
 }
+
+
+#: Bounds for the entity feed: enough named things per frame to be useful,
+#: short enough that a runaway model cannot flood the entities table.
+_SALIENT_OBJECTS_MAX = 5
+_SALIENT_NAME_MAX_CHARS = 64
+
+
+def parse_salient_objects(value) -> list[str]:
+    """Coerce a model-provided salient_objects value into a bounded list[str]."""
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text:
+            continue
+        out.append(text[:_SALIENT_NAME_MAX_CHARS])
+        if len(out) >= _SALIENT_OBJECTS_MAX:
+            break
+    return out
 
 
 class VisionModelClient(Protocol):
@@ -197,6 +236,7 @@ class MockModelClient:
             low_confidence=False,
             latency_ms=int((time.time() - started) * 1000),
             model=self.name,
+            salient_objects=[] if is_text else [f"mock-object-{digest[:4]}"],
         )
 
 
@@ -303,6 +343,7 @@ class DiffusionGemmaClient:
             low_confidence=bool(data.get("low_confidence", False)) or not data,
             latency_ms=int((time.time() - started) * 1000),
             model=self.model_name,
+            salient_objects=parse_salient_objects(data.get("salient_objects")),
         )
 
 
