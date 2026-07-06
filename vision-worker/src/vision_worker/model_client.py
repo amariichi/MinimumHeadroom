@@ -44,7 +44,11 @@ INSTRUCTION = (
     "phrased as what is newly visible, what left, or what the person started "
     "doing. NEVER describe camera movement, focus, blur, or lighting as the "
     "change. If the camera clearly moved to show a different subject, describe "
-    "the new subject, not the movement. If nothing meaningful changed, say so). "
+    "the new subject, not the movement. If nothing meaningful changed, say so), "
+    '"salient_objects" (array of up to 5 short noun phrases, in the same '
+    "language as overview, naming distinctive objects or visible text in view "
+    "— things a person might refer back to later. Exclude people. Use [] when "
+    "nothing stands out). "
     "Keep the two consistent: if \"changed\" is true, \"change_from_prev\" must "
     "name the specific change and must NOT say that nothing changed; if "
     '"changed" is false, "change_from_prev" should say nothing meaningful changed.'
@@ -154,9 +158,34 @@ RESPONSE_SCHEMA = {
         "overview": {"type": "string"},
         "changed": {"type": "boolean"},
         "change_from_prev": {"type": "string"},
+        # Not in "required": models that omit it degrade to an empty entity list.
+        "salient_objects": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["is_text", "ocr_full", "overview", "changed", "change_from_prev"],
 }
+
+
+#: Bounds for the entity feed: enough named things per frame to be useful,
+#: short enough that a runaway model cannot flood the entities table.
+_SALIENT_OBJECTS_MAX = 5
+_SALIENT_NAME_MAX_CHARS = 64
+
+
+def parse_salient_objects(value) -> list[str]:
+    """Coerce a model-provided salient_objects value into a bounded list[str]."""
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text:
+            continue
+        out.append(text[:_SALIENT_NAME_MAX_CHARS])
+        if len(out) >= _SALIENT_OBJECTS_MAX:
+            break
+    return out
 
 
 class VisionModelClient(Protocol):
@@ -207,6 +236,7 @@ class MockModelClient:
             low_confidence=False,
             latency_ms=int((time.time() - started) * 1000),
             model=self.name,
+            salient_objects=[] if is_text else [f"mock-object-{digest[:4]}"],
         )
 
 
@@ -313,6 +343,7 @@ class DiffusionGemmaClient:
             low_confidence=bool(data.get("low_confidence", False)) or not data,
             latency_ms=int((time.time() - started) * 1000),
             model=self.model_name,
+            salient_objects=parse_salient_objects(data.get("salient_objects")),
         )
 
 

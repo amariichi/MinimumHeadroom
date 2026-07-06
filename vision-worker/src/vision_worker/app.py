@@ -127,6 +127,7 @@ def create_app() -> FastAPI:
 
     def _consolidate_when_idle() -> None:
         consolidate_closed_bands(db, summarizer, datetime.now(timezone.utc))
+        db.prune_entities()
 
     pipeline_lock = threading.Lock()
     capture_source = build_capture_source(settings)
@@ -290,6 +291,7 @@ def create_app() -> FastAPI:
             recent=db.recent_changes(settings.situation_recent_n),
             summaries=[],
             stale_after_s=stale_after_s,
+            entities=db.recent_entities(8),
         )
         # "Idle" = the loop is running and the scene has held still at least one
         # slow-poll cycle (not mid-burst). Summarization (the LLM text call) is

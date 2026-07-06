@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass
@@ -36,6 +36,11 @@ class Observation:
     low_confidence: bool = False
     latency_ms: int = 0
     model: str = "unknown"
+    # Distinctive objects (never people) visible in the frame, as short noun
+    # phrases. They feed the entity memory: a small named-thing table that lets
+    # the conversational agent call back to things seen earlier ("昨日の
+    # Amazonの箱"), which pure time-bucketed summaries average away.
+    salient_objects: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return asdict(self)

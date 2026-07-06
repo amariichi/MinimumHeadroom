@@ -137,3 +137,40 @@ def test_delete_summaries_containing_removes_all_covering_tiers(tmp_path):
         assert db.get_summary(level, start) is None
     assert db.get_summary(1, "2026-06-22T08:10:00+00:00")["text"] == "keep"
     assert db.get_summary(2, "2026-06-22T07:00:00+00:00")["text"] == "keep2"
+
+
+def test_upsert_entities_inserts_and_bumps(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    db.upsert_entities(["イチゴ柄のマグカップ", "Amazonの箱"], at_iso="2026-07-01T00:00:00+00:00", context="机の上")
+    db.upsert_entities(["イチゴ柄のマグカップ"], at_iso="2026-07-02T00:00:00+00:00", context="棚の上")
+    rows = db.recent_entities(8)
+    assert [r["name"] for r in rows] == ["イチゴ柄のマグカップ", "Amazonの箱"]
+    mug = rows[0]
+    assert mug["first_seen"] == "2026-07-01T00:00:00+00:00"
+    assert mug["last_seen"] == "2026-07-02T00:00:00+00:00"
+    assert mug["seen_count"] == 2
+    assert mug["last_context"] == "棚の上"
+
+
+def test_upsert_entities_skips_blank_and_caps_length(tmp_path):
+    db = VisionDB(str(tmp_path / "v.db"))
+    db.upsert_entities(["  ", "", "x" * 200], at_iso="2026-07-01T00:00:00+00:00")
+    rows = db.recent_entities(8)
+    assert len(rows) == 1
+    assert len(rows[0]["name"]) == 64
+
+
+def test_prune_entities_drops_old_and_caps_count(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    db = VisionDB(str(tmp_path / "v.db"))
+    now = datetime.now(timezone.utc)
+    ancient = (now - timedelta(days=30)).isoformat()
+    fresh = now.isoformat()
+    db.upsert_entities(["古い物"], at_iso=ancient)
+    for i in range(5):
+        db.upsert_entities([f"物-{i}"], at_iso=fresh)
+    db.prune_entities(max_age_days=14, keep=3)
+    names = [r["name"] for r in db.recent_entities(10)]
+    assert "古い物" not in names
+    assert len(names) == 3

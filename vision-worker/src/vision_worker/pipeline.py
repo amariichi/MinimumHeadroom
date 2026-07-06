@@ -112,6 +112,8 @@ class Pipeline:
             when, self.gate.last_hash_hex, full_path, thumb_path, width, height
         )
         self.db.insert_observation(frame_id, obs)
+        if obs.salient_objects:
+            self.db.upsert_entities(obs.salient_objects, at_iso=when, context=obs.overview)
         self._prev = PrevState(obs.ocr_full, obs.overview)
         for removed_full, removed_thumb in self.db.prune(
             self.max_changes, hard_limit=self.prune_hard_limit

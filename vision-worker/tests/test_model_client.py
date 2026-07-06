@@ -144,3 +144,36 @@ def test_mock_marks_changed_when_scene_differs(make_frame):
     diff = mock.observe(make_frame(0xF000), prev)
     assert same.changed is False
     assert diff.changed is True
+
+
+def test_instruction_and_schema_request_salient_objects():
+    assert '"salient_objects"' in INSTRUCTION
+    assert "Exclude people" in INSTRUCTION
+    assert "salient_objects" in RESPONSE_SCHEMA["properties"]
+    # Deliberately NOT required: models that omit it degrade to no entities.
+    assert "salient_objects" not in RESPONSE_SCHEMA["required"]
+
+
+def test_parse_salient_objects_bounds_and_cleans():
+    from vision_worker.model_client import parse_salient_objects
+
+    assert parse_salient_objects(None) == []
+    assert parse_salient_objects("not a list") == []
+    assert parse_salient_objects([1, "", "  "]) == []
+    assert parse_salient_objects([" マグカップ "]) == ["マグカップ"]
+    assert parse_salient_objects(["x" * 200]) == ["x" * 64]
+    assert parse_salient_objects([f"o{i}" for i in range(9)]) == [
+        "o0", "o1", "o2", "o3", "o4"
+    ]
+
+
+def test_mock_client_emits_salient_objects_for_scene_frames(make_scene, make_frame):
+    mock = MockModelClient()
+    scene = mock.observe(make_scene(1), None)
+    assert scene.is_text is False
+    assert len(scene.salient_objects) == 1
+    assert scene.salient_objects[0].startswith("mock-object-")
+    # Text frames carry no entities: OCR text is already stored verbatim.
+    text = mock.observe(make_frame(0xF0F0), None)
+    assert text.is_text is True
+    assert text.salient_objects == []
