@@ -293,16 +293,24 @@ def create_app() -> FastAPI:
             stale_after_s=stale_after_s,
             entities=db.recent_entities(8),
         )
-        # "Idle" = the loop is running and the scene has held still at least one
-        # slow-poll cycle (not mid-burst). Summarization (the LLM text call) is
-        # gated to idle so it never competes with real-time recognition.
+        # Summarization (the LLM text call) is gated so it never competes with
+        # real-time recognition. "Not busy" comes in two shapes: the loop is
+        # running and the scene has held still at least one slow-poll cycle
+        # (idle), or the loop is not running at all (look-only Mode A usage —
+        # there is no perception cadence to starve, and without this branch the
+        # loop's idle callback never fires so closed bands would never
+        # consolidate into cached summaries).
         current = digest["current"]
         stable = current["stable_seconds"] if current else None
-        idle = (
-            observing
-            and stable is not None
+        idle = not observing or (
+            stable is not None
             and stable >= settings.idle_interval_ms / 1000.0
         )
+        if not observing:
+            # Reads take over the loop's consolidation duty; Summarizer.schedule
+            # dedupes in-flight bands so per-turn reads do not pile up work.
+            consolidate_closed_bands(db, summarizer, now)
+            db.prune_entities()
         digest["summaries"] = situation_summaries(db, summarizer, now, idle=idle)
         digest["last_narration"] = _last_narration(now)
         active = _active_corrections(now)

@@ -471,3 +471,30 @@ def test_situation_json_includes_entities_from_scene_ingest(tmp_path, monkeypatc
     assert entity["name"].startswith("mock-object-")
     assert entity["seen_count"] == 1
     assert entity["age_seconds"] is not None
+
+
+def test_situation_read_consolidates_when_loop_is_off(tmp_path, monkeypatch):
+    """Look-only usage (Mode A): with the perception loop stopped there is no
+    idle callback, so /situation reads must take over summary consolidation —
+    otherwise closed bands never get cached LLM summaries."""
+    client = _client(tmp_path, monkeypatch)
+    db = client.app.state.db
+    old = datetime(2026, 7, 6, 13, 22, tzinfo=UTC)  # long-closed T1 band
+    _insert_change_at(db, old.isoformat(), "男性が立っている", "男性が画面に現れた")
+
+    body = client.get("/situation").json()
+    assert body["observing"] is False
+    entries = [s for s in body["summaries"] if s["level"] == 1]
+    assert entries, "closed T1 band must contribute a summary entry"
+    # Loop off counts as "not busy": the LLM summary job must be scheduled
+    # (pending), not silently skipped as it was when idle required observing.
+    assert any(s["pending_llm"] for s in body["summaries"])
+    # The scheduled background job caches the band summary shortly after.
+    deadline = time.time() + 3.0
+    cached = None
+    while time.time() < deadline:
+        cached = db.get_summary(1, "2026-07-06T13:20:00+00:00")
+        if cached:
+            break
+        time.sleep(0.05)
+    assert cached is not None

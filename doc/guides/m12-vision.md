@@ -154,6 +154,7 @@ flowchart TB
   T3 --> Band4
   Band4 --> T4
   Idle --> Consolidate
+  Read -- "loop off" --> Consolidate
   Consolidate --> T1
   Consolidate --> T2
   Consolidate --> T3
@@ -189,8 +190,11 @@ buckets, and tier 4 summarizes tier 3 into daily buckets. `/situation` includes
 recent raw changes and the newest populated summary bands: up to 3 tier-1
 bands, 2 tier-2 bands, and 1 each for tiers 3 and 4.
 
-LLM summaries are scheduled only when the scene is idle; otherwise reads return
-an instant extractive fallback. `stable_seconds` is confirmed stability: it
+LLM summaries are scheduled only while perception is not busy: when the loop
+is running and the scene is idle, or whenever the loop is stopped (look-only
+usage — `/situation` reads then take over the consolidation duty, since there
+is no perception cadence to starve). Otherwise reads return an instant
+extractive fallback. `stable_seconds` is confirmed stability: it
 grows only from successful captures and stops being live when the camera goes
 stale. The default raw change window is `VISION_MAX_CHANGES=50`, with protected
 unconsolidated tier-1 rows and a hard limit of 500 rows. Summary retention is
@@ -275,7 +279,9 @@ webhook; the live stack uses `http://127.0.0.1:8096/alert`. The speaker bridge
 then synthesizes Kokoro audio and sends WAV bytes to the M12
 `/api/headroom/audio` endpoint with `X-Headroom-Auth`.
 
-`POST /correction` rejects requests before any scene exists. Active corrections
+`POST /correction` is also exposed to agents as the MCP `vision_correct`
+tool, so a chat correction can reach the memory without shell approvals.
+It rejects requests before any scene exists. Active corrections
 are in-memory and scene-bound: they retire on a committed scene change, hash
 drift beyond `VISION_CORRECTION_HASH_DRIFT`, or `VISION_CORRECTION_TTL_S`.
 The endpoint also stamps `observations.human_note` onto the anchored record and
@@ -347,7 +353,7 @@ M12 のレンズは、場面、物体、大きな文字を見る用途に向い�
 
 第 0 層は `db.py` 内の SQLite `frames` テーブルと `observations` テーブルです。`observations.human_note` には、過去の記録へ紐づけた訂正を保持できます。第 1 層は生の観測を閉じた 10 分区間へ要約し、第 2 層は第 1 層を 1 時間区間へ、第 3 層は第 2 層を 6 時間区間へ、第 4 層は第 3 層を 1 日区間へ要約します。`/situation` には、最近の生の変化と、内容がある最新の要約区間が入ります。第 1 層は最大 3 区間、第 2 層は最大 2 区間、第 3 層と第 4 層は各 1 区間です。
 
-LLM による要約は、場面が待機状態のときだけ予約されます。そうでないとき、読み取りは即時に作れる抽出的な代替要約を返します。`stable_seconds` は確認済みの安定時間です。成功した取得からだけ増え、カメラが古い状態になると現在値ではなくなります。生の変化を残す既定件数は `VISION_MAX_CHANGES=50` で、未統合の第 1 層行は保護され、強制上限は 500 行です。要約の保持数は `TIER_RETENTION` で、第 1 層が 12、第 2 層が 26、第 3 層が 12、第 4 層が 14 を保持し、最も粗い層ではおおむね 2 週間を見渡せます。
+LLM による要約は、認識処理が忙しくないときだけ予約されます。具体的には、ループ稼働中で場面が待機状態のとき、またはループが停止しているとき（単発観察だけの使い方では `/situation` の読み取りが統合役を引き継ぎます。奪い合う認識処理が存在しないためです）。それ以外のとき、読み取りは即時に作れる抽出的な代替要約を返します。`stable_seconds` は確認済みの安定時間です。成功した取得からだけ増え、カメラが古い状態になると現在値ではなくなります。生の変化を残す既定件数は `VISION_MAX_CHANGES=50` で、未統合の第 1 層行は保護され、強制上限は 500 行です。要約の保持数は `TIER_RETENTION` で、第 1 層が 12、第 2 層が 26、第 3 層が 12、第 4 層が 14 を保持し、最も粗い層ではおおむね 2 週間を見渡せます。
 
 ### 利用とフィードバック
 
@@ -359,7 +365,7 @@ LLM による要約は、場面が待機状態のときだけ予約されます�
 
 `ChangeNarrator` は、信頼度が低い行、初回基準行、変化なしの行、短すぎる行を読み飛ばします。`WebhookAlertSink` は `{"text": ..., "watch": ...}` を設定済み Webhook へ POST します。実行中のスタックは `http://127.0.0.1:8096/alert` を使います。その後、スピーカーブリッジが Kokoro 音声を合成し、WAV バイト列を M12 の `/api/headroom/audio` エンドポイントへ `X-Headroom-Auth` 付きで送ります。
 
-`POST /correction` は、まだ場面が存在しない場合はリクエストを拒否します。有効な訂正はメモリ上にあり、特定の場面に紐づきます。保存済みの場面変化、`VISION_CORRECTION_HASH_DRIFT` を超えるハッシュのずれ、または `VISION_CORRECTION_TTL_S` によって失効します。このエンドポイントは、基準となる記録の `observations.human_note` にも訂正を書き込み、それを含む要約を無効化します。`VISION_CORRECTION_TO_MODEL=1` の場合、最も新しい有効な訂正は、diffusiongemma プロンプト内で別個の「古い可能性がある」助言として渡されます。
+`POST /correction` は MCP ツール `vision_correct` としてもエージェントに公開されており、会話中の訂正をシェル承認なしで記憶へ届けられます。まだ場面が存在しない場合はリクエストを拒否します。有効な訂正はメモリ上にあり、特定の場面に紐づきます。保存済みの場面変化、`VISION_CORRECTION_HASH_DRIFT` を超えるハッシュのずれ、または `VISION_CORRECTION_TTL_S` によって失効します。このエンドポイントは、基準となる記録の `observations.human_note` にも訂正を書き込み、それを含む要約を無効化します。`VISION_CORRECTION_TO_MODEL=1` の場合、最も新しい有効な訂正は、diffusiongemma プロンプト内で別個の「古い可能性がある」助言として渡されます。
 
 ### 運用クイックリファレンス
 
