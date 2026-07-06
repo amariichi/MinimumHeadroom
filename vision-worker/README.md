@@ -125,7 +125,8 @@ override is already present. Spoken change narration defaults to OFF
 speech would be picked up by the microphone and injected back into the LLM as
 if the user had said it. Export `VISION_NARRATE_CHANGES=1` for a deliberate
 narration session (with VAD off), or toggle at runtime via
-`POST /perception/narrate {"on": true|false}`. Useful optional overrides include `VISION_PORT`,
+`POST /perception/narrate {"on": true|false}` (exposed to agents as the MCP
+`vision_narrate` tool; the loop itself is `vision_watch`). Useful optional overrides include `VISION_PORT`,
 `VISION_CACHE_DIR`, `VISION_DB_PATH`, `VISION_CAMERA_REDISCOVER_AFTER_FAILURES`,
 other `VISION_*` knobs, `VLLM_DGEMMA_*`, and `M12_SPEAKER_*`.
 

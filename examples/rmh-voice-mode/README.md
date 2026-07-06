@@ -75,6 +75,9 @@ tools:
 
 - `vision_situation` reads the cheap `/situation` digest and is the preferred way to answer "今なにが見える?" without shell `curl`.
 - `vision_look` captures one fresh frame and runs the vision model; use it for deliberate "look now" requests.
+- `vision_watch` starts/stops the continuous watching loop or checks it (「見続けて」「監視やめて」 / "keep watching", "stop watching"); a refused start returns the gating `reason` for the agent to relay.
+- `vision_narrate` toggles spoken change narration (「実況して」「実況やめて」「ミュート」 / "narrate what you see", "mute"); turning it off never stops the loop itself.
+- `vision_correct` posts a human correction back to the scene memory when the user contradicts a camera-derived claim.
 
 Agents should not infer camera state from process lists, browser tabs, or tmux panes. If no injected camera block is present, ask them to call `vision_situation`.
 

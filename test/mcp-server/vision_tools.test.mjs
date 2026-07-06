@@ -79,8 +79,45 @@ function stopChild(child) {
 test('mcp vision tools read situation and fresh look from vision-worker host side', async (t) => {
   const requests = [];
   const correctionTexts = [];
+  let startCalls = 0;
+  let narrateState = false;
   const server = http.createServer((request, response) => {
     requests.push({ method: request.method, url: request.url });
+
+    if (request.method === 'POST' && request.url === '/perception/start') {
+      startCalls += 1;
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      if (startCalls === 1) {
+        response.end(JSON.stringify({ started: false, can_start: false, reason: 'needs_model_start', disclaimer: 'ambient only' }));
+      } else {
+        response.end(JSON.stringify({ started: true, reason: 'ok' }));
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && request.url === '/perception/stop') {
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ running: false }));
+      return;
+    }
+
+    if (request.method === 'GET' && request.url === '/perception/status') {
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ running: true, narrate: narrateState, capability: 'running', voice_wired: true }));
+      return;
+    }
+
+    if (request.method === 'POST' && request.url === '/perception/narrate') {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => {
+        const parsed = JSON.parse(body);
+        narrateState = parsed.on === true;
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ narrate: narrateState, voice_wired: true, disclaimer: 'ambient only' }));
+      });
+      return;
+    }
 
     if (request.method === 'GET' && request.url === '/situation?format=text') {
       response.writeHead(200, {
@@ -152,6 +189,8 @@ test('mcp vision tools read situation and fresh look from vision-worker host sid
   assert.ok(toolNames.includes('vision_situation'));
   assert.ok(toolNames.includes('vision_look'));
   assert.ok(toolNames.includes('vision_correct'));
+  assert.ok(toolNames.includes('vision_watch'));
+  assert.ok(toolNames.includes('vision_narrate'));
 
   const situationResponse = await rpc.call('tools/call', {
     name: 'vision_situation',
@@ -193,11 +232,69 @@ test('mcp vision tools read situation and fresh look from vision-worker host sid
   assert.equal(rejected.result.isError, true);
   assert.match(rejected.result.content[0].text, /まだ観測がない/);
 
+  const refusedStart = await rpc.call('tools/call', {
+    name: 'vision_watch',
+    arguments: { action: 'start' }
+  });
+  assert.equal(refusedStart.result.isError, undefined);
+  assert.match(refusedStart.result.content[0].text, /開始できません/);
+  assert.match(refusedStart.result.content[0].text, /needs_model_start/);
+  assert.equal(refusedStart.result.structuredContent.payload.started, false);
+
+  const startedWatch = await rpc.call('tools/call', {
+    name: 'vision_watch',
+    arguments: { action: 'start' }
+  });
+  assert.equal(startedWatch.result.isError, undefined);
+  assert.match(startedWatch.result.content[0].text, /開始しました/);
+  assert.equal(startedWatch.result.structuredContent.payload.started, true);
+
+  const watchStatus = await rpc.call('tools/call', {
+    name: 'vision_watch',
+    arguments: { action: 'status' }
+  });
+  assert.equal(watchStatus.result.isError, undefined);
+  assert.match(watchStatus.result.content[0].text, /動作中/);
+  assert.match(watchStatus.result.content[0].text, /実況OFF/);
+
+  const narrateOn = await rpc.call('tools/call', {
+    name: 'vision_narrate',
+    arguments: { on: true }
+  });
+  assert.equal(narrateOn.result.isError, undefined);
+  assert.match(narrateOn.result.content[0].text, /ONにしました/);
+  assert.equal(narrateOn.result.structuredContent.on, true);
+  assert.equal(narrateOn.result.structuredContent.running, true);
+  assert.ok(!/注意/.test(narrateOn.result.content[0].text));
+
+  const narrateOff = await rpc.call('tools/call', {
+    name: 'vision_narrate',
+    arguments: { on: false }
+  });
+  assert.equal(narrateOff.result.isError, undefined);
+  assert.match(narrateOff.result.content[0].text, /OFFにしました/);
+  assert.match(narrateOff.result.content[0].text, /vision\.watch/);
+
+  const stoppedWatch = await rpc.call('tools/call', {
+    name: 'vision_watch',
+    arguments: { action: 'stop' }
+  });
+  assert.equal(stoppedWatch.result.isError, undefined);
+  assert.match(stoppedWatch.result.content[0].text, /停止しました/);
+
   assert.deepEqual(requests.map((item) => `${item.method} ${item.url}`), [
     'GET /situation?format=text',
     'POST /look?store=0',
     'POST /correction',
-    'POST /correction'
+    'POST /correction',
+    'POST /perception/start',
+    'POST /perception/start',
+    'GET /perception/status',
+    'POST /perception/narrate',
+    'GET /perception/status',
+    'POST /perception/narrate',
+    'GET /perception/status',
+    'POST /perception/stop'
   ]);
   assert.deepEqual(correctionTexts, ['ノートパソコンは存在しない']);
 });

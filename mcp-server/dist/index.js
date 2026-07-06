@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.21.1';
+const SERVER_VERSION = '1.22.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_AUTH_TOKEN = (() => {
@@ -190,6 +190,32 @@ const BASE_TOOL_DEFINITIONS = [
       properties: {
         text: { type: 'string', minLength: 1 },
         ttl_s: { type: ['number', 'null'], exclusiveMinimum: 0 },
+        timeout_ms: { type: ['integer', 'null'], minimum: 100, maximum: 10000 }
+      }
+    }
+  },
+  {
+    name: 'vision.watch',
+    description: 'Start or stop the camera\'s continuous watching loop (ambient monitoring, Mode B), or check whether it is running. Use action="start" when the user says 「見続けて」「監視して」「見張ってて」「ずっと見てて」「watching始めて」 / "keep watching", "watch the room/door", "start monitoring", "keep an eye on it". Use action="stop" for 「監視やめて」「もう見なくていい」「見るのをやめて」 / "stop watching", "stop monitoring", "you can stop looking". Use action="status" for 「いま監視してる?」 / "are you watching?". If start returns started=false, relay the returned reason to the user (locked / needs_model_start / insufficient_vram / no_camera) and never stop another program without asking. To silence the spoken narration only (「実況やめて」/"stop narrating"/"mute"), use vision.narrate instead — that does not stop the loop.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      required: ['action'],
+      properties: {
+        action: { type: 'string', enum: ['start', 'stop', 'status'] },
+        timeout_ms: { type: ['integer', 'null'], minimum: 100, maximum: 15000 }
+      }
+    }
+  },
+  {
+    name: 'vision.narrate',
+    description: 'Turn spoken change narration on or off. When ON, the voice speaks one short line whenever the watched scene changes (requires the continuous loop of vision.watch to be running). Use on=true when the user says 「実況して」「見えたものを声で教えて」「変化があったら読み上げて」「喋りながら見てて」 / "narrate what you see", "tell me out loud when something changes", "announce changes". Use on=false for 「実況やめて」「実況オフ」「ミュートして」「黙って」「静かにして」「読み上げやめて」 / "stop narrating", "mute the camera", "be quiet", "stop announcing". on=false mutes the narration only; the watching loop keeps running (use vision.watch action="stop" for 「監視やめて」/"stop watching"). The result reports running and voice_wired so you can explain why nothing would be audible.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      required: ['on'],
+      properties: {
+        on: { type: 'boolean' },
         timeout_ms: { type: ['integer', 'null'], minimum: 100, maximum: 10000 }
       }
     }
@@ -441,6 +467,12 @@ function canonicalizeToolName(toolName) {
   }
   if (toolName === 'vision_correct') {
     return 'vision.correct';
+  }
+  if (toolName === 'vision_watch') {
+    return 'vision.watch';
+  }
+  if (toolName === 'vision_narrate') {
+    return 'vision.narrate';
   }
   if (toolName === 'agent_list') {
     return 'agent.list';
@@ -1013,6 +1045,31 @@ function normalizeVisionCorrectPayload(rawArguments) {
   return { text, ttl_s: ttlS, timeout_ms: timeoutMs };
 }
 
+function normalizeVisionWatchPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const action = requireString(args, 'action');
+  if (!['start', 'stop', 'status'].includes(action)) {
+    throw new Error('action must be one of: start, stop, status');
+  }
+  const timeoutMs = optionalInteger(args, 'timeout_ms', 5000);
+  if (timeoutMs < 100 || timeoutMs > 15000) {
+    throw new Error('timeout_ms must be between 100 and 15000');
+  }
+  return { action, timeout_ms: timeoutMs };
+}
+
+function normalizeVisionNarratePayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  if (typeof args.on !== 'boolean') {
+    throw new Error('on must be boolean');
+  }
+  const timeoutMs = optionalInteger(args, 'timeout_ms', 3000);
+  if (timeoutMs < 100 || timeoutMs > 10000) {
+    throw new Error('timeout_ms must be between 100 and 10000');
+  }
+  return { on: args.on, timeout_ms: timeoutMs };
+}
+
 function normalizeAgentReportPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
   const streamId = requireString(args, 'stream_id');
@@ -1528,6 +1585,115 @@ async function handleToolCall(params) {
     } catch (error) {
       const reason = error?.name === 'AbortError' ? 'timeout' : error.message;
       return toolTextResult(`vision.correct failed: ${reason}`, {
+        isError: true,
+        structuredContent: { ok: false, vision_base_url: VISION_DISPLAY_URL, reason }
+      });
+    }
+  }
+
+  if (toolName === 'vision.watch') {
+    try {
+      const payload = normalizeVisionWatchPayload(rawArguments);
+      const path = payload.action === 'status' ? '/perception/status' : `/perception/${payload.action}`;
+      const { response, url } = await callVision(path, {
+        method: payload.action === 'status' ? 'GET' : 'POST',
+        timeout_ms: payload.timeout_ms
+      });
+      const apiPayload = await response.json().catch(() => null);
+      if (!response.ok || apiPayload === null) {
+        return toolTextResult(`vision.watch failed: http_${response.status}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, action: payload.action, payload: apiPayload }
+        });
+      }
+
+      let text;
+      if (payload.action === 'start') {
+        if (apiPayload.started === true) {
+          text = apiPayload.reason === 'already_running'
+            ? '[連続監視] すでに動作中です。'
+            : '[連続監視] 開始しました。';
+        } else {
+          const hints = {
+            locked: '設定でロックされています（連続監視は不可・その場の一回撮影 vision.look は可能）。',
+            needs_model_start: 'ビジョンモデルが未起動です。空きVRAMはあるので、ユーザーに確認のうえ ./scripts/run-vllm-diffusiongemma.sh で起動できます。',
+            insufficient_vram: 'VRAMが不足しています。他のモデルを止める必要があるため、必ずユーザーに確認してください。',
+            no_camera: 'カメラが設定されていません。'
+          };
+          const reason = typeof apiPayload.reason === 'string' ? apiPayload.reason : 'unknown';
+          text = `[連続監視] 開始できません（${reason}）: ${hints[reason] ?? '理由をユーザーに伝えてください。'}`;
+        }
+      } else if (payload.action === 'stop') {
+        text = '[連続監視] 停止しました。';
+      } else {
+        const running = apiPayload.running === true;
+        const narrate = apiPayload.narrate === true;
+        const capability = typeof apiPayload.capability === 'string' ? apiPayload.capability : 'unknown';
+        text = running
+          ? `[連続監視] 動作中（実況${narrate ? 'ON' : 'OFF'}）。`
+          : `[連続監視] 停止中（capability=${capability}）。`;
+      }
+
+      return toolTextResult(text, {
+        structuredContent: { ok: true, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, action: payload.action, payload: apiPayload }
+      });
+    } catch (error) {
+      const reason = error?.name === 'AbortError' ? 'timeout' : error.message;
+      return toolTextResult(`vision.watch failed: ${reason}`, {
+        isError: true,
+        structuredContent: { ok: false, vision_base_url: VISION_DISPLAY_URL, reason }
+      });
+    }
+  }
+
+  if (toolName === 'vision.narrate') {
+    try {
+      const payload = normalizeVisionNarratePayload(rawArguments);
+      const { response, url } = await callVision('/perception/narrate', {
+        method: 'POST',
+        timeout_ms: payload.timeout_ms,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ on: payload.on })
+      });
+      const apiPayload = await response.json().catch(() => null);
+      if (!response.ok || apiPayload === null) {
+        return toolTextResult(`vision.narrate failed: http_${response.status}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, payload: apiPayload }
+        });
+      }
+
+      // Loop state is not part of the narrate response; fetch it best-effort so
+      // the agent can explain when narration is ON but nothing will be spoken.
+      let running = null;
+      try {
+        const statusCall = await callVision('/perception/status', { timeout_ms: 2000 });
+        const statusPayload = await statusCall.response.json().catch(() => null);
+        if (statusPayload && typeof statusPayload.running === 'boolean') {
+          running = statusPayload.running;
+        }
+      } catch {
+        // Best-effort only; narrate itself already succeeded.
+      }
+
+      const lines = [
+        payload.on
+          ? '[実況] ONにしました。シーンに変化があるたびに短く読み上げます。'
+          : '[実況] OFFにしました（ミュート）。連続監視を止めたい場合は vision.watch action="stop" を使ってください。'
+      ];
+      if (payload.on && running === false) {
+        lines.push('注意: 連続監視ループが停止中です。実況を聞くには vision.watch action="start" も必要です。');
+      }
+      if (payload.on && apiPayload.voice_wired !== true) {
+        lines.push('注意: 音声経路（alert webhook）が未設定のため、音は出ません。');
+      }
+
+      return toolTextResult(lines.join('\n'), {
+        structuredContent: { ok: true, http: url, status: response.status, vision_base_url: VISION_DISPLAY_URL, on: payload.on, running, payload: apiPayload }
+      });
+    } catch (error) {
+      const reason = error?.name === 'AbortError' ? 'timeout' : error.message;
+      return toolTextResult(`vision.narrate failed: ${reason}`, {
         isError: true,
         structuredContent: { ok: false, vision_base_url: VISION_DISPLAY_URL, reason }
       });

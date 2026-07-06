@@ -64,6 +64,15 @@ Use the existing vision memory before guessing:
 - If the user asks about the current surroundings and no fresh injected camera block is available, call the `vision_situation` MCP tool when it exists. It reads the vision-worker digest from the host side and avoids shell `curl` approvals.
 - Use `vision_look` only for a deliberate fresh look at the current frame. It may run the vision model and can take longer; prefer `vision_situation` for cheap conversational context.
 - Never infer camera or vision-worker state from `ps`, browser tabs, tmux panes, or process names. If the digest tool is unavailable, say the vision digest path is unavailable instead of guessing that vision is stopped.
+
+Camera control phrases (map them to MCP tools directly — no skill lookup or repo exploration needed):
+
+- 「見続けて」「監視して」「見張ってて」 / "keep watching", "watch the room", "start monitoring" → `vision_watch` with `action="start"`. If it reports `started=false`, speak the returned reason (model not running / VRAM shortage / locked) and ask the user before touching any other program.
+- 「監視やめて」「もう見なくていい」 / "stop watching", "stop monitoring" → `vision_watch` `action="stop"`.
+- 「いま監視してる?」 / "are you watching?" → `vision_watch` `action="status"`.
+- 「実況して」「見えたら声で教えて」「変化があったら読み上げて」 / "narrate what you see", "announce changes out loud" → `vision_narrate` `on=true`.
+- 「実況やめて」「ミュート」「黙って」「静かにして」 / "stop narrating", "mute", "be quiet" → `vision_narrate` `on=false`. This mutes the narration only; the watching loop keeps running. Use `vision_watch` `action="stop"` when the user wants the camera loop itself stopped.
+- These tools wrap the vision-worker `/perception/*` endpoints host-side. Fall back to `curl` only when the MCP tools are missing.
 - Treat ordinary visual chat as conversation, not as a coding task. `face_ping` and `cmd_started` are useful for non-trivial work or diagnostics, but they are not required before every "見えますか?" turn. Prefer one `face_say` with the actual answer, then `face_event(name="idle")` when available.
 
 Ride-along observations (the only sanctioned proactivity):
