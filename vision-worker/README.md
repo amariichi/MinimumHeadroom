@@ -118,10 +118,14 @@ own push URL fresh with `ATOM_HEADROOM_DISCOVERY_SUBNETS`; set
 any stale static IP.
 
 The script sets the live worker profile to `VISION_MODEL_BACKEND=diffusiongemma`,
-`VISION_OUTPUT_LANG=ja`, `VISION_CORRECTION_TO_MODEL=1`,
-`VISION_NARRATE_CHANGES=1`, `VISION_ALERT_ENABLED=1`, and
-`VISION_ALERT_WEBHOOK=http://127.0.0.1:8096/alert` unless an explicit override is
-already present. Useful optional overrides include `VISION_PORT`,
+`VISION_OUTPUT_LANG=ja`, `VISION_CORRECTION_TO_MODEL=1`, `VISION_ALERT_ENABLED=1`,
+and `VISION_ALERT_WEBHOOK=http://127.0.0.1:8096/alert` unless an explicit
+override is already present. Spoken change narration defaults to OFF
+(`VISION_NARRATE_CHANGES=0`): with hands-free VAD listening, the camera's own
+speech would be picked up by the microphone and injected back into the LLM as
+if the user had said it. Export `VISION_NARRATE_CHANGES=1` for a deliberate
+narration session (with VAD off), or toggle at runtime via
+`POST /perception/narrate {"on": true|false}`. Useful optional overrides include `VISION_PORT`,
 `VISION_CACHE_DIR`, `VISION_DB_PATH`, `VISION_CAMERA_REDISCOVER_AFTER_FAILURES`,
 other `VISION_*` knobs, `VLLM_DGEMMA_*`, and `M12_SPEAKER_*`.
 
