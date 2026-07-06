@@ -1,4 +1,13 @@
 {
+  "minimum-headroom-situation": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "/ABS/PATH/minimum-headroom/scripts/situation-context-hook-agy.mjs",
+        "timeout": 5
+      }
+    ]
+  },
   "minimum-headroom-idle": {
     "Stop": [
       {

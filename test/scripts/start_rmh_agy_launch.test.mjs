@@ -57,6 +57,18 @@ appendFileSync(process.env.RMH_FAKE_AGY_CALLS, JSON.stringify(process.argv.slice
     assert.equal(await exists(path.join(cliPlugin, 'skills/minimum-headroom-ops/SKILL.md')), true);
     assert.equal(await exists(path.join(cliPlugin, 'skills/atoms3r-vision/SKILL.md')), true);
 
+    // The situation digest must reach agy via its PreInvocation hook: without
+    // this registration agy gets no camera context at all (claude/codex use
+    // UserPromptSubmit hooks instead).
+    const hooks = JSON.parse(await readFile(path.join(cliPlugin, 'hooks.json'), 'utf8'));
+    const situation = hooks['minimum-headroom-situation'];
+    assert.ok(situation, 'hooks.json must register minimum-headroom-situation');
+    assert.equal(situation.PreInvocation.length, 1);
+    assert.equal(
+      situation.PreInvocation[0].command,
+      path.join(repoRoot, 'scripts/situation-context-hook-agy.mjs')
+    );
+
     const calls = (await readFile(callsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(calls.some((argv) => argv[0] === 'plugin' && argv[1] === 'install'), true);
     assert.deepEqual(calls.at(-1), []);
