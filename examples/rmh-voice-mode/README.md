@@ -78,20 +78,28 @@ tools:
 
 Agents should not infer camera state from process lists, browser tabs, or tmux panes. If no injected camera block is present, ask them to call `vision_situation`.
 
-For Claude Code and Codex CLI, `start-rmh.sh --with-vision` also wires
-per-prompt situation injection. Claude receives a generated `--settings` file
-whose `UserPromptSubmit` hook runs `scripts/situation-context-hook.sh`. Codex
+`start-rmh.sh --with-vision` wires per-prompt situation injection for all
+three CLIs. Claude receives a generated `--settings` file whose
+`UserPromptSubmit` hook runs `scripts/situation-context-hook.sh`. Codex
 receives `scripts/situation-context-hook-codex.mjs` through `codex -c`; that
 wrapper runs the same plain hook and returns the result as
-`hookSpecificOutput.additionalContext`. In both cases the `[カメラの状況 ...]`
-and `[共有視界ブリーフ]` blocks are available before the model decides whether
-to call `vision_situation`.
+`hookSpecificOutput.additionalContext`. Agy receives
+`scripts/situation-context-hook-agy.mjs` through the rendered plugin's
+`hooks.json` (`PreInvocation`); that wrapper runs the same plain hook and
+returns the digest as a transient `ephemeralMessage`, keyed to the agy
+conversation via `MH_SITUATION_SESSION_KEY`. In all cases the
+`[カメラの状況 ...]` block (including its `見覚え:` entity-callback lines) is
+available before the model decides whether to call `vision_situation`.
+
+Companion-heavy sessions (lots of shared-scene chat rather than coding) read
+noticeably better on a mid-tier model; consider `--model sonnet` instead of
+the default `haiku`.
 
 ## What the script does
 
 1. Resolves `MH_REPO_ROOT` from its own location (override with `MH_REPO_ROOT=...`).
 2. Exports `MH_FACE_AGENT_ID=__operator__`, `MH_FACE_SESSION_ID=operator`, `FACE_WS_URL`, and `VISION_BASE_URL`, so the MCP server can auto-fill `agent_id` / `session_id` and read the M12 vision digest from the host side.
-3. When `--with-vision` or `RMH_WITH_VISION=1` is set, runs `scripts/run-vision-stack.sh` before launching the CLI and defaults `MH_SITUATION_INJECT=1` plus `MH_VISION_COMPANION=1` unless you explicitly set either one to `0`, `false`, `no`, or `off`.
+3. When `--with-vision` or `RMH_WITH_VISION=1` is set, runs `scripts/run-vision-stack.sh` before launching the CLI and defaults `MH_SITUATION_INJECT=1` unless you explicitly set it to `0`, `false`, `no`, or `off`.
 4. Renders per-CLI runtime config from `templates/` into a temporary runtime directory (`$XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/`) when the runtime needs files. Claude receives generated MCP config plus a generated settings file with RMH hooks, including the optional `UserPromptSubmit` situation hook. Codex does **not** get a temporary `CODEX_HOME`; it keeps the user's normal `~/.codex` auth/state and receives RMH MCP + hook settings through `codex -c` overrides. When `MH_SITUATION_INJECT=1`, Codex also receives a `UserPromptSubmit` situation hook through those overrides. Agy gets a rendered plugin with MCP config, hook examples, and the RMH skills.
 5. Launches the chosen CLI from this directory, so the agent picks up the voice-first rules in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`.
 
