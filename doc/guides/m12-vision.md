@@ -281,6 +281,10 @@ then synthesizes Kokoro audio and sends WAV bytes to the M12
 
 `POST /correction` is also exposed to agents as the MCP `vision_correct`
 tool, so a chat correction can reach the memory without shell approvals.
+Likewise `POST /perception/start|stop` + `GET /perception/status` are exposed
+as the MCP `vision_watch` tool and `POST /perception/narrate` as
+`vision_narrate`, so "keep watching" / "stop narrating" / "mute" style spoken
+requests need no shell approvals either.
 It rejects requests before any scene exists. Active corrections
 are in-memory and scene-bound: they retire on a committed scene change, hash
 drift beyond `VISION_CORRECTION_HASH_DRIFT`, or `VISION_CORRECTION_TTL_S`.
@@ -365,7 +369,7 @@ LLM による要約は、認識処理が忙しくないときだけ予約され�
 
 `ChangeNarrator` は、信頼度が低い行、初回基準行、変化なしの行、短すぎる行を読み飛ばします。`WebhookAlertSink` は `{"text": ..., "watch": ...}` を設定済み Webhook へ POST します。実行中のスタックは `http://127.0.0.1:8096/alert` を使います。その後、スピーカーブリッジが Kokoro 音声を合成し、WAV バイト列を M12 の `/api/headroom/audio` エンドポイントへ `X-Headroom-Auth` 付きで送ります。
 
-`POST /correction` は MCP ツール `vision_correct` としてもエージェントに公開されており、会話中の訂正をシェル承認なしで記憶へ届けられます。まだ場面が存在しない場合はリクエストを拒否します。有効な訂正はメモリ上にあり、特定の場面に紐づきます。保存済みの場面変化、`VISION_CORRECTION_HASH_DRIFT` を超えるハッシュのずれ、または `VISION_CORRECTION_TTL_S` によって失効します。このエンドポイントは、基準となる記録の `observations.human_note` にも訂正を書き込み、それを含む要約を無効化します。`VISION_CORRECTION_TO_MODEL=1` の場合、最も新しい有効な訂正は、diffusiongemma プロンプト内で別個の「古い可能性がある」助言として渡されます。
+`POST /correction` は MCP ツール `vision_correct` としてもエージェントに公開されており、会話中の訂正をシェル承認なしで記憶へ届けられます。同様に `POST /perception/start|stop` と `GET /perception/status` は MCP ツール `vision_watch`、`POST /perception/narrate` は `vision_narrate` として公開されており、「見続けて」「実況やめて」「ミュート」のような音声指示もシェル承認なしで処理できます。まだ場面が存在しない場合はリクエストを拒否します。有効な訂正はメモリ上にあり、特定の場面に紐づきます。保存済みの場面変化、`VISION_CORRECTION_HASH_DRIFT` を超えるハッシュのずれ、または `VISION_CORRECTION_TTL_S` によって失効します。このエンドポイントは、基準となる記録の `observations.human_note` にも訂正を書き込み、それを含む要約を無効化します。`VISION_CORRECTION_TO_MODEL=1` の場合、最も新しい有効な訂正は、diffusiongemma プロンプト内で別個の「古い可能性がある」助言として渡されます。
 
 ### 運用クイックリファレンス
 

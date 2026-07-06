@@ -25,11 +25,25 @@ This is informational/assistive only. The camera samples slowly (~0.5 fps) over 
 
 Default base URL: `http://127.0.0.1:8095` (override with `VISION_BASE_URL`). When the camera is carried standalone, the service still runs on the home PC and is reached over Tailscale, so the base URL may be a Tailscale address.
 
-When the `minimum_headroom` MCP server exposes `vision_situation` and
-`vision_look`, prefer those tools over shell `curl`: they read `VISION_BASE_URL`
-from the host-side MCP process and avoid per-agent localhost/network approval
-differences. Never infer camera availability from process lists, browser tabs,
-or tmux panes; use the digest tool or say the digest path is unavailable.
+When the `minimum_headroom` MCP server exposes the vision tools
+(`vision_situation`, `vision_look`, `vision_correct`, `vision_watch`,
+`vision_narrate`), prefer those tools over shell `curl`: they read
+`VISION_BASE_URL` from the host-side MCP process and avoid per-agent
+localhost/network approval differences. Never infer camera availability from
+process lists, browser tabs, or tmux panes; use the digest tool or say the
+digest path is unavailable.
+
+## Quick reference: user phrase → action
+
+| User says (JA / EN) | Do this |
+|---|---|
+| 「見続けて」「監視して」「見張ってて」 / "keep watching", "watch the room", "start monitoring" | MCP `vision_watch` `action="start"` (fallback `POST /perception/start`); if refused, relay the returned `reason` |
+| 「監視やめて」「もう見なくていい」 / "stop watching", "stop monitoring" | `vision_watch` `action="stop"` (`POST /perception/stop`) |
+| 「実況して」「見えたら声で教えて」 / "narrate what you see", "announce changes" | `vision_narrate` `on=true` (`POST /perception/narrate {"on":true}`) |
+| 「実況やめて」「ミュート」「黙って」 / "stop narrating", "mute", "be quiet" | `vision_narrate` `on=false` — mutes narration only; the watching loop keeps running |
+| 「今なにが見えてる?」 / "what do you see right now?" | `vision_look` (`POST /look`); for cheap context use the injected digest or `vision_situation` |
+| 「いま監視してる?」 / "are you watching?" | `vision_watch` `action="status"` (`GET /perception/status`) |
+| ユーザーがカメラの読み間違いを訂正 / user contradicts a camera claim | `vision_correct` (`POST /correction`) |
 
 ```bash
 BASE="${VISION_BASE_URL:-http://127.0.0.1:8095}"
@@ -51,7 +65,9 @@ curl -s "$BASE/frame/12" -o /tmp/frame.jpg   # original full-resolution stored J
 curl -s "$BASE/metrics"           # counts + pipeline stats
 curl -s -X POST "$BASE/perception/start"   # Mode B: start continuous watching (gated; see below)
 curl -s -X POST "$BASE/perception/stop"    # Mode B: stop continuous watching
-curl -s "$BASE/perception/status"          # running? locked? capability?
+curl -s "$BASE/perception/status"          # running? locked? capability? narrate?
+curl -s -X POST "$BASE/perception/narrate" -H 'Content-Type: application/json' \
+  -d '{"on": true}'                        # spoken change narration ON/OFF at runtime ("mute" = {"on": false})
 curl -s -X POST "$BASE/correction" -H 'Content-Type: application/json' \
   -d '{"text":"赤信号に見えるのは救急車の赤色灯"}'             # correct a camera misread (see below)
 curl -s "$BASE/corrections"                # list still-active corrections
@@ -206,8 +222,19 @@ curl -s -X POST "$BASE/watches" -H 'Content-Type: application/json' \
 curl -s -X POST "$BASE/perception/start"
 ```
 Keyword watch rules must be written in the worker output language (`VISION_OUTPUT_LANG`; Japanese, `ja`, in the live stack), so use `"赤"` rather than `"red"` when the worker describes scenes in Japanese.
-Relay the returned safety disclaimer. **"Stop watching"** → `POST /perception/stop`.
-**"Are you watching?"** → `GET /perception/status`.
+Relay the returned safety disclaimer. **"Stop watching"** → `vision_watch`
+`action="stop"` (or `POST /perception/stop`). **"Are you watching?"** →
+`vision_watch` `action="status"` (or `GET /perception/status`). Prefer the MCP
+`vision_watch` tool for all three actions when it is available.
+
+**"Narrate what you see." / "実況して" — and "Mute." / "実況やめて"** (Mode B)
+
+Spoken change narration speaks one short line whenever the watched scene
+changes. Toggle it with the MCP `vision_narrate` tool (`on=true/false`), or
+`POST /perception/narrate {"on": true|false}` when the tool is unavailable.
+Turning it off is the "mute": the watching loop itself keeps running. It is
+only audible when the alert webhook is wired (`voice_wired` in the response)
+and the loop is running.
 
 ## When the user corrects what the camera reported
 
@@ -237,9 +264,9 @@ attach to) — take a look first.
 
 ## Controlling Mode B (the gating policy)
 
-`POST /perception/start` returns `started: true/false`. When false, `reason`
-tells you what to do — relay it to the user, and never silently stop another
-program:
+`POST /perception/start` (MCP: `vision_watch` `action="start"`) returns
+`started: true/false`. When false, `reason` tells you what to do — relay it to
+the user, and never silently stop another program:
 
 - `locked` — continuous watching is disabled by policy; only Mode A works.
 - `needs_model_start` — the model is not running but there is enough free GPU
