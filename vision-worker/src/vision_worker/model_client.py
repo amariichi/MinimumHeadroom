@@ -170,9 +170,45 @@ RESPONSE_SCHEMA = {
 _SALIENT_OBJECTS_MAX = 5
 _SALIENT_NAME_MAX_CHARS = 64
 
+#: People must never enter the entity memory ("見覚え: 男性" is wrong and
+#: creepy). The instruction says "Exclude people" but live diffusiongemma
+#: returned 男性 anyway, so the parse layer enforces it. Exact matches only for
+#: single-kanji words (人 alone would wrongly match 人形); substring matches for
+#: unambiguous multi-char person words.
+_PERSON_EXACT = {
+    "人", "顔", "手", "man", "woman", "person", "people", "human", "face",
+    "hand", "boy", "girl", "child", "kid", "baby",
+}
+_PERSON_SUBSTRINGS = (
+    "男性", "女性", "人物", "男の人", "女の人", "男の子", "女の子",
+    "子供", "子ども", "赤ちゃん",
+)
+
+#: Fixed features of the room make useless callbacks: they never leave the
+#: scene, so "見覚え: 机" carries no conversational value and crowds out real
+#: items. Exact matches only — "イチゴ柄のマグカップが載った机" stays possible
+#: as part of a longer, genuinely distinctive name.
+_GENERIC_PLACE_EXACT = {
+    "机", "デスク", "テーブル", "棚", "部屋", "床", "壁", "天井", "窓",
+    "ドア", "椅子", "カーテン",
+    "desk", "table", "shelf", "room", "floor", "wall", "ceiling", "window",
+    "door", "chair", "curtain",
+}
+
+
+def looks_like_entity_noise(name: str) -> bool:
+    """True when `name` must not enter the entity memory (person / fixture)."""
+    low = name.strip().lower()
+    if not low:
+        return True
+    if low in _PERSON_EXACT or low in _GENERIC_PLACE_EXACT:
+        return True
+    return any(word in low for word in _PERSON_SUBSTRINGS)
+
 
 def parse_salient_objects(value) -> list[str]:
-    """Coerce a model-provided salient_objects value into a bounded list[str]."""
+    """Coerce a model-provided salient_objects value into a bounded list[str],
+    dropping people and fixed room features (see the blocklists above)."""
     if not isinstance(value, list):
         return []
     out: list[str] = []
@@ -180,7 +216,7 @@ def parse_salient_objects(value) -> list[str]:
         if not isinstance(item, str):
             continue
         text = item.strip()
-        if not text:
+        if not text or looks_like_entity_noise(text):
             continue
         out.append(text[:_SALIENT_NAME_MAX_CHARS])
         if len(out) >= _SALIENT_OBJECTS_MAX:

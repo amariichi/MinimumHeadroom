@@ -177,3 +177,21 @@ def test_mock_client_emits_salient_objects_for_scene_frames(make_scene, make_fra
     text = mock.observe(make_frame(0xF0F0), None)
     assert text.is_text is True
     assert text.salient_objects == []
+
+
+def test_salient_objects_exclude_people_and_room_fixtures():
+    from vision_worker.model_client import looks_like_entity_noise, parse_salient_objects
+
+    # Live diffusiongemma returned 男性 despite the instruction; the parse
+    # layer must enforce the people ban, and fixed room features make useless
+    # 見覚え callbacks.
+    assert parse_salient_objects(["男性", "机", "棚", "Amazonの箱"]) == ["Amazonの箱"]
+    assert parse_salient_objects(["女性の顔", "デスク", "イチゴ柄のマグカップ"]) == [
+        "イチゴ柄のマグカップ"
+    ]
+    assert parse_salient_objects(["person", "desk", "red mug"]) == ["red mug"]
+    # 人 alone is a person, but 人形 (doll) is an object and must survive.
+    assert looks_like_entity_noise("人")
+    assert not looks_like_entity_noise("人形")
+    # Longer distinctive names that merely include a fixture word survive too.
+    assert not looks_like_entity_noise("イチゴ柄のマグカップが載った机")
