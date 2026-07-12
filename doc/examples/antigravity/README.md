@@ -17,9 +17,18 @@ Files shipped here:
 | `mcp_config.json`                   | MCP server registration for `minimum_headroom`, including `VISION_BASE_URL` for host-side vision tools |
 | `hooks.json`                        | Antigravity JSON Hooks example for plugin/workspace installs  |
 | `settings-hooks.snippet.json`       | Compatibility hook entries to merge into `~/.gemini/settings.json` |
-| (skill source)                      | `doc/examples/skills/minimum-headroom-ops/SKILL.md`           |
+| (skill source)                      | canonical `~/.agents/skills/<name>/SKILL.md`, with `doc/examples/skills` as a portable fallback |
 
 Before any of the steps below, **replace `/ABS/PATH/minimum-headroom`** in `mcp_config.json`, `hooks.json`, and `settings-hooks.snippet.json` with the absolute path of your checkout (e.g. `/home/you/github/minimum-headroom`).
+
+For manual skill copies, resolve the same canonical-first sources used by the
+RMH launcher. These are shell variables for the commands below:
+
+    SHARED_SKILLS_DIR="${MH_SHARED_SKILLS_DIR:-$HOME/.agents/skills}"
+    MH_OPS_SKILL="$SHARED_SKILLS_DIR/minimum-headroom-ops/SKILL.md"
+    MH_VISION_SKILL="$SHARED_SKILLS_DIR/atoms3r-vision/SKILL.md"
+    [[ -f "$MH_OPS_SKILL" ]] || MH_OPS_SKILL=doc/examples/skills/minimum-headroom-ops/SKILL.md
+    [[ -f "$MH_VISION_SKILL" ]] || MH_VISION_SKILL=doc/examples/skills/atoms3r-vision/SKILL.md
 
 ---
 
@@ -49,9 +58,9 @@ skills alongside the MCP plugin if your `agy` build does not copy them:
 
     mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
     mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/atoms3r-vision
-    cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+    cp "$MH_OPS_SKILL" \
        ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
-    cp doc/examples/skills/atoms3r-vision/SKILL.md \
+    cp "$MH_VISION_SKILL" \
        ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/atoms3r-vision/SKILL.md
 
 Restart `agy`, type `/mcp` inside the TUI to confirm `minimum_headroom` is loaded.
@@ -65,6 +74,9 @@ source of truth. It copies the current `minimum-headroom-ops` and
 need concrete files. Set `MH_SHARED_SKILLS_DIR` to use a different canonical
 directory. If a canonical file is absent, the launcher falls back to
 `doc/examples/skills`; it never modifies the shared source.
+The checked-in fallback files are portable snapshots, not symlinks into one
+user's home directory. Keep machine-specific paths and private instructions in
+the shared source rather than adding them to those snapshots.
 
 ### Print mode on agy 1.1.1
 
@@ -138,7 +150,7 @@ The MCP registration above already makes the tools callable from the GUI; the pl
     mkdir -p ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops
     cp doc/examples/antigravity/plugin.json \
        ~/.gemini/config/plugins/minimum-headroom/plugin.json
-    cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+    cp "$MH_OPS_SKILL" \
        ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
 
 ### Restart the GUI

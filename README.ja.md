@@ -424,12 +424,16 @@ face-app をループバック外にバインドして `MH_FACE_AUTH_TOKEN` が�
 ```bash
 # 0. doc/examples/antigravity/{mcp_config.json,hooks.json,settings-hooks.snippet.json} の
 #    /ABS/PATH/minimum-headroom を絶対パスへ置換
+# coding agentが共有するskill正本を優先し、その構成がないhostでは
+# check-in済みの可搬fallbackを使う
+MH_OPS_SKILL="${MH_SHARED_SKILLS_DIR:-$HOME/.agents/skills}/minimum-headroom-ops/SKILL.md"
+[[ -f "$MH_OPS_SKILL" ]] || MH_OPS_SKILL=doc/examples/skills/minimum-headroom-ops/SKILL.md
 
 # --- CLI (agy) ---
 agy plugin install doc/examples/antigravity                   # 冪等
 # 任意: スキルも入れて /skills に出るようにする
 mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
-cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+cp "$MH_OPS_SKILL" \
    ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
 
 # --- GUI ---
@@ -439,7 +443,7 @@ cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
 mkdir -p ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops
 cp doc/examples/antigravity/plugin.json \
    ~/.gemini/config/plugins/minimum-headroom/plugin.json
-cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+cp "$MH_OPS_SKILL" \
    ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
 
 # --- 共通: hook ---
