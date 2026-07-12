@@ -3,6 +3,7 @@
 #
 # Usage:
 #   start-rmh.sh --agent {claude|codex|agy} [--model <id>] [--with-vision] [extra args passed to the CLI]
+#   start-rmh.sh --agent agy --setup-only
 #
 # Required runtime: the minimum-headroom operator stack must already be running
 # (face-app on FACE_WS_URL, AtomS3R bridge alive). This script does not start
@@ -61,8 +62,6 @@ done
 # Conservative model defaults for voice-first use. Override with --model <id>.
 : "${RMH_DEFAULT_MODEL_CLAUDE:=haiku}"
 : "${RMH_DEFAULT_MODEL_CODEX:=gpt-5.4-mini}"
-# agy has no --model flag; it reads ~/.gemini/antigravity-cli/settings.json. Document only.
-: "${RMH_DEFAULT_MODEL_AGY_HINT:=gemini-flash-latest}"
 : "${RMH_WITH_VISION:=0}"
 
 # Runtime workdir for generated configs (machine-local, not committed).
@@ -74,6 +73,7 @@ trap 'rm -rf "$RUNTIME_DIR"' EXIT
 AGENT=""
 MODEL=""
 PASSTHRU=()
+SETUP_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -82,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --model) MODEL="$2"; shift 2 ;;
     --model=*) MODEL="${1#*=}"; shift ;;
     --with-vision) RMH_WITH_VISION=1; shift ;;
+    --setup-only) SETUP_ONLY=1; shift ;;
     -h|--help)
       sed -n '2,12p' "$0"
       exit 0
@@ -92,6 +93,10 @@ done
 
 if [[ -z "$AGENT" ]]; then
   echo "[start-rmh] missing --agent {claude|codex|agy}" >&2
+  exit 2
+fi
+if [[ "$SETUP_ONLY" == "1" && "$AGENT" != "agy" ]]; then
+  echo "[start-rmh] --setup-only is currently supported only with --agent agy" >&2
   exit 2
 fi
 
@@ -205,12 +210,27 @@ case "$AGENT" in
     cp "$HERE/templates/antigravity-plugin/plugin.json" "$PLUGIN_SRC/plugin.json"
     render "$HERE/templates/antigravity-plugin/mcp_config.json.tmpl" "$PLUGIN_SRC/mcp_config.json"
     render "$HERE/templates/antigravity-plugin/hooks.json.tmpl" "$PLUGIN_SRC/hooks.json"
-    mkdir -p "$PLUGIN_SRC/skills/minimum-headroom-ops" "$PLUGIN_SRC/skills/atoms3r-vision"
-    cp "$MH_REPO_ROOT/doc/examples/skills/minimum-headroom-ops/SKILL.md" \
-      "$PLUGIN_SRC/skills/minimum-headroom-ops/SKILL.md"
-    cp "$MH_REPO_ROOT/doc/examples/skills/atoms3r-vision/SKILL.md" \
-      "$PLUGIN_SRC/skills/atoms3r-vision/SKILL.md"
+    # This host keeps reusable skills under ~/.agents/skills and exposes them
+    # to each coding agent through symlinks. Package the current canonical
+    # content into agy's plugin when available; retain the checked-in examples
+    # as a portable fallback for machines without that shared layout.
+    SHARED_SKILLS_DIR="${MH_SHARED_SKILLS_DIR:-$HOME/.agents/skills}"
+    copy_agy_skill() {
+      local name="$1"
+      local shared="$SHARED_SKILLS_DIR/$name/SKILL.md"
+      local fallback="$MH_REPO_ROOT/doc/examples/skills/$name/SKILL.md"
+      local source="$fallback"
+      if [[ -f "$shared" ]]; then
+        source="$shared"
+      fi
+      mkdir -p "$PLUGIN_SRC/skills/$name"
+      cp "$source" "$PLUGIN_SRC/skills/$name/SKILL.md"
+    }
+    copy_agy_skill minimum-headroom-ops
+    copy_agy_skill atoms3r-vision
+    AGY_PLUGIN_INSTALL_OK=1
     if ! agy plugin install "$PLUGIN_SRC" >/dev/null 2>&1; then
+      AGY_PLUGIN_INSTALL_OK=0
       echo "[start-rmh] agy plugin install failed for $PLUGIN_SRC; falling back to launch with existing plugins." >&2
     fi
     # agy 1.0.16 may validate hooks/skills in the rendered plugin but still
@@ -220,12 +240,20 @@ case "$AGENT" in
     AGY_CLI_PLUGIN_DIR="${HOME}/.gemini/antigravity-cli/plugins/minimum-headroom"
     mkdir -p "$AGY_CLI_PLUGIN_DIR"
     cp -a "$PLUGIN_SRC/." "$AGY_CLI_PLUGIN_DIR/"
+    if [[ "$SETUP_ONLY" == "1" ]]; then
+      if [[ "$AGY_PLUGIN_INSTALL_OK" != "1" ]]; then
+        echo "[start-rmh] setup-only failed because agy plugin install did not succeed." >&2
+        exit 1
+      fi
+      echo "[start-rmh] agy plugin synchronized; setup-only complete." >&2
+      exit 0
+    fi
+    MODEL_ARGS=()
     if [[ -n "${MODEL:-}" ]]; then
-      echo "[start-rmh] note: agy has no --model flag; it reads the model from ~/.gemini/antigravity-cli/settings.json." >&2
-      echo "[start-rmh] --model $MODEL was not applied. Suggested light model: $RMH_DEFAULT_MODEL_AGY_HINT" >&2
+      MODEL_ARGS+=(--model "$MODEL")
     fi
     cd "$HERE"
-    exec agy "${PASSTHRU[@]}"
+    exec agy "${MODEL_ARGS[@]}" "${PASSTHRU[@]}"
     ;;
 
   *)

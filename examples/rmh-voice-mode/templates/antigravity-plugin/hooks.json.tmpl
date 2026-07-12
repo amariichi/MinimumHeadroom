@@ -17,6 +17,20 @@
       }
     ]
   },
+  "minimum-headroom-helper-policy": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__MH_REPO_ROOT__/scripts/agy-helper-policy.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
   "minimum-headroom-approval-attention-optional": {
     "enabled": false,
     "PreToolUse": [

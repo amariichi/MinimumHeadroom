@@ -19,6 +19,7 @@ If any of those are missing, see the top-level `README.md` first.
 $REPO/examples/rmh-voice-mode/start-rmh.sh --agent claude
 $REPO/examples/rmh-voice-mode/start-rmh.sh --agent codex
 $REPO/examples/rmh-voice-mode/start-rmh.sh --agent agy
+$REPO/examples/rmh-voice-mode/start-rmh.sh --agent agy --setup-only  # refresh plugin without opening the TUI
 ```
 
 Replace `$REPO` with the path to your minimum-headroom checkout. The script auto-detects its own repo root, so no paths are hard-coded.
@@ -30,6 +31,7 @@ start-rmh.sh --agent claude --model sonnet           # heavier model for a hard 
 start-rmh.sh --agent claude --with-vision            # start/reuse M12 vision and inject the situation brief
 start-rmh.sh --agent codex  --model gpt-5            # override the default light model
 start-rmh.sh --agent codex  --with-vision            # start/reuse M12 vision and inject the situation brief
+start-rmh.sh --agent agy    --model 'Gemini 3.5 Flash (Low)'  # use a name shown by `agy models`
 start-rmh.sh --agent agy    --with-vision            # agy can read vision via MCP vision_situation
 start-rmh.sh --agent codex  -- exec "fix the failing test"   # extra args after -- pass through
 ```
@@ -103,10 +105,14 @@ the default `haiku`.
 1. Resolves `MH_REPO_ROOT` from its own location (override with `MH_REPO_ROOT=...`).
 2. Exports `MH_FACE_AGENT_ID=__operator__`, `MH_FACE_SESSION_ID=operator`, `FACE_WS_URL`, and `VISION_BASE_URL`, so the MCP server can auto-fill `agent_id` / `session_id` and read the M12 vision digest from the host side.
 3. When `--with-vision` or `RMH_WITH_VISION=1` is set, runs `scripts/run-vision-stack.sh` before launching the CLI and defaults `MH_SITUATION_INJECT=1` unless you explicitly set it to `0`, `false`, `no`, or `off`.
-4. Renders per-CLI runtime config from `templates/` into a temporary runtime directory (`$XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/`) when the runtime needs files. Claude receives generated MCP config plus a generated settings file with RMH hooks, including the optional `UserPromptSubmit` situation hook. Codex does **not** get a temporary `CODEX_HOME`; it keeps the user's normal `~/.codex` auth/state and receives RMH MCP + hook settings through `codex -c` overrides. When `MH_SITUATION_INJECT=1`, Codex also receives a `UserPromptSubmit` situation hook through those overrides. Agy gets a rendered plugin with MCP config, hook examples, and the RMH skills.
+4. Renders per-CLI runtime config from `templates/` into a temporary runtime directory (`$XDG_RUNTIME_DIR/rmh-voice-mode/<pid>/`) when the runtime needs files. Claude receives generated MCP config plus a generated settings file with RMH hooks, including the optional `UserPromptSubmit` situation hook. Codex does **not** get a temporary `CODEX_HOME`; it keeps the user's normal `~/.codex` auth/state and receives RMH MCP + hook settings through `codex -c` overrides. When `MH_SITUATION_INJECT=1`, Codex also receives a `UserPromptSubmit` situation hook through those overrides. Agy gets a rendered plugin with MCP config, hook examples, and the RMH skills. For each skill the launcher prefers the shared source under `~/.agents/skills` (override with `MH_SHARED_SKILLS_DIR`) and falls back to the checked-in example.
 5. Launches the chosen CLI from this directory, so the agent picks up the voice-first rules in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`.
 
 For agy, the script renders the minimum-headroom plugin from `templates/antigravity-plugin/` into a per-launch temp dir (with `MH_REPO_ROOT` resolved), runs `agy plugin install` on it, and then explicitly syncs the same rendered files into `~/.gemini/antigravity-cli/plugins/minimum-headroom/`. This extra sync is intentional: agy 1.0.16 can process hooks/skills during install while leaving the CLI plugin directory stale. The rendered plugin includes `mcp_config.json`, `hooks.json`, `minimum-headroom-ops`, and `atoms3r-vision`. Shared `~/.gemini/settings.json` is NOT touched because it is shared with the user's other customizations. Merge `doc/examples/antigravity/settings-hooks.snippet.json` manually only if your installed agy build does not load plugin hooks. See `doc/examples/antigravity/README.md` for details.
+
+Use `--agent agy --setup-only` to render, install, and synchronize that plugin
+without opening an interactive agy session. This is useful after updating this
+repository or the shared skills.
 
 ## The voice-first rules
 
@@ -133,7 +139,7 @@ The script picks light models by default — adequate for short conversational t
 |--------|--------------------------|---------------------------------|
 | claude | `haiku`                  | `--model sonnet` etc.            |
 | codex  | `gpt-5.4-mini`           | `--model <id>` or `-c model=...` |
-| agy    | (read from `~/.gemini/antigravity-cli/settings.json`) | edit settings.json — agy has no `--model` flag |
+| agy    | agy's account/config default | `--model '<name from agy models>'` |
 
 Override the script defaults globally with environment variables:
 
@@ -141,6 +147,28 @@ Override the script defaults globally with environment variables:
 export RMH_DEFAULT_MODEL_CLAUDE=sonnet
 export RMH_DEFAULT_MODEL_CODEX=gpt-5
 ```
+
+The agy model list is account-dependent and can change, so this launcher does
+not hard-code an agy default. Run `agy models`, then pass one of the displayed
+names with `--model` when you need an override.
+
+## Agy 1.1.1 compatibility
+
+The RMH launcher starts agy's interactive TUI. Managed agy helpers use the same
+interactive path and receive their mission through terminal input. Neither path
+uses `agy -p`, so the 1.1.1 print-mode stdin change does not affect normal RMH
+conversation or helper operation.
+
+For a separate one-shot automation, do not use `agy -p -`: in 1.1.1 the hyphen
+is the literal prompt. A small argv prompt can use `agy -p 'prompt'`. To keep a
+large or sensitive prompt on stdin, omit the prompt flag entirely:
+
+```bash
+printf '%s\n' 'Reply with exactly PONG' | agy --print-timeout 60s
+```
+
+Always check the exit status. Agy 1.1.1 now returns nonzero and writes stderr
+when a print request fails server-side instead of succeeding with empty output.
 
 ## Idle-hook suppression
 

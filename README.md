@@ -426,12 +426,16 @@ Both the `agy` terminal CLI and the Antigravity GUI (Electron desktop app) are s
 ```bash
 # 0. Edit doc/examples/antigravity/{mcp_config.json,hooks.json,settings-hooks.snippet.json}:
 #    replace /ABS/PATH/minimum-headroom with the absolute path of your checkout.
+# Prefer the shared skill source used by coding agents; keep the checked-in
+# example as the portable fallback on hosts without that layout.
+MH_OPS_SKILL="${MH_SHARED_SKILLS_DIR:-$HOME/.agents/skills}/minimum-headroom-ops/SKILL.md"
+[[ -f "$MH_OPS_SKILL" ]] || MH_OPS_SKILL=doc/examples/skills/minimum-headroom-ops/SKILL.md
 
 # --- CLI (agy) -----------------------------------------------------------------
 agy plugin install doc/examples/antigravity                   # idempotent
 # optional: also drop the skill so /skills shows it
 mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
-cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+cp "$MH_OPS_SKILL" \
    ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
 
 # --- GUI -----------------------------------------------------------------------
@@ -441,7 +445,7 @@ cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
 mkdir -p ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops
 cp doc/examples/antigravity/plugin.json \
    ~/.gemini/config/plugins/minimum-headroom/plugin.json
-cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
+cp "$MH_OPS_SKILL" \
    ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
 
 # --- shared: hooks --------------------------------------------------------------
@@ -452,6 +456,13 @@ cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
 After installing, restart `agy` (CLI) and **fully quit + relaunch** the GUI (close-to-tray does not re-read configs). In `agy` type `/mcp`; in the GUI ask the chat `List every MCP tool you can call right now`. Both should list `minimum_headroom` with `face_event` / `face_say` / `face_ping` and the agent lifecycle tools.
 
 See [Antigravity setup details](doc/examples/antigravity/README.md) for the path matrix, common failure modes (especially the 0-byte `mcp_config.json` trap on GUI), permission presets, and the `GEMINI.md` rule placement. The RMH voice-first launcher at `examples/rmh-voice-mode/start-rmh.sh --agent agy` handles the CLI plugin install automatically with the machine's path resolved.
+
+With agy 1.1.1, RMH and managed helpers remain on the interactive TUI path and
+do not depend on print mode. The launcher now accepts `--model '<name>'` using a
+name returned by `agy models`, and prefers canonical skill content from
+`~/.agents/skills` when available. For separate automation, never use
+`agy -p -`; omit the prompt flag when piping stdin. See the detailed
+[1.1.1 compatibility notes](doc/examples/antigravity/README.md#print-mode-on-agy-111).
 
 ### Agent Instructions
 

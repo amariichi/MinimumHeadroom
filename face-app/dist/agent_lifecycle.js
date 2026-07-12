@@ -405,14 +405,13 @@ export function buildPermissionConfig(agentType, preset, options = {}) {
   }
 
   if (agentType === 'antigravity') {
-    const deny = ['command(git push)', 'command(git push *)'];
-    const allow = preset === 'reviewer'
-      ? ['command(git status)', 'command(git diff)', 'command(git log)', 'command(rg)', 'command(sed)', 'command(cat)', 'command(ls)']
-      : ['command(git)', 'command(npm)', 'command(node)', 'command(rg)', 'command(sed)', 'command(cat)', 'command(ls)'];
     return {
-      configPath: '.gemini/antigravity-cli/settings.json',
-      configContent: { enableTerminalSandbox: true, permissions: { allow, deny } },
-      cmdSuffix: preset === 'reviewer' ? null : '--dangerously-skip-permissions'
+      configPath: null,
+      configContent: null,
+      cmdSuffix: preset === 'reviewer'
+        ? '--sandbox'
+        : '--sandbox --dangerously-skip-permissions',
+      env: { MH_AGY_PERMISSION_PRESET: preset }
     };
   }
 
@@ -624,11 +623,17 @@ export function createAgentLifecycleRuntime(options = {}) {
 
   function buildAgentIdentityEnvEntries(options = {}) {
     const agentId = asNonEmptyString(options.agentId);
-    return [
+    const identityEntries = [
       ['MH_FACE_AGENT_ID', agentId],
       ['MH_FACE_AGENT_LABEL', asNonEmptyString(options.agentLabel)],
       ['MH_HOOK_SUPPRESS_EVENTS', agentId ? 'idle_after_response' : null]
-    ].filter(([, value]) => value);
+    ];
+    const extraEntries = options.extraEnv && typeof options.extraEnv === 'object'
+      ? Object.entries(options.extraEnv)
+        .filter(([key, value]) => /^[A-Z_][A-Z0-9_]*$/.test(key) && asNonEmptyString(value))
+        .map(([key, value]) => [key, asNonEmptyString(value)])
+      : [];
+    return [...identityEntries, ...extraEntries].filter(([, value]) => value);
   }
 
   function buildAgentPaneEnvCommand(options = {}) {
@@ -828,12 +833,14 @@ export function createAgentLifecycleRuntime(options = {}) {
       runCwd = sourceRepoPath;
     }
 
-    if (permissionPreset && worktreeCreated) {
+    let permissionEnv = null;
+    if (permissionPreset) {
       const agentType = inferAgentType(agentCommand);
       const permConfig = buildPermissionConfig(agentType, permissionPreset, {
         sourceRepoPath
       });
-      if (permConfig.configContent && permConfig.configPath) {
+      permissionEnv = permConfig.env ?? null;
+      if (worktreeCreated && permConfig.configContent && permConfig.configPath) {
         const fullConfigPath = path.join(worktreePath, permConfig.configPath);
         fs.mkdirSync(path.dirname(fullConfigPath), { recursive: true });
         fs.writeFileSync(fullConfigPath, JSON.stringify(permConfig.configContent, null, 2));
@@ -863,7 +870,8 @@ export function createAgentLifecycleRuntime(options = {}) {
 
     const identityEnvOptions = {
       agentId,
-      agentLabel: agentId
+      agentLabel: agentId,
+      extraEnv: permissionEnv
     };
     launchCommand = buildAgentLaunchCommand(agentCommand, identityEnvOptions);
 
