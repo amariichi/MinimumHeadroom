@@ -31,7 +31,7 @@ For Claude Code, Antigravity CLI, and Codex CLI, these presets complement the ru
 | Preset | Claude Code | Antigravity CLI | Codex CLI |
 |--------|-------------|------------|-----------|
 | `reviewer` | Read, Glob, Grep, agent\_report (allow); no Bash | sandboxed read-oriented command allow-list | `-s read-only -a never` |
-| `implementer` | + Edit, Write, Bash; deny `git push` | sandboxed commands, deny `git push`, append `--dangerously-skip-permissions` | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
+| `implementer` | + Edit, Write, Bash; deny `git push` | sandboxed commands, deny direct `git push` command forms, append `--dangerously-skip-permissions` | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
 | `full` | same as `implementer` | same as `implementer` | `--dangerously-bypass-approvals-and-sandbox` |
 
 Antigravity presets are session-scoped: all launch with `--sandbox`, and the
@@ -114,10 +114,10 @@ The detector posts reports; it never auto-presses keys. The operator (or the use
 
 - Each helper gets an isolated git worktree on its own branch
 - Assignment target paths are read references under the stream root; helpers should make edits and commits only inside their assigned worktree on the helper branch, never in the source repository checkout
-- `git push` is denied for all helper permission presets:
+- Helper publishing controls differ by runtime:
   - **Claude Code:** `deniedTools` includes `Bash(git push*)`
-  - **Antigravity:** `agy-helper-policy.mjs` returns a `PreToolUse` deny decision
-  - **Codex:** constrained by agent instructions
+  - **Antigravity:** `agy-helper-policy.mjs` returns a `PreToolUse` deny decision for direct `git push` command forms; this is a command-text guardrail, not a hostile-shell security boundary
+  - **Codex:** constrained by agent instructions, not a technical deny rule
 - Generated settings files where used (currently Claude Code) are set to `chmod 444` after write so helpers cannot modify their own permissions
 
 ### Deleting Helpers
@@ -163,7 +163,7 @@ Claude Code / Antigravity CLI / Codex CLI では、これらのプリセット�
 | プリセット | Claude Code | Antigravity CLI | Codex CLI |
 |--------|-------------|------------|-----------|
 | `reviewer` | Read, Glob, Grep, agent\_report (allow); Bash なし | sandboxed read-oriented command allow-list | `-s read-only -a never` |
-| `implementer` | + Edit, Write, Bash; `git push` を拒否 | sandboxed commands, deny `git push`, append `--dangerously-skip-permissions` | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
+| `implementer` | + Edit, Write, Bash; `git push` を拒否 | sandboxed commands, 直接的な `git push` コマンド形式を拒否, append `--dangerously-skip-permissions` | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
 | `full` | `implementer` と同一 | `implementer` と同一 | `--dangerously-bypass-approvals-and-sandbox` |
 
 Antigravity のプリセットはセッション単位です。全て `--sandbox` で起動し、helper
@@ -244,10 +244,10 @@ Antigravity CLI ヘルパーは、権限プリセットを使っても初回だ�
 
 - 各ヘルパーは独自ブランチ上の分離された git ワークツリーを取得
 - assignment の target paths は stream root 配下の読み取り参照です。ヘルパーは編集とコミットを、元リポジトリのチェックアウトではなく割り当てられたワークツリー上のヘルパーブランチで行います
-- `git push` は全プリセットで拒否:
+- helperのpublish制御はruntimeごとに異なります:
   - **Claude Code:** `deniedTools` に `Bash(git push*)` を含む
-  - **Antigravity:** `agy-helper-policy.mjs` が `PreToolUse` のdeny判定を返す
-  - **Codex:** エージェント指示で制約
+  - **Antigravity:** `agy-helper-policy.mjs` が直接的な `git push` コマンド形式へ `PreToolUse` のdeny判定を返す。これはコマンド文字列のguardrailであり、難読化されたshellに対するセキュリティ境界ではありません
+  - **Codex:** エージェント指示で制約し、技術的なdeny ruleは持ちません
 - 生成する権限設定ファイル（現在はClaude Code）は書き込み後 `chmod 444` で保護され、ヘルパーが自身の権限を変更できない
 
 ### ヘルパーの削除
