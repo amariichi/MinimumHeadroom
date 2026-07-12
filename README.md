@@ -453,6 +453,13 @@ After installing, restart `agy` (CLI) and **fully quit + relaunch** the GUI (clo
 
 See [Antigravity setup details](doc/examples/antigravity/README.md) for the path matrix, common failure modes (especially the 0-byte `mcp_config.json` trap on GUI), permission presets, and the `GEMINI.md` rule placement. The RMH voice-first launcher at `examples/rmh-voice-mode/start-rmh.sh --agent agy` handles the CLI plugin install automatically with the machine's path resolved.
 
+With agy 1.1.1, RMH and managed helpers remain on the interactive TUI path and
+do not depend on print mode. The launcher now accepts `--model '<name>'` using a
+name returned by `agy models`, and prefers canonical skill content from
+`~/.agents/skills` when available. For separate automation, never use
+`agy -p -`; omit the prompt flag when piping stdin. See the detailed
+[1.1.1 compatibility notes](doc/examples/antigravity/README.md#print-mode-on-agy-111).
+
 ### Agent Instructions
 
 - Place an `AGENTS.md` in your target repository root (use `doc/examples/AGENTS.sample.md` as the starting template).

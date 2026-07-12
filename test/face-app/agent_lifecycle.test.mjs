@@ -1793,16 +1793,16 @@ test('buildPermissionConfig returns correct config per agent type and preset', (
   assert.equal(codexImplementer.cmdSuffix, "-s workspace-write -a never --add-dir '/tmp/source repo/.git'");
 
   const antigravityImpl = buildPermissionConfig('antigravity', 'implementer');
-  assert.equal(antigravityImpl.configPath, '.gemini/antigravity-cli/settings.json');
-  assert.equal(antigravityImpl.configContent.enableTerminalSandbox, true);
-  assert.ok(antigravityImpl.configContent.permissions.allow.includes('command(npm)'));
-  assert.ok(antigravityImpl.configContent.permissions.deny.includes('command(git push)'));
-  assert.equal(antigravityImpl.cmdSuffix, '--dangerously-skip-permissions');
+  assert.equal(antigravityImpl.configPath, null);
+  assert.equal(antigravityImpl.configContent, null);
+  assert.equal(antigravityImpl.cmdSuffix, '--sandbox --dangerously-skip-permissions');
+  assert.deepEqual(antigravityImpl.env, { MH_AGY_PERMISSION_PRESET: 'implementer' });
 
   const antigravityReviewer = buildPermissionConfig('antigravity', 'reviewer');
-  assert.ok(antigravityReviewer.configContent.permissions.allow.includes('command(git diff)'));
-  assert.equal(antigravityReviewer.configContent.permissions.allow.includes('command(npm)'), false);
-  assert.equal(antigravityReviewer.cmdSuffix, null);
+  assert.equal(antigravityReviewer.configPath, null);
+  assert.equal(antigravityReviewer.configContent, null);
+  assert.equal(antigravityReviewer.cmdSuffix, '--sandbox');
+  assert.deepEqual(antigravityReviewer.env, { MH_AGY_PERMISSION_PRESET: 'reviewer' });
 
   const noPreset = buildPermissionConfig('claude', null);
   assert.equal(noPreset.configPath, null);
@@ -2117,7 +2117,7 @@ test('reconcileAgents recreates helper panes with the stored launch command', as
   cleanup(repoRoot);
 });
 
-test('addAgent writes Antigravity settings for Antigravity helper', async () => {
+test('addAgent applies Antigravity helper policy through flags and environment', async () => {
   const { repoRoot, runtime } = createRuntimeHarness();
 
   const result = await runtime.addAgent({
@@ -2130,14 +2130,10 @@ test('addAgent writes Antigravity settings for Antigravity helper', async () => 
   });
 
   assert.equal(result.ok, true);
-  const configPath = path.join(result.agent.worktree_path, '.gemini/antigravity-cli/settings.json');
-  assert.equal(fs.existsSync(configPath), true);
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  assert.equal(config.enableTerminalSandbox, true);
-  assert.ok(config.permissions.allow.includes('command(npm)'));
-  assert.ok(config.permissions.deny.includes('command(git push)'));
-  const stat = fs.statSync(configPath);
-  assert.equal(stat.mode & 0o777, 0o444, 'settings.json should be read-only');
+  const oldConfigPath = path.join(result.agent.worktree_path, '.gemini/antigravity-cli/settings.json');
+  assert.equal(fs.existsSync(oldConfigPath), false);
+  assert.match(result.agent.agent_cmd, /agy --sandbox --dangerously-skip-permissions/);
+  assert.match(result.agent.launch_command, /MH_AGY_PERMISSION_PRESET='implementer'/);
 
   cleanup(repoRoot);
 });

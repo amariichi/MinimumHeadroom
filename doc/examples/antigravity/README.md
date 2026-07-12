@@ -56,6 +56,51 @@ skills alongside the MCP plugin if your `agy` build does not copy them:
 
 Restart `agy`, type `/mcp` inside the TUI to confirm `minimum_headroom` is loaded.
 
+### Shared skill source
+
+On hosts that centralize reusable skills under `~/.agents/skills` and expose
+them to coding agents with symlinks, `start-rmh.sh` treats that directory as the
+source of truth. It copies the current `minimum-headroom-ops` and
+`atoms3r-vision` contents into the rendered agy plugin because plugin packages
+need concrete files. Set `MH_SHARED_SKILLS_DIR` to use a different canonical
+directory. If a canonical file is absent, the launcher falls back to
+`doc/examples/skills`; it never modifies the shared source.
+
+### Print mode on agy 1.1.1
+
+Minimum Headroom's managed helpers and RMH launcher start the interactive agy
+TUI and do not use print mode. They therefore keep multi-turn state and are not
+affected by the 1.1.1 stdin change.
+
+For external one-shot scripts, `-p` consumes its following value. `agy -p -`
+therefore sends a literal hyphen and must not be used as an stdin sentinel.
+Use `agy -p 'short prompt'` for a non-sensitive argv prompt. For a large or
+sensitive stdin prompt, the 1.1.1 compatibility path is a non-TTY stdin stream
+with no prompt flag:
+
+    printf '%s\n' 'Reply with exactly PONG' | agy --print-timeout 60s
+
+Check the process exit status and stderr. Version 1.1.1 returns a nonzero status
+for server-side print failures instead of silently returning an empty success.
+This no-prompt-flag stdin behavior is not shown in `agy --help`, so keep it
+covered by an integration smoke test in any service that depends on it.
+
+### Model selection on agy 1.1.1
+
+Run `agy models` to see the names available to the current account. The RMH
+launcher accepts an explicit name and passes it through to the interactive CLI:
+
+    examples/rmh-voice-mode/start-rmh.sh --agent agy \
+      --model 'Gemini 3.5 Flash (Low)'
+
+The launcher deliberately leaves the model unset by default because the list is
+account-dependent and changes over time.
+
+After updating this repository or `~/.agents/skills`, refresh the installed
+plugin without starting a conversation:
+
+    examples/rmh-voice-mode/start-rmh.sh --agent agy --setup-only
+
 > Note: if your `agy plugin validate` build reports `hooks: skipped (not found)`, keep using the shared `~/.gemini/settings.json` snippet below for hook delivery. MCP tools are still installed by the plugin either way.
 
 ---
@@ -124,6 +169,7 @@ Antigravity's current public hook format is `hooks.json`. This directory ships `
 
 - `PreInvocation` → `situation-context-hook-agy.mjs`: injects the AtomS3R-M12 camera situation digest as a transient `ephemeralMessage` before each model invocation. Safe-by-default: the underlying `scripts/situation-context-hook.sh` prints nothing (and the wrapper emits `{}`) unless `MH_SITUATION_INJECT=1` is set in the agy process environment, so registering it costs nothing in ordinary sessions. The wrapper derives a stable watermark key from the agy `conversationId` and passes it to the plain hook via `MH_SITUATION_SESSION_KEY`, so the salience watermark survives across invocations of the same conversation.
 - `Stop` → `mh-hook.mjs --runtime antigravity --event idle_after_response`
+- `PreToolUse(run_command)` → `agy-helper-policy.mjs`: inert in normal agy sessions; when a managed helper carries `MH_AGY_PERMISSION_PRESET`, denies `git push` and applies the reviewer command gate.
 - a disabled `PreToolUse` example for approval attention, because enabling it can ask before matching tools and should be an explicit local choice.
 
 During migration testing, current CLI/GUI builds also accepted a shared `~/.gemini/settings.json` hook block using `Notification` and `AfterAgent`. If your installed build does not load plugin `hooks.json`, merge `settings-hooks.snippet.json` into `~/.gemini/settings.json` instead. That snippet uses `--runtime antigravity --stdout-mode silent` so no deprecated Gemini runtime name remains and no stray stdout JSON is emitted for that settings-style hook path.
@@ -155,10 +201,12 @@ Do not use the retired `gemini` runtime name in new configs.
 
 ## Permission presets for helpers
 
-When spawning agy helpers with `agent.spawn(permission_preset=...)`, pass `agent_cmd: "agy"`. The operator writes `.gemini/antigravity-cli/settings.json` in the helper worktree and marks it read-only.
+When spawning agy helpers with `agent.spawn(permission_preset=...)`, pass `agent_cmd: "agy"`. Agy 1.1.1 reads persistent CLI settings from the user profile rather than a helper worktree file, so Minimum Headroom scopes its policy with launch flags plus `MH_AGY_PERMISSION_PRESET` consumed by the installed plugin hook.
 
-- `reviewer`: a small allow-list of read-oriented commands, no auto-approval flags.
-- `implementer` and `full`: deny `git push`, launch `agy --dangerously-skip-permissions` to reduce approval stalls.
+- `reviewer`: launch with `--sandbox`; allow simple read-oriented commands and force an approval prompt for other commands.
+- `implementer` and `full`: launch with `--sandbox --dangerously-skip-permissions`; the policy hook still hard-denies direct `git push` commands.
+
+The hook is a guardrail, not a hostile-shell security boundary; deliberately obfuscated shell code can evade command-text matching. Keep the helper instruction that forbids push, review helper changes before publishing, and reserve `git push` for the user-facing owner.
 
 First-run behavior is still interactive. A fresh helper worktree can stop at Antigravity's workspace trust prompt before `agent.inject` can probe input. Confirm `Yes, I trust this folder` for that generated worktree, then retry injection. The first MCP calls can also prompt for approval (`minimum_headroom/agent_report`, then often `face_ping`, `face_event`, and `face_say`). Choose the conversation-scoped allow option for smoke tests, or persist only after you have reviewed the installed plugin path and permissions. This is expected Antigravity CLI behavior, not a Minimum Headroom transport failure.
 
@@ -169,7 +217,7 @@ The project `AGENTS.md` (or `GEMINI.md`) rules remain part of the security model
 | Step | Command | Expected |
 |------|---------|----------|
 | CLI plugin valid | `agy plugin validate doc/examples/antigravity` | `mcpServers: 1 processed`; hooks may be processed or skipped depending on agy build |
-| CLI installed plugin complete | `agy plugin validate ~/.gemini/antigravity-cli/plugins/minimum-headroom` | `skills: 2 processed`, `mcpServers: 1 processed`, `hooks: 2 processed` for the voice-mode launcher install |
+| CLI installed plugin complete | `agy plugin validate ~/.gemini/antigravity-cli/plugins/minimum-headroom` | `skills: 2 processed`, `mcpServers: 1 processed`, `hooks: 4 processed` for the voice-mode launcher install |
 | CLI plugin installed | `agy plugin list` | `minimum-headroom` listed as `local-install` |
 | GUI MCP file valid | `node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME+"/.gemini/config/mcp_config.json","utf8"))'` | exits 0 |
 | GUI sees server | chat prompt in GUI: `List every MCP tool you can call right now` | response includes `face_event`, `face_say`, `face_ping` |

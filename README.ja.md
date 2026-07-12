@@ -451,6 +451,12 @@ cp doc/examples/skills/minimum-headroom-ops/SKILL.md \
 
 詳細パスマトリクス、よくある失敗パターン（特に GUI の 0 バイト `mcp_config.json` トラップ）、権限プリセット、`GEMINI.md` ルール配置は [Antigravity setup](doc/examples/antigravity/README.md) を参照。RMH 音声優先ランチャ `examples/rmh-voice-mode/start-rmh.sh --agent agy` は CLI のプラグインインストールをマシン固有のパス解決込みで自動実行します。
 
+agy 1.1.1でも、RMHと管理対象helperは対話TUI経路なのでprint modeの変更を受けません。
+ランチャは `agy models` に表示される名前を `--model '<name>'` で受け取り、利用可能なら
+`~/.agents/skills` の正本をpluginへ同期します。別の自動処理では `agy -p -` を使わず、
+stdinを渡す場合はprompt flag自体を省略してください。詳細は
+[agy 1.1.1互換メモ](doc/examples/antigravity/README.md#print-mode-on-agy-111)を参照してください。
+
 ### Hook ブリッジ（face_say の安全網）
 
 エージェントが `face_say` を呼び忘れて承認待ちで沈黙した場合や、最終レポートなしでターンが終わった場合に、ランタイムの hook 機構から自動的にフェイスを喋らせる仕組みです。Claude Code / Codex（新 `hooks` 系）/ Antigravity CLI に対応。
