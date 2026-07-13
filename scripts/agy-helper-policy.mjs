@@ -90,7 +90,15 @@ export function isReviewerReadCommand(commandLine) {
 
 export function evaluateAgyHelperPolicy(payload, presetValue) {
   const preset = asNonEmptyString(presetValue);
-  if (!preset || !HELPER_PRESETS.has(preset)) return {};
+  // PreToolUse has no neutral/no-op decision. This hook is installed only in
+  // managed helper worktrees; if its preset environment is unexpectedly
+  // missing, fail closed to the normal interactive approval path.
+  if (!preset || !HELPER_PRESETS.has(preset)) {
+    return {
+      decision: 'ask',
+      reason: 'Minimum Headroom helper preset is missing or invalid.'
+    };
+  }
   const commandLine = extractCommandLine(payload);
   if (isGitPushCommand(commandLine)) {
     return { decision: 'deny', reason: 'Minimum Headroom helpers must not run git push.' };
@@ -102,9 +110,10 @@ export function evaluateAgyHelperPolicy(payload, presetValue) {
       reason: 'Reviewer preset requires owner approval for commands outside the read-only allowlist.'
     };
   }
-  // Implementer/full use agy's --dangerously-skip-permissions for ordinary
-  // commands. Returning no decision preserves that session-level behavior.
-  return {};
+  // Implementer/full are already launched with
+  // --dangerously-skip-permissions. Explicitly allow their ordinary commands;
+  // PreToolUse requires one of allow/deny/ask/force_ask.
+  return { decision: 'allow' };
 }
 
 export async function runAgyHelperPolicy(options = {}) {
@@ -130,7 +139,7 @@ async function main() {
   try {
     await runAgyHelperPolicy();
   } catch {
-    process.stdout.write('{}\n');
+    process.stdout.write('{"decision":"ask","reason":"Minimum Headroom helper policy failed."}\n');
   }
 }
 

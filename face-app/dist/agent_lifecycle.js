@@ -405,9 +405,42 @@ export function buildPermissionConfig(agentType, preset, options = {}) {
   }
 
   if (agentType === 'antigravity') {
+    const minimumHeadroomRoot = path.resolve(
+      asNonEmptyString(options.minimumHeadroomRoot ?? options.repoRoot) ?? process.cwd()
+    );
+    const pluginRoot = '.agents/plugins/minimum-headroom-helper-policy';
+    const policyCommand = path.join(minimumHeadroomRoot, 'scripts/agy-helper-policy.mjs');
     return {
       configPath: null,
       configContent: null,
+      configFiles: [
+        {
+          configPath: `${pluginRoot}/plugin.json`,
+          configContent: {
+            name: 'minimum-headroom-helper-policy',
+            description: 'Worktree-scoped command policy for a managed Minimum Headroom helper.'
+          }
+        },
+        {
+          configPath: `${pluginRoot}/hooks.json`,
+          configContent: {
+            'minimum-headroom-helper-policy': {
+              PreToolUse: [
+                {
+                  matcher: 'run_command',
+                  hooks: [
+                    {
+                      type: 'command',
+                      command: policyCommand,
+                      timeout: 5
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
       cmdSuffix: preset === 'reviewer'
         ? '--sandbox'
         : '--sandbox --dangerously-skip-permissions',
@@ -837,14 +870,27 @@ export function createAgentLifecycleRuntime(options = {}) {
     if (permissionPreset) {
       const agentType = inferAgentType(agentCommand);
       const permConfig = buildPermissionConfig(agentType, permissionPreset, {
-        sourceRepoPath
+        sourceRepoPath,
+        minimumHeadroomRoot: repoRoot
       });
       permissionEnv = permConfig.env ?? null;
-      if (worktreeCreated && permConfig.configContent && permConfig.configPath) {
-        const fullConfigPath = path.join(worktreePath, permConfig.configPath);
-        fs.mkdirSync(path.dirname(fullConfigPath), { recursive: true });
-        fs.writeFileSync(fullConfigPath, JSON.stringify(permConfig.configContent, null, 2));
-        fs.chmodSync(fullConfigPath, 0o444);
+      const configFiles = Array.isArray(permConfig.configFiles)
+        ? permConfig.configFiles
+        : permConfig.configContent && permConfig.configPath
+          ? [{ configPath: permConfig.configPath, configContent: permConfig.configContent }]
+          : [];
+      if (worktreeCreated) {
+        for (const configFile of configFiles) {
+          const relativeConfigPath = asNonEmptyString(configFile?.configPath);
+          if (!relativeConfigPath || configFile?.configContent == null) continue;
+          const fullConfigPath = path.resolve(worktreePath, relativeConfigPath);
+          if (!isPathInsideRoot(fullConfigPath, worktreePath)) {
+            throw createLifecycleError('invalid_state', `permission config path escaped worktree: ${relativeConfigPath}`);
+          }
+          fs.mkdirSync(path.dirname(fullConfigPath), { recursive: true });
+          fs.writeFileSync(fullConfigPath, JSON.stringify(configFile.configContent, null, 2));
+          fs.chmodSync(fullConfigPath, 0o444);
+        }
       }
       if (permConfig.cmdSuffix) {
         agentCommand = `${agentCommand} ${permConfig.cmdSuffix}`;

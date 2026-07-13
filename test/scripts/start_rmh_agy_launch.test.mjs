@@ -90,12 +90,10 @@ appendFileSync(process.env.RMH_FAKE_AGY_CALLS, JSON.stringify(process.argv.slice
       situation.PreInvocation[0].command,
       path.join(repoRoot, 'scripts/situation-context-hook-agy.mjs')
     );
-    const helperPolicy = hooks['minimum-headroom-helper-policy'];
-    assert.ok(helperPolicy, 'hooks.json must register the helper permission policy');
-    assert.equal(helperPolicy.PreToolUse[0].matcher, 'run_command');
     assert.equal(
-      helperPolicy.PreToolUse[0].hooks[0].command,
-      path.join(repoRoot, 'scripts/agy-helper-policy.mjs')
+      hooks['minimum-headroom-helper-policy'],
+      undefined,
+      'the helper-only policy must not be installed in the global operator plugin'
     );
 
     const calls = (await readFile(callsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
