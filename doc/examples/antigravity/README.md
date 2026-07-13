@@ -181,8 +181,13 @@ Antigravity's current public hook format is `hooks.json`. This directory ships `
 
 - `PreInvocation` → `situation-context-hook-agy.mjs`: injects the AtomS3R-M12 camera situation digest as a transient `ephemeralMessage` before each model invocation. Safe-by-default: the underlying `scripts/situation-context-hook.sh` prints nothing (and the wrapper emits `{}`) unless `MH_SITUATION_INJECT=1` is set in the agy process environment, so registering it costs nothing in ordinary sessions. The wrapper derives a stable watermark key from the agy `conversationId` and passes it to the plain hook via `MH_SITUATION_SESSION_KEY`, so the salience watermark survives across invocations of the same conversation.
 - `Stop` → `mh-hook.mjs --runtime antigravity --event idle_after_response`
-- `PreToolUse(run_command)` → `agy-helper-policy.mjs`: inert in normal agy sessions; when a managed helper carries `MH_AGY_PERMISSION_PRESET`, denies direct `git push` command forms and applies the reviewer command gate.
 - a disabled `PreToolUse` example for approval attention, because enabling it can ask before matching tools and should be an explicit local choice.
+
+The global/operator plugin deliberately does not register
+`agy-helper-policy.mjs`. Antigravity requires every `PreToolUse` hook to return
+an explicit decision, so such a hook cannot be inert in ordinary sessions.
+`agent.spawn(permission_preset=...)` instead creates a worktree-local plugin at
+`.agents/plugins/minimum-headroom-helper-policy/` for managed agy helpers only.
 
 During migration testing, current CLI/GUI builds also accepted a shared `~/.gemini/settings.json` hook block using `Notification` and `AfterAgent`. If your installed build does not load plugin `hooks.json`, merge `settings-hooks.snippet.json` into `~/.gemini/settings.json` instead. That snippet uses `--runtime antigravity --stdout-mode silent` so no deprecated Gemini runtime name remains and no stray stdout JSON is emitted for that settings-style hook path.
 
@@ -213,7 +218,7 @@ Do not use the retired `gemini` runtime name in new configs.
 
 ## Permission presets for helpers
 
-When spawning agy helpers with `agent.spawn(permission_preset=...)`, pass `agent_cmd: "agy"`. Agy 1.1.1 reads persistent CLI settings from the user profile rather than a helper worktree file, so Minimum Headroom scopes its policy with launch flags plus `MH_AGY_PERMISSION_PRESET` consumed by the installed plugin hook.
+When spawning agy helpers with `agent.spawn(permission_preset=...)`, pass `agent_cmd: "agy"`. Minimum Headroom scopes the policy with launch flags, `MH_AGY_PERMISSION_PRESET`, and a generated worktree-local plugin under `.agents/plugins/minimum-headroom-helper-policy/`. Normal interactive agy sessions do not load that helper-only plugin.
 
 - `reviewer`: launch with `--sandbox`; allow simple read-oriented commands and force an approval prompt for other commands.
 - `implementer` and `full`: launch with `--sandbox --dangerously-skip-permissions`; the policy hook still hard-denies direct `git push` commands.
@@ -229,7 +234,7 @@ The project `AGENTS.md` (or `GEMINI.md`) rules remain part of the security model
 | Step | Command | Expected |
 |------|---------|----------|
 | CLI plugin valid | `agy plugin validate doc/examples/antigravity` | `mcpServers: 1 processed`; hooks may be processed or skipped depending on agy build |
-| CLI installed plugin complete | `agy plugin validate ~/.gemini/antigravity-cli/plugins/minimum-headroom` | `skills: 2 processed`, `mcpServers: 1 processed`, `hooks: 4 processed` for the voice-mode launcher install |
+| CLI installed plugin complete | `agy plugin validate ~/.gemini/antigravity-cli/plugins/minimum-headroom` | `skills: 2 processed`, `mcpServers: 1 processed`, `hooks: 3 processed` for the voice-mode launcher install |
 | CLI plugin installed | `agy plugin list` | `minimum-headroom` listed as `local-install` |
 | GUI MCP file valid | `node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME+"/.gemini/config/mcp_config.json","utf8"))'` | exits 0 |
 | GUI sees server | chat prompt in GUI: `List every MCP tool you can call right now` | response includes `face_event`, `face_say`, `face_ping` |

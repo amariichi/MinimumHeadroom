@@ -35,12 +35,14 @@ For Claude Code, Antigravity CLI, and Codex CLI, these presets complement the ru
 | `full` | same as `implementer` | same as `implementer` | `--dangerously-bypass-approvals-and-sandbox` |
 
 Antigravity presets are session-scoped: all launch with `--sandbox`, and the
-helper process receives `MH_AGY_PERMISSION_PRESET`. The installed
-minimum-headroom plugin runs `scripts/agy-helper-policy.mjs` before terminal
-commands. It allows the reviewer read-command subset, forces review for other
-reviewer commands, and denies direct `git push` for every helper preset. Normal
-interactive agy sessions have no preset variable, so the hook returns no policy
-override.
+helper process receives `MH_AGY_PERMISSION_PRESET`. Spawn also creates a
+worktree-local plugin under
+`.agents/plugins/minimum-headroom-helper-policy/`; that plugin runs
+`scripts/agy-helper-policy.mjs` before terminal commands. It allows the
+reviewer read-command subset, forces review for other reviewer commands, and
+denies direct `git push` for every helper preset. The global/operator plugin
+does not contain this `PreToolUse` hook, so normal interactive agy sessions are
+unaffected.
 
 Codex preset suffixes can be replaced completely with environment overrides:
 
@@ -118,7 +120,7 @@ The detector posts reports; it never auto-presses keys. The operator (or the use
   - **Claude Code:** `deniedTools` includes `Bash(git push*)`
   - **Antigravity:** `agy-helper-policy.mjs` returns a `PreToolUse` deny decision for direct `git push` command forms; this is a command-text guardrail, not a hostile-shell security boundary
   - **Codex:** constrained by agent instructions, not a technical deny rule
-- Generated settings files where used (currently Claude Code) are set to `chmod 444` after write so helpers cannot modify their own permissions
+- Generated settings/plugin files where used (currently Claude Code and Antigravity) are set to `chmod 444` after write so helpers cannot modify their own permissions
 
 ### Deleting Helpers
 
@@ -167,10 +169,12 @@ Claude Code / Antigravity CLI / Codex CLI では、これらのプリセット�
 | `full` | `implementer` と同一 | `implementer` と同一 | `--dangerously-bypass-approvals-and-sandbox` |
 
 Antigravity のプリセットはセッション単位です。全て `--sandbox` で起動し、helper
-プロセスへ `MH_AGY_PERMISSION_PRESET` を渡します。インストール済みpluginの
-`scripts/agy-helper-policy.mjs` がコマンド実行前に、reviewerの読み取りコマンドを許可、
-それ以外を強制確認し、全helper presetの直接的な `git push` を拒否します。通常の
-対話agyにはpreset環境変数がないため、このhookはpolicyを上書きしません。
+プロセスへ `MH_AGY_PERMISSION_PRESET` を渡します。spawn時に
+`.agents/plugins/minimum-headroom-helper-policy/` へworktreeローカルpluginも生成し、
+その `scripts/agy-helper-policy.mjs` がコマンド実行前にreviewerの読み取りコマンドを
+許可、それ以外を強制確認し、全helper presetの直接的な `git push` を拒否します。
+global/operator pluginにはこの `PreToolUse` hookを入れないため、通常の対話agyには
+影響しません。
 
 Codex のプリセット末尾引数は、以下の環境変数で丸ごと置き換えできます。
 
@@ -248,7 +252,7 @@ Antigravity CLI ヘルパーは、権限プリセットを使っても初回だ�
   - **Claude Code:** `deniedTools` に `Bash(git push*)` を含む
   - **Antigravity:** `agy-helper-policy.mjs` が直接的な `git push` コマンド形式へ `PreToolUse` のdeny判定を返す。これはコマンド文字列のguardrailであり、難読化されたshellに対するセキュリティ境界ではありません
   - **Codex:** エージェント指示で制約し、技術的なdeny ruleは持ちません
-- 生成する権限設定ファイル（現在はClaude Code）は書き込み後 `chmod 444` で保護され、ヘルパーが自身の権限を変更できない
+- 生成する権限設定/pluginファイル（現在はClaude CodeとAntigravity）は書き込み後 `chmod 444` で保護され、ヘルパーが自身の権限を変更できない
 
 ### ヘルパーの削除
 

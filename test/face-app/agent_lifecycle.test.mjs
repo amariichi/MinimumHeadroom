@@ -1795,6 +1795,15 @@ test('buildPermissionConfig returns correct config per agent type and preset', (
   const antigravityImpl = buildPermissionConfig('antigravity', 'implementer');
   assert.equal(antigravityImpl.configPath, null);
   assert.equal(antigravityImpl.configContent, null);
+  assert.equal(antigravityImpl.configFiles.length, 2);
+  assert.equal(
+    antigravityImpl.configFiles[1].configPath,
+    '.agents/plugins/minimum-headroom-helper-policy/hooks.json'
+  );
+  assert.equal(
+    antigravityImpl.configFiles[1].configContent['minimum-headroom-helper-policy'].PreToolUse[0].matcher,
+    'run_command'
+  );
   assert.equal(antigravityImpl.cmdSuffix, '--sandbox --dangerously-skip-permissions');
   assert.deepEqual(antigravityImpl.env, { MH_AGY_PERMISSION_PRESET: 'implementer' });
 
@@ -2132,6 +2141,23 @@ test('addAgent applies Antigravity helper policy through flags and environment',
   assert.equal(result.ok, true);
   const oldConfigPath = path.join(result.agent.worktree_path, '.gemini/antigravity-cli/settings.json');
   assert.equal(fs.existsSync(oldConfigPath), false);
+  const pluginPath = path.join(
+    result.agent.worktree_path,
+    '.agents/plugins/minimum-headroom-helper-policy/plugin.json'
+  );
+  const hooksPath = path.join(
+    result.agent.worktree_path,
+    '.agents/plugins/minimum-headroom-helper-policy/hooks.json'
+  );
+  assert.equal(fs.existsSync(pluginPath), true);
+  assert.equal(fs.existsSync(hooksPath), true);
+  const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+  assert.equal(
+    hooks['minimum-headroom-helper-policy'].PreToolUse[0].hooks[0].command,
+    path.join(repoRoot, 'scripts/agy-helper-policy.mjs')
+  );
+  assert.equal(fs.statSync(pluginPath).mode & 0o777, 0o444);
+  assert.equal(fs.statSync(hooksPath).mode & 0o777, 0o444);
   assert.match(result.agent.agent_cmd, /agy --sandbox --dangerously-skip-permissions/);
   assert.match(result.agent.launch_command, /MH_AGY_PERMISSION_PRESET='implementer'/);
 

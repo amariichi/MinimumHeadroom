@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import {
   evaluateAgyHelperPolicy,
   extractCommandLine,
   isGitPushCommand,
-  isReviewerReadCommand
+  isReviewerReadCommand,
+  runAgyHelperPolicy
 } from '../../scripts/agy-helper-policy.mjs';
 
 function payload(command) {
@@ -37,9 +39,20 @@ test('agy reviewer read allowlist rejects compound and mutating commands', () =>
   assert.equal(isReviewerReadCommand('npm test'), false);
 });
 
-test('agy helper policy is inert outside managed helper sessions', () => {
-  assert.deepEqual(evaluateAgyHelperPolicy(payload('git push'), null), {});
-  assert.deepEqual(evaluateAgyHelperPolicy(payload('git push'), 'unknown'), {});
+test('agy helper policy asks when its managed-helper preset is missing', () => {
+  assert.equal(evaluateAgyHelperPolicy(payload('git push'), null).decision, 'ask');
+  assert.equal(evaluateAgyHelperPolicy(payload('git push'), 'unknown').decision, 'ask');
+});
+
+test('agy helper policy serializes a valid ask decision without a preset', async () => {
+  const chunks = [];
+  const result = await runAgyHelperPolicy({
+    stdin: Readable.from([JSON.stringify(payload('ls'))]),
+    stdout: { write: (chunk) => chunks.push(chunk) },
+    env: {}
+  });
+  assert.equal(result.decision, 'ask');
+  assert.equal(JSON.parse(chunks.join('')).decision, 'ask');
 });
 
 test('agy helper policy gates reviewer commands and denies every helper git push', () => {
@@ -47,5 +60,5 @@ test('agy helper policy gates reviewer commands and denies every helper git push
   assert.equal(evaluateAgyHelperPolicy(payload('npm test'), 'reviewer').decision, 'force_ask');
   assert.equal(evaluateAgyHelperPolicy(payload('git push'), 'reviewer').decision, 'deny');
   assert.equal(evaluateAgyHelperPolicy(payload('git push'), 'implementer').decision, 'deny');
-  assert.deepEqual(evaluateAgyHelperPolicy(payload('npm test'), 'implementer'), {});
+  assert.deepEqual(evaluateAgyHelperPolicy(payload('npm test'), 'implementer'), { decision: 'allow' });
 });
