@@ -94,3 +94,63 @@ test('media proxy rejects redirects and wrong bitrate before forwarding bytes', 
     await face.close();
   }
 });
+
+test('media proxy keeps the registration active when a browser disconnects', async (t) => {
+  let firstUpstreamClosed;
+  const firstClosed = new Promise((resolve) => {
+    firstUpstreamClosed = resolve;
+  });
+  let connectionCount = 0;
+  const timers = new Set();
+  const upstream = await listen((request, response) => {
+    connectionCount += 1;
+    const connectionNumber = connectionCount;
+    response.writeHead(200, {
+      'content-type': 'audio/mpeg',
+      'x-media-nominal-bitrate': '128000',
+    });
+    response.write(Buffer.from([0xff, 0xfb, 0x94, 0x64]));
+    const timer = setInterval(() => response.write(Buffer.alloc(128, connectionNumber)), 5);
+    timers.add(timer);
+    request.once('close', () => {
+      clearInterval(timer);
+      timers.delete(timer);
+      if (connectionNumber === 1) firstUpstreamClosed();
+    });
+  });
+  t.after(async () => {
+    for (const timer of timers) clearInterval(timer);
+    await upstream.close();
+  });
+
+  const controller = createMediaController({
+    allowedEndpoints: [new URL(upstream.origin + '/live.mp3')],
+    randomToken: () => 'd'.repeat(48),
+  });
+  const active = controller.play({
+    upstream_url: upstream.origin + '/live.mp3?generation=9',
+    media_id: 'disconnect-fixture',
+    title: 'Disconnect fixture',
+  });
+  const token = decodeURIComponent(active.stream_url.split('/').at(-1));
+  const proxy = createMediaProxy({ controller, log: { warn() {} } });
+  const face = await listen((request, response) => proxy.handle(request, response, token));
+  t.after(face.close);
+
+  const firstAbort = new AbortController();
+  const firstResponse = await fetch(face.origin + '/stream', { signal: firstAbort.signal });
+  assert.equal(firstResponse.status, 200);
+  const firstReader = firstResponse.body.getReader();
+  assert.equal((await firstReader.read()).done, false);
+  firstAbort.abort();
+  await firstClosed;
+  assert.equal(controller.status().state, 'active');
+  assert.equal(controller.status().stream_url, active.stream_url);
+
+  const secondAbort = new AbortController();
+  const secondResponse = await fetch(face.origin + '/stream', { signal: secondAbort.signal });
+  assert.equal(secondResponse.status, 200);
+  assert.equal((await secondResponse.body.getReader().read()).done, false);
+  secondAbort.abort();
+  assert.equal(controller.status().state, 'active');
+});

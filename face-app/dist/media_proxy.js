@@ -54,7 +54,11 @@ export function createMediaProxy(options = {}) {
 
     const abortController = new AbortController();
     const detach = controller.attachAbortController(token, abortController);
-    const abort = () => abortController.abort();
+    let clientDisconnected = false;
+    const abort = () => {
+      clientDisconnected = true;
+      abortController.abort();
+    };
     request.once('aborted', abort);
     response.once('close', abort);
     try {
@@ -100,7 +104,7 @@ export function createMediaProxy(options = {}) {
       await pipeline(Readable.fromWeb(upstream.body), response);
       return true;
     } catch (error) {
-      if (error?.name !== 'AbortError') {
+      if (!clientDisconnected && error?.name !== 'AbortError') {
         log.warn?.('[face-app] media proxy failed for media_id=' + registration.mediaId + ': ' + error.message);
         controller.fail(token, 'upstream_error', 'The media upstream failed.');
         writeError(response, 502, 'upstream_error');
