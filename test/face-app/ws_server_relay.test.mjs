@@ -192,11 +192,13 @@ test('ws server replays latest replayable payloads to newly connected clients', 
 
 test('audio focus observers receive only replayable focus state and cannot inject payloads', async (t) => {
   const received = [];
+  const authToken = 'focus/+token=';
   const server = await startFaceWebSocketServer({
     host: '127.0.0.1',
     port: 0,
     path: '/ws',
     relayPayloads: true,
+    authToken,
     onPayload(payload) {
       received.push(payload);
     },
@@ -207,8 +209,11 @@ test('audio focus observers receive only replayable focus state and cannot injec
   server.broadcast({ v: 1, type: 'media_state', state: 'active', revision: 1, ts: Date.now() });
   server.broadcast({ v: 1, type: 'audio_focus', state: 'normal', revision: 1, ts: Date.now() });
 
-  const focus = new WebSocket(server.url, ['mh-audio-focus-v1']);
-  const viewer = new WebSocket(server.url);
+  const encodedAuth = Buffer.from(authToken, 'utf8').toString('base64url');
+  const focus = new WebSocket(server.url, ['mh-audio-focus-v1', 'mh-face-auth-b64.' + encodedAuth]);
+  const viewerUrl = new URL(server.url);
+  viewerUrl.searchParams.set('auth_token', authToken);
+  const viewer = new WebSocket(viewerUrl);
   const replayPromise = waitForMessage(focus);
   t.after(() => {
     focus.close();

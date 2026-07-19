@@ -126,6 +126,19 @@ function tokenFromWebSocketProtocol(header) {
   }
   for (const item of header.split(',')) {
     const protocol = item.trim();
+    if (protocol.startsWith('mh-face-auth-b64.')) {
+      const encoded = protocol.slice('mh-face-auth-b64.'.length);
+      if (!/^[A-Za-z0-9_-]+$/.test(encoded)) {
+        continue;
+      }
+      try {
+        const decoded = Buffer.from(encoded, 'base64url').toString('utf8');
+        if (decoded && Buffer.from(decoded, 'utf8').toString('base64url') === encoded) {
+          return decoded;
+        }
+      } catch {}
+      continue;
+    }
     if (protocol.startsWith('mh-face-auth.')) {
       return asNonEmptyString(protocol.slice('mh-face-auth.'.length));
     }

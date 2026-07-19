@@ -396,7 +396,7 @@ export MH_MEDIA_ALLOWED_ENDPOINTS=http://127.0.0.1:9000/audio.mp3
 
 Comma-separate multiple endpoints. Configured endpoints cannot contain credentials, query strings, or fragments; a `media.play` request may add a query string to the same exact endpoint path. Redirects, non-MP3 responses, and responses without `X-Media-Nominal-Bitrate: 128000` are rejected before bytes reach the browser. The public media state contains only an opaque same-origin stream URL, title metadata, and the fixed bitrate.
 
-When TTS has accepted active or queued speech, Face App broadcasts `audio_focus` with `state: "speech"` to read-only WebSocket observers using the `mh-audio-focus-v1` subprotocol. It returns to `state: "normal"` 1.5 seconds after the TTS queue drains. A source encoder may use this signal for server-side ducking; the browser player stays at unity gain and remains independent from the existing TTS audio elements.
+When TTS has accepted active or queued speech, Face App broadcasts `audio_focus` with `state: "speech"` to read-only WebSocket observers using the `mh-audio-focus-v1` subprotocol. It returns to `state: "normal"` 1.5 seconds after the TTS queue drains. A source encoder may use this signal for server-side ducking; the browser player stays at unity gain and remains independent from the existing TTS audio elements. When authentication is enabled, an observer supplies a companion `mh-face-auth-b64.<token>` protocol where `<token>` is the unpadded base64url encoding of the UTF-8 auth token. This keeps ordinary base64 tokens valid WebSocket protocol values and out of URLs.
 
 <a id="en-agent-setup"></a>
 ## Agent Setup
