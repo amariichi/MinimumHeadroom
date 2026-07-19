@@ -435,11 +435,22 @@ export async function startFaceWebSocketServer(options = {}) {
     return websocketProtocolSet(request.headers["sec-websocket-protocol"]).has("arduino");
   }
 
+  function isAudioFocusUpgrade(request) {
+    return websocketProtocolSet(request.headers["sec-websocket-protocol"]).has("mh-audio-focus-v1");
+  }
+
   function isArduinoSocket(socket) {
     return socket && socket.__mhArduinoClient === true;
   }
 
+  function isAudioFocusSocket(socket) {
+    return socket && socket.__mhAudioFocusObserver === true;
+  }
+
   function shouldSendPayloadToSocket(socket, payload) {
+    if (isAudioFocusSocket(socket)) {
+      return payload?.type === 'audio_focus';
+    }
     if (!isArduinoSocket(socket)) {
       return true;
     }
@@ -448,6 +459,8 @@ export async function startFaceWebSocketServer(options = {}) {
       case "operator_terminal_snapshot":
       case "operator_prompt":
       case "operator_ack":
+      case "media_state":
+      case "audio_focus":
         return false;
       case "tts_audio":
       case "tts_audio_ref":
@@ -474,6 +487,9 @@ export async function startFaceWebSocketServer(options = {}) {
       case 'operator_ack':
       case 'tts_state':
         return `${payload.type}:${sessionId}`;
+      case 'media_state':
+      case 'audio_focus':
+        return payload.type;
       default:
         return null;
     }
@@ -508,6 +524,9 @@ export async function startFaceWebSocketServer(options = {}) {
     const frame = encodeServerFrame(0x1, text);
     for (const peer of sockets) {
       if (excludeSocket && peer === excludeSocket) {
+        continue;
+      }
+      if (isAudioFocusSocket(peer)) {
         continue;
       }
       safeSocketWrite(peer, frame);
@@ -629,19 +648,23 @@ export async function startFaceWebSocketServer(options = {}) {
 
     const acceptValue = websocketAcceptValue(key);
     const arduinoClient = isArduinoUpgrade(request);
+    const audioFocusObserver = isAudioFocusUpgrade(request);
     const responseHeaders = [
       'HTTP/1.1 101 Switching Protocols',
       'Upgrade: websocket',
       'Connection: Upgrade',
       `Sec-WebSocket-Accept: ${acceptValue}`
     ];
-    if (arduinoClient) {
+    if (audioFocusObserver) {
+      responseHeaders.push('Sec-WebSocket-Protocol: mh-audio-focus-v1');
+    } else if (arduinoClient) {
       responseHeaders.push('Sec-WebSocket-Protocol: arduino');
     }
     responseHeaders.push('\r\n');
     socket.write(responseHeaders.join('\r\n'));
 
     socket.__mhArduinoClient = arduinoClient;
+    socket.__mhAudioFocusObserver = audioFocusObserver;
     sockets.add(socket);
     replayCachedPayloads(socket);
     const state = { buffer: Buffer.alloc(0) };
@@ -652,6 +675,9 @@ export async function startFaceWebSocketServer(options = {}) {
         state,
         chunk,
         (text) => {
+          if (isAudioFocusSocket(socket)) {
+            return;
+          }
           try {
             const payload = JSON.parse(text);
             log.info(`[face-app] received ${JSON.stringify(payload)}`);

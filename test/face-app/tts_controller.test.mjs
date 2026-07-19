@@ -781,6 +781,70 @@ function finishActive(worker, generation) {
   worker.emit('message', { type: 'event', phase: 'play_stop', generation });
 }
 
+test('tts controller reports accepted active and queued work until the queue drains', async () => {
+  const activity = [];
+  const { worker, controller } = makeController({
+    onActivityChange(next) {
+      activity.push({ ...next });
+    }
+  });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u1',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: 'first'
+  });
+  assert.deepEqual(activity.at(-1), { active: true, queued: 0 });
+
+  await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'u2',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: 'second'
+  });
+  assert.deepEqual(activity.at(-1), { active: true, queued: 1 });
+
+  finishActive(worker, 1);
+  assert.deepEqual(activity.at(-1), { active: true, queued: 0 });
+  assert.equal(activity.some((next) => next.active === false), false);
+
+  finishActive(worker, 2);
+  assert.deepEqual(activity.at(-1), { active: false, queued: 0 });
+});
+
+test('tts controller does not report activity for speech rejected by the gate', async () => {
+  const activity = [];
+  const { controller } = makeController({
+    gate: { check: () => ({ allow: false, reason: 'dedupe' }) },
+    onActivityChange(next) {
+      activity.push({ ...next });
+    }
+  });
+
+  const result = await controller.handleSayPayload({
+    type: 'say',
+    session_id: 's1',
+    utterance_id: 'rejected',
+    priority: 2,
+    policy: 'replace',
+    ttl_ms: 60_000,
+    ts: 42_000,
+    text: 'same'
+  });
+
+  assert.equal(result.accepted, false);
+  assert.deepEqual(activity, []);
+});
+
 test('tts controller dispatches long-utterance chunks sequentially in order', async () => {
   const { worker, controller } = makeController({ maxChunkChars: 8 });
 
