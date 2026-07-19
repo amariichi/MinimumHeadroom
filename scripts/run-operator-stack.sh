@@ -69,6 +69,7 @@ load_env_defaults "$MH_ENV_FILE"
 : "${MH_STACK_START_MCP:=0}"
 : "${MH_OPERATOR_FACE_AGENT_ID:=__operator__}"
 : "${MH_OPERATOR_FACE_AGENT_LABEL:=Operator}"
+: "${MH_MEDIA_ALLOWED_ENDPOINTS:=}"
 # Keep each synthesized TTS chunk under the AtomS3R HTTP ingress cap
 # (estimatePayloadLimit ~954 KB with HEADROOM_MAX_BASE64_TTS_SECONDS=15;
 # bigger -> HTTP 413 -> mouth-only). ~64 chars is the current safe default
@@ -146,6 +147,11 @@ echo "[run-operator-stack] MH_OPERATOR_REALTIME_ASR_WS_URL=${MH_OPERATOR_REALTIM
 echo "[run-operator-stack] MH_STACK_START_REALTIME_ASR=${MH_STACK_START_REALTIME_ASR}"
 echo "[run-operator-stack] MH_STACK_START_MCP=${MH_STACK_START_MCP}"
 echo "[run-operator-stack] MH_OPERATOR_FACE_AGENT_ID=${MH_OPERATOR_FACE_AGENT_ID}"
+if [[ -n "${MH_MEDIA_ALLOWED_ENDPOINTS}" ]]; then
+  echo "[run-operator-stack] generic media=enabled"
+else
+  echo "[run-operator-stack] generic media=disabled"
+fi
 echo "[run-operator-stack] MH_LANG=${MH_LANG:-<unset>}"
 echo "[run-operator-stack] MH_KOKORO_VOICE=${MH_KOKORO_VOICE:-<unset>}"
 echo "[run-operator-stack] MH_TTS_CAPTURE_ANOMALY=${MH_TTS_CAPTURE_ANOMALY}"
@@ -201,6 +207,7 @@ start_proc "face-app" \
   MH_OPERATOR_REALTIME_ASR_ENABLED="$MH_OPERATOR_REALTIME_ASR_ENABLED" \
   MH_OPERATOR_REALTIME_ASR_WS_URL="$MH_OPERATOR_REALTIME_ASR_WS_URL" \
   MH_OPERATOR_REALTIME_ASR_MODEL="$MH_OPERATOR_REALTIME_ASR_MODEL" \
+  MH_MEDIA_ALLOWED_ENDPOINTS="$MH_MEDIA_ALLOWED_ENDPOINTS" \
   ./scripts/run-face-app.sh --audio-target "$FACE_AUDIO_TARGET" --ui-mode "$FACE_UI_MODE"
 
 # Ensure the AtomS3R PC->Atom bridge is up. Best-effort and decoupled from

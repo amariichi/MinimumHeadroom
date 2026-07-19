@@ -209,6 +209,19 @@
 
       <aside id="utterance" class="utterance hidden" aria-live="assertive"></aside>
       <div id="ui-hidden-hint" class="ui-hidden-hint hidden" aria-live="polite">UI hidden. Double tap, double click, or press Esc.</div>
+      <section id="media-player" class="media-player hidden" aria-live="polite" aria-label="Media playback">
+        <header class="media-player-header">
+          <span class="media-player-kicker">Media</span>
+          <span id="media-player-status" class="media-player-status">idle</span>
+        </header>
+        <p id="media-player-title" class="media-player-title">No media</p>
+        <p id="media-player-subtitle" class="media-player-subtitle">128 kbps MP3</p>
+        <p id="media-player-error" class="media-player-error hidden"></p>
+        <div class="media-player-actions">
+          <button id="media-player-resume" class="media-player-button media-player-resume hidden" type="button">Resume</button>
+          <button id="media-player-stop" class="media-player-button" type="button">Stop</button>
+        </div>
+      </section>
       <button id="audio-replay" class="audio-replay hidden" type="button">Tap to enable audio</button>
     </main>
 

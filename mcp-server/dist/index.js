@@ -154,6 +154,41 @@ const BASE_TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'media.play',
+    description: 'Register one allowlisted, fixed-bandwidth MP3 source for the shared browser media channel. Active means registered, not confirmed audible.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['upstream_url', 'media_id', 'title'],
+      properties: {
+        upstream_url: { type: 'string', minLength: 1, maxLength: 2048 },
+        media_id: { type: 'string', minLength: 1, maxLength: 128 },
+        title: { type: 'string', minLength: 1, maxLength: 200 },
+        subtitle: { type: ['string', 'null'], maxLength: 200 }
+      }
+    }
+  },
+  {
+    name: 'media.stop',
+    description: 'Stop the shared browser media channel and revoke its current stream handle.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: [],
+      properties: {}
+    }
+  },
+  {
+    name: 'media.status',
+    description: 'Read the current shared browser media state without exposing its upstream URL. Active means registered, not confirmed audible.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: [],
+      properties: {}
+    }
+  },
+  {
     name: 'vision.situation',
     description: 'Read the AtomS3R-M12 vision-worker situation digest from the host side. Use this instead of inferring camera state from processes, browser tabs, or screenshots.',
     inputSchema: {
@@ -459,6 +494,15 @@ function canonicalizeToolName(toolName) {
   if (toolName === 'face_hook') {
     return 'face.hook';
   }
+  if (toolName === 'media_play') {
+    return 'media.play';
+  }
+  if (toolName === 'media_stop') {
+    return 'media.stop';
+  }
+  if (toolName === 'media_status') {
+    return 'media.status';
+  }
   if (toolName === 'vision_situation') {
     return 'vision.situation';
   }
@@ -569,6 +613,31 @@ function optionalInteger(source, key, fallback) {
     throw new Error(`${key} must be an integer when provided`);
   }
   return value;
+}
+
+function normalizeMediaPlayPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const supported = new Set(['upstream_url', 'media_id', 'title', 'subtitle']);
+  const unknown = Object.keys(args).find((key) => !supported.has(key));
+  if (unknown) {
+    throw new Error(`unsupported media field: ${unknown}`);
+  }
+  const subtitle = optionalString(args, 'subtitle', null);
+  return {
+    upstream_url: requireString(args, 'upstream_url').trim(),
+    media_id: requireString(args, 'media_id').trim(),
+    title: requireString(args, 'title').trim(),
+    ...(subtitle ? { subtitle } : {})
+  };
+}
+
+function requireEmptyArguments(rawArguments, toolName) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  const unknown = Object.keys(args)[0];
+  if (unknown) {
+    throw new Error(`${toolName} does not accept field: ${unknown}`);
+  }
+  return args;
 }
 
 function clamp(value, min, max) {
@@ -1460,6 +1529,78 @@ async function handleToolCall(params) {
       return toolTextResult(faceToolFailureText('face.hook', error), {
         isError: true,
         structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, ...faceIdentityStructured(error.faceIdentity) }
+      });
+    }
+  }
+
+  if (toolName === 'media.play') {
+    try {
+      const payload = normalizeMediaPlayPayload(rawArguments);
+      const { response, payload: apiPayload, url } = await callFaceHttp('/api/media/play', {
+        method: 'POST',
+        body: payload
+      });
+      if (!response.ok || apiPayload?.type !== 'media_state' || apiPayload?.state !== 'active') {
+        const detail = typeof apiPayload?.message === 'string'
+          ? apiPayload.message
+          : (typeof apiPayload?.error === 'string' ? apiPayload.error : `http_${response.status}`);
+        return toolTextResult(`media.play failed: ${detail}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, payload: apiPayload }
+        });
+      }
+      return toolTextResult(`playing media_id=${apiPayload.media_id} title=${apiPayload.title}`, {
+        structuredContent: { ok: true, http: url, state: apiPayload }
+      });
+    } catch (error) {
+      return toolTextResult(`media.play failed: ${error.message}`, {
+        isError: true,
+        structuredContent: { ok: false, http: FACE_HTTP_BASE_URL }
+      });
+    }
+  }
+
+  if (toolName === 'media.stop') {
+    try {
+      requireEmptyArguments(rawArguments, 'media.stop');
+      const { response, payload: apiPayload, url } = await callFaceHttp('/api/media/stop', {
+        method: 'POST',
+        body: {}
+      });
+      if (!response.ok || apiPayload?.type !== 'media_state') {
+        return toolTextResult(`media.stop failed: http_${response.status}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, payload: apiPayload }
+        });
+      }
+      return toolTextResult('stopped shared media', {
+        structuredContent: { ok: true, http: url, state: apiPayload }
+      });
+    } catch (error) {
+      return toolTextResult(`media.stop failed: ${error.message}`, {
+        isError: true,
+        structuredContent: { ok: false, http: FACE_HTTP_BASE_URL }
+      });
+    }
+  }
+
+  if (toolName === 'media.status') {
+    try {
+      requireEmptyArguments(rawArguments, 'media.status');
+      const { response, payload: apiPayload, url } = await callFaceHttp('/api/media/status');
+      if (!response.ok || apiPayload?.type !== 'media_state') {
+        return toolTextResult(`media.status failed: http_${response.status}`, {
+          isError: true,
+          structuredContent: { ok: false, http: url, status: response.status, payload: apiPayload }
+        });
+      }
+      return toolTextResult(`media state=${apiPayload.state} title=${apiPayload.title ?? '-'}`, {
+        structuredContent: { ok: true, http: url, state: apiPayload }
+      });
+    } catch (error) {
+      return toolTextResult(`media.status failed: ${error.message}`, {
+        isError: true,
+        structuredContent: { ok: false, http: FACE_HTTP_BASE_URL }
       });
     }
   }

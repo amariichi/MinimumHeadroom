@@ -41,7 +41,7 @@ A face and operator companion app for coding agents.
 - **Terminal mirror** — read-only tmux tail snapshots at 500ms change-only intervals; lines render at native width with horizontal scroll, and on touch devices you can pinch-to-zoom (anchored under your fingers) and double-tap to reset
 - **Multi-agent** (experimental) — spawn/focus/delete helpers from desktop tiles or mobile list, permission presets, mission assignment and delivery, owner inbox. A background stuck-detector scans each helper's tmux pane and posts auto `blocked` reports to the owner inbox when a known CLI modal (approval prompt, model picker, usage-limit notice, survey) is visible, so the operator notices stalled helpers without polling. See [Multi-Agent Guide](doc/guides/multi-agent.md).
 - **M12 vision** — AtomS3R-M12 camera + diffusiongemma (vLLM) captioner, change-gated SQLite memory with tiered summaries, `GET /situation` digest injection, corrections, keyword watches, and Echo Base spoken alerts. See [M12 Vision Guide](doc/guides/m12-vision.md#english).
-- **MCP signaling** — `face.event` / `face.say` / `face.ping` plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`)
+- **MCP signaling** — `face.event` / `face.say` / `face.ping`, generic `media.play` / `media.stop` / `media.status`, plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`)
 - **3D face** — eyebrow/eye/mouth/head animation, state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`), drag control, panel toggles
 - **TTS** — Kokoro ONNX + Misaki default, optional Qwen3-TTS Japanese backend, freshness-first speech policy. See [TTS and Speech Guide](doc/guides/tts-and-speech.md).
 - **ASR** — Parakeet batch, optional Voxtral realtime. See [Operator Stack and ASR Guide](doc/guides/operator-stack.md).
@@ -382,6 +382,21 @@ cd /path/to/target-repo
 ```
 
 See [Audio target and UI mode](doc/guides/operator-stack.md#audio-target-and-ui-mode) for when to pick `browser`, `local`, or `both`.
+
+### Generic browser media channel
+
+The Face App can carry one external MP3 source through the same authenticated browser origin without learning anything about the source application. The channel is intentionally fixed to MP3 at 128 kbit/s so a mobile client cannot accidentally request an unbounded PCM stream.
+
+Allow each trusted source endpoint by exact scheme, host, port, and path:
+
+```bash
+export MH_MEDIA_ALLOWED_ENDPOINTS=http://127.0.0.1:9000/audio.mp3
+./scripts/run-operator-once.sh --profile realtime
+```
+
+Comma-separate multiple endpoints. Configured endpoints cannot contain credentials, query strings, or fragments; a `media.play` request may add a query string to the same exact endpoint path. Redirects, non-MP3 responses, and responses without `X-Media-Nominal-Bitrate: 128000` are rejected before bytes reach the browser. The public media state contains only an opaque same-origin stream URL, title metadata, and the fixed bitrate.
+
+When TTS has accepted active or queued speech, Face App broadcasts `audio_focus` with `state: "speech"` to read-only WebSocket observers using the `mh-audio-focus-v1` subprotocol. It returns to `state: "normal"` 1.5 seconds after the TTS queue drains. A source encoder may use this signal for server-side ducking; the browser player stays at unity gain and remains independent from the existing TTS audio elements.
 
 <a id="en-agent-setup"></a>
 ## Agent Setup

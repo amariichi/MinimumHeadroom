@@ -70,6 +70,7 @@ import {
   createFaceCamera,
   createFaceRig
 } from './face_rig.js';
+import { createMediaPlayer } from './media_player.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -90,6 +91,13 @@ const lgApplyButton = document.getElementById('lg-apply');
 const xrButtonSlot = document.getElementById('xr-button-slot');
 const uiHiddenHintEl = document.getElementById('ui-hidden-hint');
 const audioReplayButtonEl = document.getElementById('audio-replay');
+const mediaPlayerEl = document.getElementById('media-player');
+const mediaPlayerStatusEl = document.getElementById('media-player-status');
+const mediaPlayerTitleEl = document.getElementById('media-player-title');
+const mediaPlayerSubtitleEl = document.getElementById('media-player-subtitle');
+const mediaPlayerErrorEl = document.getElementById('media-player-error');
+const mediaPlayerResumeEl = document.getElementById('media-player-resume');
+const mediaPlayerStopEl = document.getElementById('media-player-stop');
 const uiPanels = Array.from(document.querySelectorAll('.panel'));
 const operatorPanelEl = document.getElementById('operator-panel');
 const operatorHandleEl = document.getElementById('operator-handle');
@@ -390,6 +398,9 @@ let pendingReplayPayload = null;
 let browserAudioMixer = null;
 let browserAudioMaxChannels = BROWSER_AUDIO_MAX_CHANNELS_DEFAULT;
 let silentAudioDataUrl = null;
+const mediaPlayer = createMediaPlayer({
+  onStateChange: renderMediaPlayerState
+});
 const registerDoubleTap = createDoubleTapTracker({
   maxIntervalMs: DOUBLE_TAP_MAX_INTERVAL_MS,
   maxDistancePx: DOUBLE_TAP_MAX_DISTANCE_PX
@@ -4150,6 +4161,43 @@ function showAudioReplayButton() {
   audioReplayButtonEl.classList.remove('hidden');
 }
 
+function renderMediaPlayerState(state) {
+  if (!mediaPlayerEl) {
+    return;
+  }
+  const visible = state.serverState !== 'idle' || state.playbackState !== 'idle';
+  mediaPlayerEl.classList.toggle('hidden', !visible);
+  mediaPlayerStatusEl.textContent = state.playbackState.replaceAll('_', ' ');
+  mediaPlayerStatusEl.dataset.state = state.playbackState;
+  mediaPlayerTitleEl.textContent = state.title ?? 'Media';
+  mediaPlayerSubtitleEl.textContent = state.subtitle ?? '128 kbps MP3';
+  const showResume = state.serverState === 'active'
+    && ['tap_required', 'error', 'ended'].includes(state.playbackState);
+  mediaPlayerResumeEl.classList.toggle('hidden', !showResume);
+  mediaPlayerStopEl.disabled = state.serverState !== 'active';
+  if (state.error) {
+    mediaPlayerErrorEl.textContent = state.error;
+    mediaPlayerErrorEl.classList.remove('hidden');
+  } else {
+    mediaPlayerErrorEl.textContent = '';
+    mediaPlayerErrorEl.classList.add('hidden');
+  }
+}
+
+function installMediaPlayerControls() {
+  mediaPlayerResumeEl?.addEventListener('click', () => {
+    void mediaPlayer.resume();
+  });
+  mediaPlayerStopEl?.addEventListener('click', () => {
+    mediaPlayerStopEl.disabled = true;
+    void mediaPlayer.requestStop().catch((error) => {
+      mediaPlayerErrorEl.textContent = error.message;
+      mediaPlayerErrorEl.classList.remove('hidden');
+      mediaPlayerStopEl.disabled = false;
+    });
+  });
+}
+
 function stopActiveBrowserAudio(generation = null, sessionId = null) {
   if (!browserAudioMixer) {
     return;
@@ -4896,6 +4944,8 @@ function handlePayload(payload) {
     handleTtsMouth(payload);
   } else if (payload.type === 'tts_audio') {
     handleTtsAudio(payload);
+  } else if (payload.type === 'media_state') {
+    mediaPlayer.applyState(payload);
   }
   renderAgentDashboard();
 }
@@ -5272,6 +5322,7 @@ function installAudioUnlockHooks() {
   const triggerUnlock = () => {
     void unlockPlaybackAudio();
     primeAllBrowserAudioChannelsInGesture();
+    mediaPlayer.primeInGesture(createSilentAudioDataUrl());
   };
 
   window.addEventListener('pointerdown', triggerUnlock, { passive: true });
@@ -5896,6 +5947,7 @@ async function bootstrap() {
   installGestureShortcuts();
   installAudioUnlockHooks();
   installAudioReplayButton();
+  installMediaPlayerControls();
   if (operatorPanelEnabled) {
     installOperatorControls();
   } else {
@@ -5962,6 +6014,7 @@ window.addEventListener('beforeunload', () => {
 
   releaseOperatorMicCapture();
   stopActiveBrowserAudio();
+  mediaPlayer.destroy();
   renderer.setAnimationLoop(null);
   renderer.dispose();
   agentDashboardFaceRenderer?.dispose();
