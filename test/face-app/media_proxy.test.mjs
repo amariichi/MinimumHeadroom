@@ -19,8 +19,10 @@ async function listen(handler) {
 }
 
 test('media proxy forwards only validated MP3 bytes and hides the upstream URL', async (t) => {
+  const upstreamRanges = [];
   const upstream = await listen((request, response) => {
     if (request.url.startsWith('/live.mp3')) {
+      upstreamRanges.push(request.headers.range ?? null);
       response.writeHead(200, {
         'content-type': 'audio/mpeg',
         'x-media-nominal-bitrate': '128000',
@@ -56,8 +58,18 @@ test('media proxy forwards only validated MP3 bytes and hides the upstream URL',
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type'), 'audio/mpeg');
   assert.equal(response.headers.get('x-media-nominal-bitrate'), '128000');
+  assert.equal(response.headers.get('accept-ranges'), 'none');
   assert.equal(response.headers.get('set-cookie'), null);
   assert.equal(await response.text(), 'fixture-mp3');
+
+  const rangedResponse = await fetch(face.origin + active.stream_url, {
+    headers: { range: 'bytes=0-' },
+  });
+  assert.equal(rangedResponse.status, 200);
+  assert.equal(rangedResponse.headers.get('content-type'), 'audio/mpeg');
+  assert.equal(rangedResponse.headers.get('accept-ranges'), 'none');
+  assert.equal(await rangedResponse.text(), 'fixture-mp3');
+  assert.deepEqual(upstreamRanges, [null, null]);
 });
 
 test('media proxy rejects redirects and wrong bitrate before forwarding bytes', async (t) => {

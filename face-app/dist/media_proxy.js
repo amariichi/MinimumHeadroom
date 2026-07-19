@@ -37,6 +37,7 @@ export function createMediaProxy(options = {}) {
       response.writeHead(200, {
         'content-type': MEDIA_MIME_TYPE,
         'x-media-nominal-bitrate': String(MEDIA_NOMINAL_BITRATE),
+        'accept-ranges': 'none',
         'cache-control': 'no-store',
         'x-content-type-options': 'nosniff',
       });
@@ -45,10 +46,6 @@ export function createMediaProxy(options = {}) {
     }
     if (request.method !== 'GET') {
       writeError(response, 405, 'method_not_allowed');
-      return true;
-    }
-    if (request.headers.range) {
-      writeError(response, 416, 'range_not_supported');
       return true;
     }
 
@@ -98,6 +95,7 @@ export function createMediaProxy(options = {}) {
       response.writeHead(200, {
         'content-type': MEDIA_MIME_TYPE,
         'x-media-nominal-bitrate': String(MEDIA_NOMINAL_BITRATE),
+        'accept-ranges': 'none',
         'cache-control': 'no-store, no-transform',
         'x-content-type-options': 'nosniff',
       });
