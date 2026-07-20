@@ -18,6 +18,7 @@
 - [全体像（要点）](#ja-overview)
 - [機能](#ja-features)
 - [クイックスタート](#ja-quick-start)
+- [汎用ブラウザメディア連携](doc/guides/generic-browser-media.md#japanese)
 - [エージェント設定](#ja-agent-setup)
 - [詳細ガイド](#ja-detailed-guides)
 - [ドキュメント索引](doc/README.md#japanese)
@@ -31,6 +32,7 @@
 - **3D フェイス + TTS + MCP シグナリング** でエージェントに声と表情を与え、状態をリアルタイムに反映します。
 - **任意の AtomS3R 卓上デバイス** — 名前のよく似た2種類の M5Stack 基板を追加できます: **AtomS3R**（顔＋音声入出力 — 話しかける物理の卓上フェイス）と **AtomS3R-M12**（カメラ＋音声出力 — 周囲状況の把握、マイク非搭載）。[AtomS3R Devices](doc/guides/atom-devices.md#japanese) を参照。
 - **M12 視覚サブシステム** — AtomS3R-M12 カメラ、diffusiongemma（vLLM）による画像説明、階層化された状況メモリ、`GET /situation` によるエージェント文脈への注入、M12 Echo Base への音声アラートを追加します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) と [vision-worker README](vision-worker/README.md#japanese) を参照。
+- **汎用ブラウザメディア** — 信頼済みローカルMP3配信元1件を、そのURLを公開せず、認証済みデスクトップ／モバイルブラウザへ128 kbit/sで中継します。[汎用ブラウザメディア連携ガイド](doc/guides/generic-browser-media.md#japanese)を参照。
 - **マルチエージェント対応**（実験的） — 分離ワークツリーにヘルパーを生成し、権限プリセットとミッション追跡で管理します。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
 - **Tailscale Serve** でスマホ/タブレットから安全にリモートアクセス。
 
@@ -41,7 +43,7 @@
 - **ターミナルミラー** — tmux 末尾出力の読み取り専用スナップショット（500ms、変更時のみ）。実機の幅そのままで描画され、長い行は横スクロール。タッチ端末では指の位置を中心にピンチズーム、ダブルタップで等倍復帰
 - **マルチエージェント**（実験的） — デスクトップのタイルまたはモバイルのリストからヘルパーの生成/フォーカス/削除、権限プリセット、ミッション割当・配信、owner inbox を操作できます。バックグラウンドの停止検出が各ヘルパーの tmux ペインを監視し、既知の CLI モーダル（承認プロンプト、モデルピッカー、利用上限通知、サーベイ）を検出すると owner inbox に自動で `blocked` レポートを投函するので、ポーリング不要で停止に気づけます。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
 - **M12 視覚** — AtomS3R-M12 カメラ + diffusiongemma（vLLM）による画像説明、変化判定付き SQLite メモリと段階的な要約、`GET /situation` の要約注入、訂正、キーワード監視、Echo Base 音声アラートを提供します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) を参照。
-- **MCP シグナリング** — `face.event` / `face.say` / `face.ping` およびエージェントライフサイクルツール（`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`）
+- **MCP シグナリング** — `face.event` / `face.say` / `face.ping`、汎用 `media.play` / `media.stop` / `media.status`（[連携ガイド](doc/guides/generic-browser-media.md#japanese)）、エージェントライフサイクルツール（`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`）
 - **3D フェイス** — 眉・目・口・頭のアニメーション、状態モード（`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`）、ドラッグ制御、パネル切替
 - **TTS** — Kokoro ONNX + Misaki 既定、任意 Qwen3-TTS 日本語バックエンド、鮮度優先発話ポリシー。[TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) を参照。
 - **ASR** — Parakeet バッチ処理、任意 Voxtral リアルタイム処理。[Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) を参照。
@@ -381,6 +383,22 @@ cd /path/to/target-repo
 
 `browser` / `local` / `both` の選び方は[音声出力先と UI モード](doc/guides/operator-stack.md#音声出力先と-ui-モード)を参照してください。
 
+<a id="ja-generic-browser-media"></a>
+### 汎用ブラウザメディア連携
+
+Face Appは、配信元アプリケーションの詳細を知らずに、信頼済みMP3配信元1件を同じ認証済みブラウザoriginへ中継できます。Minimum Headroomの操作面は再生、停止、状態取得だけで、カタログ、キュー、配信元起動は外部アプリケーションが担当します。
+
+第三者アプリの実装に必要な構成図・シーケンス図、配信元応答ヘッダー、HTTP/MCPスキーマ、認証、iPhone/iPad挙動、任意のTTSフォーカス、セキュリティ、受け入れ確認は[汎用ブラウザメディア連携ガイド](doc/guides/generic-browser-media.md#japanese)にまとめています。
+
+許可する配信元は、scheme、hostname、実効port、pathnameを正確に指定します。
+
+```bash
+export MH_MEDIA_ALLOWED_ENDPOINTS=http://127.0.0.1:9000/audio.mp3
+./scripts/run-operator-once.sh --profile realtime
+```
+
+複数指定はカンマ区切りです。要求URLには一致したパスへのクエリを追加できます。配信元は `audio/mpeg` と `X-Media-Nominal-Bitrate: 128000` を直接返す必要があります。このヘッダーは信頼済み配信元による宣言であり、Minimum HeadroomはMP3フレーム解析、再エンコード、PCMフォールバックを行いません。
+
 <a id="ja-agent-setup"></a>
 ## エージェント設定
 
@@ -493,12 +511,13 @@ RMH は LLM とハンズフリーで日常的に会話するための推奨経�
 
 ### ツール名スタイル
 
-MCP クライアントがドット付きツール名（例: `face.event`）を受け付けない場合は、環境変数 `MCP_TOOL_NAME_STYLE=underscore` を設定。ツールは `face_event`, `face_say`, `face_ping` として公開されます。
+MCP クライアントがドット付きツール名（例: `face.event`、`media.play`）を受け付けない場合は、環境変数 `MCP_TOOL_NAME_STYLE=underscore` を設定。ツールは `face_event`、`face_say`、`face_ping`、`media_play` などの名前で公開されます。
 
 <a id="ja-detailed-guides"></a>
 ## 詳細ガイド
 
 - [ドキュメント索引](doc/README.md#japanese) — ガイド、設定例、仕様、ファームウェア、vision-worker への入口
+- [汎用ブラウザメディア連携](doc/guides/generic-browser-media.md#japanese) — 第三者MP3配信元／コントローラー、HTTP/MCP契約、モバイル再生、セキュリティ、任意TTSフォーカスの実装ガイド
 - [AtomS3R Devices](doc/guides/atom-devices.md#japanese) — 2つの物理 Atom デバイス（顔 と M12 カメラ）の違い、どの文書がどちらのものか、`--asr-lang` の落とし穴
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) — 起動スクリプトの選び方、tmux ブリッジ、オペレーター画面、キーボードショートカット、バッチ / リアルタイム ASR、隠し復旧、Tailscale リモート運用
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化
