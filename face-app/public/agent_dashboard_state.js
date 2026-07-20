@@ -78,6 +78,16 @@ export function deriveDashboardMode(agents, options = {}) {
   return activeCount > 1 ? 'multi' : 'single';
 }
 
+export function formatDashboardAgentCount(visibleCount, outsideActiveStreamCount = 0) {
+  const visible = asInteger(visibleCount, 0, 0) ?? 0;
+  const outsideActiveStream = asInteger(outsideActiveStreamCount, 0, 0) ?? 0;
+  const visibleText = `${visible} agent${visible === 1 ? '' : 's'}`;
+  if (outsideActiveStream === 0) {
+    return visibleText;
+  }
+  return `${visibleText} · ${outsideActiveStream} helper${outsideActiveStream === 1 ? '' : 's'} outside active stream`;
+}
+
 export function shouldRefreshAgentActivityFromState(previousAgent, nextAgent) {
   if (!nextAgent || typeof nextAgent !== 'object') {
     return false;

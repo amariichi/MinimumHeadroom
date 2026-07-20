@@ -3,22 +3,28 @@
 Claude Code supports adding stdio MCP servers via CLI.
 
 Example:
-  claude mcp add --transport stdio --env FACE_WS_URL=ws://127.0.0.1:8765/ws minimum-headroom -- /ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh
 
-If your environment rejects dotted tool names (`face.event` style), add:
-  --env MCP_TOOL_NAME_STYLE=underscore
+```sh
+claude mcp add --transport stdio --env FACE_WS_URL=ws://127.0.0.1:8765/ws --env MCP_TOOL_NAME_STYLE=underscore minimum_headroom -- /ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh
+```
+
+This example uses underscore tool names (`face_event` style), matching the other
+agent examples in this repository. Remove `--env MCP_TOOL_NAME_STYLE=underscore`
+only when you intentionally want the default dotted names (`face.event` style).
 
 `run-bound-mcp-server.sh` starts the MCP server and preserves `MH_FACE_AGENT_ID` /
 `MH_FACE_AGENT_LABEL` from the current agent process or its parent process when
 available. This lets `face_ping`, `face_event`, and `face_say` omit `agent_id`
 in operator/helper panes that were launched by Minimum Headroom.
 
-Then tools are exposed as:
+With the command above, tools are exposed as:
+
 - `face_event`
 - `face_say`
 - `face_ping`
 
 Notes:
+
 - Options (--transport/--env/--scope/...) must come before the server name.
 - `--` separates the server name from the command and args.
 

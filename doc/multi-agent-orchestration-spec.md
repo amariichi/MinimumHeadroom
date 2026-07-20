@@ -6,19 +6,28 @@
 
 ## 日本語概要
 
-この文書は ExecPlan ではなく、operator が helper agent を率いる multi-agent
-運用の製品・プロトコル仕様です。中心原則は「ユーザーと直接会話する owner は
-1つの stream に1人だけ」というものです。通常は `operator` が owner で、helper
-は owner にだけ進捗・完了・質問・block を報告します。helper が直接ユーザーへ質問
-しない設計にすることで、会話の所有権、判断責任、作業統合の流れを崩さないように
-しています。
+この文書は ExecPlan ではなく、オペレーターがヘルパーエージェントを率いる
+マルチエージェント運用の製品・プロトコル仕様です。中心となる原則は、
+「一つの作業ストリームにつき、ユーザーと直接対話するオーナーは一人だけ」です。
 
-主な論点は、helper の mission 構造、owner inbox、停止や承認待ちの扱い、pane control、
-desktop/mobile UI の attention 表示、異種 agent runtime への対応です。現行実装では
-`agent.assign` / `agent.inject` / `agent.report` / `owner.inbox.*` / stuck detector
-などにこの仕様の考え方が反映されています。詳細な MUST/SHOULD/MAY は英語本文を正とします。
+通常は `operator` がオーナーとなり、ヘルパーは進捗、完了、質問、作業停止をオーナーにだけ
+報告します。ヘルパーがユーザーへ直接質問しないことで、誰が会話と判断を担当し、誰が成果を
+統合するのかを明確に保ちます。
+
+主な論点は、ヘルパーへ渡すミッションの構造、オーナーの受信箱（owner inbox）、停止や
+承認待ちの扱い、ペイン操作、デスクトップ／モバイル UI の注意表示、異なるエージェント
+実行環境への対応です。現行実装では、`agent.assign`、`agent.inject`、`agent.report`、
+`owner.inbox.*`、停止検出器などに、この仕様の考え方が反映されています。細かな
+`must` / `should` / `may` の要件は、英語本文を正式な仕様とします。
 
 <a id="english"></a>
+
+## English
+
+Status note: much of this specification has since been implemented through
+`agent.assign`, `agent.inject`, `agent.report`, `owner.inbox.*`, and the stuck
+detector. See [Multi-Agent Guide](guides/multi-agent.md#english). Section 1
+describes the state before that implementation.
 
 This document is a design specification, not an ExecPlan. Its job is to freeze the product and protocol rules for operator-led multi-agent work before implementation planning begins.
 

@@ -319,6 +319,7 @@ export function createTtsController(options = {}) {
   const log = toLogger(options.log ?? console);
   const now = typeof options.now === 'function' ? options.now : () => Date.now();
   const broadcast = typeof options.broadcast === 'function' ? options.broadcast : () => false;
+  const onActivityChange = typeof options.onActivityChange === 'function' ? options.onActivityChange : () => {};
   const audioStore = options.audioStore ?? null;
   const audioTarget = normalizeAudioTarget(options.audioTarget);
   const browserAudioEnabled = audioTarget === 'browser' || audioTarget === 'both';
@@ -353,19 +354,48 @@ export function createTtsController(options = {}) {
   // FIFO of ordered chunks belonging to the current logical utterance.
   // A newer accepted say flushes this and replaces it.
   let queue = [];
+  let lastActivityKey = null;
+
+  function notifyActivity() {
+    const activity = {
+      active: Boolean(active),
+      queued: queue.length
+    };
+    const key = `${activity.active ? 1 : 0}:${activity.queued}`;
+    if (key === lastActivityKey) {
+      return;
+    }
+
+    // Establish the initial silent baseline without manufacturing a TTS
+    // transition. This keeps rejected speech from taking audio focus.
+    if (lastActivityKey === null && !activity.active && activity.queued === 0) {
+      lastActivityKey = key;
+      return;
+    }
+
+    lastActivityKey = key;
+    try {
+      onActivityChange(activity);
+    } catch (error) {
+      log.warn(`[face-app] tts activity callback failed: ${error.message}`);
+    }
+  }
 
   function clearQueue() {
     queue = [];
+    notifyActivity();
   }
 
   function enqueueEntries(entries) {
     for (const entry of entries) {
       queue.push(entry);
     }
+    notifyActivity();
   }
 
   function removeDeferredEntries() {
     queue = queue.filter((entry) => !entry.deferUntilIdle);
+    notifyActivity();
   }
 
   function emitState(sessionId, utteranceId, phase, extra = {}) {
@@ -538,6 +568,7 @@ export function createTtsController(options = {}) {
     active = entry;
     activeQueuedAt = now();
     activePlayStartedAt = null;
+    notifyActivity();
     emitState(entry.sessionId, entry.utteranceId, 'queued', {
       ...(entry.agentId ? { agent_id: entry.agentId } : {}),
       ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
@@ -561,6 +592,7 @@ export function createTtsController(options = {}) {
 
   function maybeStartPending() {
     if (active || queue.length === 0) {
+      notifyActivity();
       return;
     }
 
@@ -580,6 +612,7 @@ export function createTtsController(options = {}) {
 
       dispatchSpeak(next, 'dequeued');
     }
+    notifyActivity();
   }
 
   function shouldPromoteToAutoInterrupt(entry, acceptedAt) {
@@ -970,6 +1003,7 @@ export function createTtsController(options = {}) {
       activeQueuedAt = null;
       activePlayStartedAt = null;
     }
+    notifyActivity();
     generation += 1;
     if (audioStore && typeof audioStore.clear === 'function') {
       audioStore.clear();
@@ -993,6 +1027,7 @@ export function createTtsController(options = {}) {
       activeQueuedAt = null;
       activePlayStartedAt = null;
     }
+    notifyActivity();
 
     worker.stop();
     if (audioStore && typeof audioStore.clear === 'function') {

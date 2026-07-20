@@ -22,6 +22,40 @@ If you are using the minimum-headroom operator/helper runtime, also install the 
 - Desktop renders the operator plus up to 7 helpers (8 tiles total)
 - Via MCP, `agent.spawn` accepts `id` as the canonical helper-name field and also accepts `agent_id` as a compatibility alias
 
+### Active Stream and Cross-Repository Work
+
+A stream groups one user-visible task under one owner. It controls browser
+visibility, mission assignment, and the owner inbox; it is not a Git repository
+or filesystem boundary. `source_repo_path`, `target_repo_root`, worktrees,
+permission presets, and `target_paths` control where a helper works.
+
+The operator launcher derives the active stream from its `--repo` target, and
+the browser shows only helpers in that active stream. `session_id` groups
+conversation or signaling events and does not affect this visibility.
+
+`agent.spawn` uses the active stream when `stream_id` is omitted, including
+when the helper works in another repository. An explicitly different
+`stream_id` is still accepted, but the result contains
+`visible_in_active_stream=false` and a warning that the helper is outside the
+authoritative active-stream list. Activity signaling from that helper can
+still surface a provisional browser tile. The browser reports how many
+registered helpers are outside the active stream without treating them as
+normal managed helpers in the active owner lifecycle.
+
+For a helper that belongs to the current user task:
+
+1. Call `agent.list(scope="stream")` and retain its `active_stream_id`.
+2. Omit `stream_id` at spawn or pass that exact active value. If the helper
+   works in another repository, set `source_repo_path` and `target_repo_root`
+   separately and use absolute `target_paths` in the mission.
+3. After spawn, require `visible_in_active_stream=true` and confirm the helper
+   appears in another `agent.list(scope="stream")` result.
+
+Use a different stream only for a genuinely independent user task or owner
+lifecycle. If `agent.list(scope="all")` contains a helper that the stream-scoped
+list does not, delete and recreate it in the active stream unless that
+separation was intentional.
+
 ### Permission Presets
 
 `agent.spawn` accepts a `permission_preset` parameter (`reviewer`, `implementer`, `full`) to auto-configure tool permissions for the helper.
@@ -143,37 +177,81 @@ The detector posts reports; it never auto-presses keys. The operator (or the use
 
 ### 概要
 
-minimum-headroom は、分離されたワークツリーにヘルパーのコーディングエージェントを生成する機能を備えています。各ヘルパーは独自の tmux ペイン、顔タイル、権限設定を持ちます。オペレーターはブラウザ画面または MCP ツールからヘルパーを制御します。
+minimum-headroom は、分離されたワークツリーへ補助のコーディングエージェントを生成できます。
+各ヘルパーは、専用の tmux ペイン、顔タイル、権限設定を持ちます。オペレーターは、ブラウザ
+画面または MCP ツールからヘルパーを制御します。
 
-minimum-headroom のオペレーター/ヘルパー実行環境を使う場合は、`minimum-headroom-ops` スキルも導入してください。オペレーター主導フローで使う標準 MCP ライフサイクルとヘルパーレポート規約をまとめています。
+minimum-headroom のオペレーター／ヘルパー実行環境を使う場合は、`minimum-headroom-ops`
+スキルも導入してください。オペレーター主導の処理で使う、標準 MCP ライフサイクルと
+ヘルパーレポートの規約をまとめています。
 
 ### ヘルパーの生成
 
-- **Desktop:** 現在エージェントバーをクリック → Agents サーフェス → **+Agent**
-- **Mobile:** 現在エージェントバーをタップ → agent list → **+Agent**
-- **+Agent** は `helper-1`, `helper-2`, ... のような読みやすい自動 ID と、ブランチ / ワークツリーの既定値を使用
-- `--repo` 付きでオペレーターを起動した場合、ヘルパーは対象リポジトリを継承
-- Desktop はオペレーター + ヘルパー最大 7 体を同時表示（合計 8 タイル）
-- MCP の `agent.spawn` では標準のヘルパー名フィールドは `id` ですが、互換エイリアスとして `agent_id` も受け付けます
+- **デスクトップ:** 現在のエージェントを示すバーをクリックし、`Agents` 画面で **+Agent** を
+  選びます。
+- **モバイル:** 現在のエージェントを示すバーをタップし、エージェント一覧で **+Agent** を
+  選びます。
+- **+Agent** は、`helper-1`、`helper-2` のような読みやすい ID と、ブランチ／ワークツリーの
+  既定値を自動生成します。
+- `--repo` を指定してオペレーターを起動した場合、ヘルパーは対象リポジトリを引き継ぎます。
+- デスクトップには、オペレーターと最大7体のヘルパーを同時に表示できます（合計8タイル）。
+- MCP の `agent.spawn` では、ヘルパー名の標準フィールドは `id` です。互換用の別名として、
+  `agent_id` も受け付けます。
+
+### Active stream とリポジトリを跨ぐ作業
+
+stream は、一人のオーナーが担当する一つのユーザー作業をまとめる単位です。ブラウザでの表示、
+ミッション割当、owner inbox の範囲を決めますが、Git リポジトリやファイルアクセスの境界では
+ありません。ヘルパーが実際に作業する場所は、`source_repo_path`、`target_repo_root`、
+ワークツリー、権限プリセット、`target_paths` で決まります。
+
+オペレーターの起動スクリプトは、`--repo` の対象から active stream を決めます。ブラウザに
+表示されるのは、この active stream に属するヘルパーだけです。`session_id` は会話や通知を
+まとめる識別子であり、ブラウザの表示には影響しません。
+
+`agent.spawn` で `stream_id` を省略すると、別リポジトリで作業する場合も active stream を
+使います。別の `stream_id` を明示することもできますが、結果には
+`visible_in_active_stream=false` と、active stream の正式な一覧には含まれないという警告が
+含まれます。そのヘルパーから動作通知が届いた場合は、一時的な provisional タイルがブラウザに
+表示されることがあります。ブラウザには active stream 外の登録済みヘルパー数も示しますが、
+active stream の通常の管理対象としては扱いません。
+
+現在のユーザー作業に属するヘルパーは、次の手順で生成します。
+
+1. `agent.list(scope="stream")` を呼び、返された `active_stream_id` を控えます。
+2. 生成時は `stream_id` を省略するか、控えた active stream ID をそのまま渡します。
+   別リポジトリで作業させる場合は、`source_repo_path` と `target_repo_root` を別途指定し、
+   ミッションの `target_paths` には絶対パスを使います。
+3. 生成結果が `visible_in_active_stream=true` であることと、再度呼んだ
+   `agent.list(scope="stream")` にヘルパーが含まれることを確認します。
+
+別の stream を使うのは、独立したユーザー作業として扱う場合や、オーナーのライフサイクルを
+分ける場合だけです。`agent.list(scope="all")` には存在するのに stream 単位の一覧に出ない
+ヘルパーは、その分離が意図したものでなければ削除し、active stream で作り直してください。
 
 ### 権限プリセット
 
-`agent.spawn` で `permission_preset`（`reviewer` / `implementer` / `full`）を指定すると、ツール承認を自動設定します。
+`agent.spawn` で `permission_preset`（`reviewer` / `implementer` / `full`）を指定すると、
+ツールの承認設定を自動的に構成します。
 
-Claude Code / Antigravity CLI / Codex CLI では、これらのプリセットは各ランタイムのセットアップを補完するものであり、置き換えるものではありません。プロジェクトローカルの `AGENTS.md` や `doc/examples/AGENT_RULES.md` のようなエージェント指示もあわせて設定してください。
+Claude Code、Antigravity CLI、Codex CLI のいずれでも、これらのプリセットは各実行環境の
+セットアップを補うものであり、置き換えるものではありません。プロジェクト内の `AGENTS.md` や
+`doc/examples/AGENT_RULES.md` など、エージェント向けの指示も設定してください。
 
 | プリセット | Claude Code | Antigravity CLI | Codex CLI |
 |--------|-------------|------------|-----------|
-| `reviewer` | Read, Glob, Grep, agent\_report (allow); Bash なし | sandboxed read-oriented command allow-list | `-s read-only -a never` |
-| `implementer` | + Edit, Write, Bash; `git push` を拒否 | sandboxed commands, 直接的な `git push` コマンド形式を拒否, append `--dangerously-skip-permissions` | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
+| `reviewer` | Read、Glob、Grep、agent\_report を許可。Bash は不可 | サンドボックス内で読み取り向けコマンドだけを許可 | `-s read-only -a never` |
+| `implementer` | Edit、Write、Bash も許可し、`git push` は拒否 | サンドボックス内のコマンドを許可し、直接の `git push` を拒否。`--dangerously-skip-permissions` を追加 | `-s workspace-write -a never --add-dir <sourceRepo>/.git` |
 | `full` | `implementer` と同一 | `implementer` と同一 | `--dangerously-bypass-approvals-and-sandbox` |
 
-Antigravity のプリセットはセッション単位です。全て `--sandbox` で起動し、helper
-プロセスへ `MH_AGY_PERMISSION_PRESET` を渡します。spawn時に
-`.agents/plugins/minimum-headroom-helper-policy/` へworktreeローカルpluginも生成し、
-その `scripts/agy-helper-policy.mjs` がコマンド実行前にreviewerの読み取りコマンドを
-許可、それ以外を強制確認し、全helper presetの直接的な `git push` を拒否します。
-global/operator pluginにはこの `PreToolUse` hookを入れないため、通常の対話agyには
+Antigravity のプリセットはセッション単位です。すべて `--sandbox` で起動し、ヘルパーの
+プロセスへ `MH_AGY_PERMISSION_PRESET` を渡します。ヘルパーを生成するときには、
+`.agents/plugins/minimum-headroom-helper-policy/` にワークツリー専用のプラグインも作成します。
+
+このプラグインの `scripts/agy-helper-policy.mjs` は、`reviewer` プリセットでは読み取り向けの
+コマンドだけを許可し、それ以外のコマンドには確認を求めます。また、すべての
+ヘルパープリセットで直接の `git push` を拒否します。グローバルまたはオペレーター用の
+プラグインには、この `PreToolUse` フックを追加しません。そのため、通常の対話型 agy には
 影響しません。
 
 Codex のプリセット末尾引数は、以下の環境変数で丸ごと置き換えできます。
@@ -182,86 +260,144 @@ Codex のプリセット末尾引数は、以下の環境変数で丸ごと置�
 - `MH_CODEX_PRESET_IMPLEMENTER`
 - `MH_CODEX_PRESET_FULL`
 
-Codex コマンドが `-s read-only` または `-s workspace-write` を要求する場合、ヘルパー生成時にサーバープロセスごとに一度だけ `timeout 15 codex sandbox -- echo __mh_userns_ok__` を実行してサンドボックスを事前確認します。確認トークンが見つからない場合、そのサンドボックスモードを `-s danger-full-access` に書き換え、生成結果に `sandbox_fallback: true` と理由を含め、ヘルパーの状態メッセージにも権限緩和の理由を残します。user namespace が制限されたホストでも、コマンド実行不能な Codex ヘルパーを無言で作らないためです。
+Codex コマンドが `-s read-only` または `-s workspace-write` を要求する場合は、ヘルパーを
+生成するときに、サーバープロセスごとに一度だけ
+`timeout 15 codex sandbox -- echo __mh_userns_ok__` を実行します。これは、サンドボックスが
+利用できるかを事前に確認する処理です。
 
-tmux ペイン作成後、ヘルパー生成は CLI が実際に起動したかを確認します。約 15 秒間 `pane_current_command` をポーリングし、素のシェル（`bash`, `zsh`, `sh`, `dash`, `fish`）のままなら `launch_failed` として扱います。ヘルパー記録は調査用に残し、生成結果にはペイン末尾が含まれます。
+確認用トークンが見つからなければ、そのサンドボックスモードを `-s danger-full-access` へ
+切り替えます。生成結果には `sandbox_fallback: true` と理由を含め、ヘルパーの状態メッセージ
+にも権限を緩和した理由を残します。ユーザー名前空間が制限されたホストで、コマンドを実行
+できない Codex ヘルパーを理由も示さず作成しないためです。
 
-各ランタイムの詳細設定:
+tmux ペインを作成した後、CLI が実際に起動したかを確認します。約15秒間
+`pane_current_command` を確認し続け、`bash`、`zsh`、`sh`、`dash`、`fish` などの素のシェルの
+ままなら `launch_failed` として扱います。ヘルパーの記録は調査用に残し、生成結果には直前の
+ペイン末尾も含めます。これにより、オペレーターが起動失敗の原因を確認できます。
+
+各実行環境の詳しい設定:
+
 - [Claude Code セットアップ](../examples/claude-code/README.md)
 - [Antigravity セットアップ](../examples/antigravity/README.md)
 - [Codex セットアップ](../examples/codex/config.toml)
 
-Antigravity CLI ヘルパーは、権限プリセットを使っても初回だけ対話が必要になることがあります。新規生成されたワークツリーではミッション注入前にワークスペース信頼プロンプトが出る場合があり、最初の MCP ツール呼び出しでも会話単位の承認を求められます。生成されたヘルパーワークツリーを信頼し、最低限 `minimum_headroom/agent_report` を許可してください。ヘルパーがフェイスツールを呼ぶ場合は `face_ping` / `face_event` / `face_say` も個別に承認が出ることがあります。
+Antigravity CLI のヘルパーでは、権限プリセットを使っても、初回だけ対話操作が必要になることが
+あります。新しく生成したワークツリーでは、ミッションを注入する前に、ワークスペースの信頼を
+確認する画面が表示される場合があります。最初の MCP ツール呼び出しでも、会話単位の承認を
+求められることがあります。生成したヘルパーワークツリーを信頼し、少なくとも
+`minimum_headroom/agent_report` を許可してください。ヘルパーがフェイスツールを使う場合は、
+`face_ping`、`face_event`、`face_say` についても、個別に承認を求められることがあります。
 
 ### ミッション割当と配信
 
-- `agent.assign` でミッションを保存。指定可能なフィールド:
-  - `role` — helper の役割（例: `reviewer`, `implementer`）
-  - `target_paths` — helper が対象とするファイルやディレクトリ
+- `agent.assign` でミッションを保存します。次のフィールドを指定できます。
+  - `role` — ヘルパーの役割（例: `reviewer`、`implementer`）
+  - `target_paths` — ヘルパーが対象とするファイルやディレクトリ
   - `completion_criteria` — 成功の定義
-  - `timebox_minutes` — 現在のパスの制限時間
-  - `max_findings` — 報告前の findings 上限
-- `agent.inject` で制御された tmux ペーストバッファ注入により配信
-- 配信状態は `pending` → `sent_to_tmux` → `acked` / `failed` / `timeout` で追跡
-- 配信の受領確認タイムアウトの既定値は 120 秒です。コールドスタートする CLI が読み込まれる前にタイムアウト扱いになるのを避けます
-- `agent.inject` は、ペインの現在コマンドが素のシェルの場合、ミッション文の貼り付けを拒否して `injection_refused_shell_pane` と短いペイン末尾を返します。シェル復旧として意図的に入力したい場合だけ `force_shell_inject: true` を指定してください
-- これらの配信状態や受領確認は `agent.assignment.list` で確認
-- ヘルパーからの `agent.report` の一致で受領確認
+  - `timebox_minutes` — 現在の作業単位の制限時間
+  - `max_findings` — 一度に報告する指摘の上限
+- `agent.inject` は、tmux のペーストバッファを制御してミッションを配信します。
+- 配信状態は、`pending` → `sent_to_tmux` → `acked` / `failed` / `timeout` の順で追跡します。
+- 受領確認のタイムアウトは、既定で120秒です。起動に時間のかかる CLI が読み込みを終える前に、
+  タイムアウトと判断されることを防ぎます。
+- ペインで動いているのが素のシェルの場合、`agent.inject` はミッション文の貼り付けを拒否し、
+  `injection_refused_shell_pane` と短いペイン末尾を返します。シェルの復旧操作として意図的に
+  入力する場合だけ、`force_shell_inject: true` を指定してください。
+- 配信状態と受領確認は、`agent.assignment.list` で確認できます。
+- 対応する `agent.report` がヘルパーから届くと、受領済みと判断します。
 
-### ヘルパーレポートと Owner Inbox
+### ヘルパーレポートとオーナー受信箱
 
-- ヘルパーは `agent.report` で以下のタイプで報告:
-  - `progress` — 作業中。最初のレポートはミッション受諾のハンドシェイク
-  - `blocked` — owner のアクションなしでは続行不可
+- ヘルパーは `agent.report` で、次の種別を報告します。
+  - `progress` — 作業中。最初のレポートは、ミッションを受諾したことを示します
+  - `blocked` — オーナーの操作なしでは続行できない状態
   - `question` — 確認が必要
   - `done` — ミッション完了
   - `review_findings` — レビュー結果の提出
-- レポートは永続化された owner inbox に保存（ブラウザリロード後も維持）
-- `owner.inbox.resolve` で解決
-- 未解決項目はヘルパー / オーナーの注意喚起を UI 上で維持
+- レポートは永続化されたオーナー受信箱（owner inbox）へ保存され、ブラウザを再読み込みしても
+  残ります。
+- 対応を終えたレポートは、`owner.inbox.resolve` で解決済みにします。
+- 未解決の項目がある間は、UI 上でヘルパーとオーナーへの注意表示を維持します。
 
 ### フォーカスとリターゲット
 
-- タイルまたはリスト行をクリック・タップしてオペレーターの接続先を切り替え
-- `agent.focus` は表示を変更するだけで所有権は変わらない
-- ヘルパーにフォーカスしてもユーザー対面の権限は移譲されない。ユーザーに話しかけるのはオペレーターのみ
+- タイルまたは一覧の行をクリック／タップすると、オペレーターの接続先を切り替えられます。
+- `agent.focus` は表示だけを変更し、作業の所有権は変更しません。
+- ヘルパーへフォーカスしても、ユーザーと直接対話する権限は移りません。ユーザーへ話しかける
+  のは、オペレーターだけです。
 
 ### 停止検出とペイン制御
 
-ヘルパーは CLI レベルのモーダル（ツール承認プロンプト、モデルピッカー、利用上限通知、CLI フィードバックサーベイなど）に入るとそこで停止し、内側の LLM は入力を読まなくなります。注入したミッション文はモデルに届かず、`agent.assignment.list` ではただ `delivery_state=timeout` になるだけで原因は分かりません。これを MCP クライアント側から見えて復旧可能にするために、ランタイムは3つの仕組みを提供します。
+ヘルパーは、ツールの承認画面、モデル選択画面、利用上限の通知、CLI のアンケートなど、
+CLI のモーダル画面で停止することがあります。この状態では、内側の LLM は入力を読みません。
+注入したミッション文はモデルへ届かず、`agent.assignment.list` には
+`delivery_state=timeout` と表示されるだけなので、原因を判断できません。どの MCP クライアント
+からでも状態を確認して復旧できるよう、実行環境は次の3つの仕組みを備えています。
 
-- バックグラウンドの **停止検出器** が face-app 内で動作します（既定 5 秒間隔、`MH_HELPER_STUCK_DETECTOR=off` で無効化可能）。tick ごとに全アクティブヘルパーのペイン末尾を取得し、小さなパターン集合（`Do you want to proceed?` / `Switch to gpt-…` / `You've hit your usage limit` / `How's the CLI experience` / `Press enter to confirm`）と照合します。新規ヒットがあると `kind=blocked` レポートを owner inbox に投函し、`detail` に一致行とペインの周辺コンテキストを入れます。同一の `(agent, pattern, matched line)` は約 30 秒間重複排除されるので inbox が荒れません。
-- **`agent.pane_snapshot { agent_id, tail_lines? }`** はヘルパーのペイン末尾 N 行（既定 40、最大 400）を ANSI 除去で返します。inbox の `blocked` レポートが指し示したヘルパーのモーダル本文を確認してから対応を決めるために使います。
-- **`agent.pane_send_key { agent_id, keys, literal? }`** はヘルパーのペインに生の tmux キーを送信します。`keys` は印字可能 ASCII（`"2"`, `"hello world"`）と名前付きキーの許可リスト（`Enter`, `Escape`, `Tab`, `BSpace`, `Space`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `C-c`, `C-m`, `C-d`）を受け付けます。`literal: true` を指定すると tmux に `-l --` を付けて文字列をテキストとして扱うので、CLI セレクタへの自由入力に向きます。このツールは **CLI モーダルへの応答用** であって、ミッション配信には使いません。ミッションは `agent.inject` を使ってください。
+- バックグラウンドの **停止検出器** が face-app 内で動きます。確認間隔の既定値は5秒で、
+  `MH_HELPER_STUCK_DETECTOR=off` を指定すると無効になります。確認のたびに、動作中の全ヘルパー
+  からペイン末尾を取得し、`Do you want to proceed?`、`Switch to gpt-…`、
+  `You've hit your usage limit`、`How's the CLI experience`、`Press enter to confirm` など、
+  少数の既知パターンと照合します。新しい一致を見つけると、`kind=blocked` のレポートを
+  オーナー受信箱へ送り、一致した行と周辺のペイン内容を `detail` に含めます。同じ
+  `(agent, pattern, matched line)` は約30秒間重複を除外するため、受信箱が同じ通知で
+  埋まりません。
+- **`agent.pane_snapshot { agent_id, tail_lines? }`** は、ヘルパーのペイン末尾から N 行を返します
+  （既定40行、最大400行）。ANSI 制御文字は除去されます。受信箱の `blocked` レポートが示す
+  ヘルパーについて、モーダルの本文を確認してから対応を決めるために使います。
+- **`agent.pane_send_key { agent_id, keys, literal? }`** は、ヘルパーのペインへ tmux のキー入力を
+  直接送ります。`keys` には、印字可能な ASCII（`"2"`、`"hello world"`）と、名前付きキーの
+  許可リスト（`Enter`、`Escape`、`Tab`、`BSpace`、`Space`、`Up`、`Down`、`Left`、`Right`、
+  `Home`、`End`、`PageUp`、`PageDown`、`C-c`、`C-m`、`C-d`）を指定できます。
+  `literal: true` を指定すると、tmux へ `-l --` を渡し、入力を文字列として扱います。CLI の
+  選択画面へ自由入力する場合に向いています。このツールは **CLI のモーダルへ応答するため**の
+  もので、ミッションの配信には使いません。ミッションは `agent.inject` で配信してください。
 
-典型的な復旧フロー:
+典型的な復旧手順:
 
-1. owner inbox に `{kind: "blocked", summary: "helper paused on approval prompt", from_agent_id: "helper-1"}`（または `"... on model picker"` など）が現れる
-2. `agent.pane_snapshot agent_id=helper-1 tail_lines=30` でモーダル本文を確認
-3. 適切な応答キーを選び `agent.pane_send_key agent_id=helper-1 keys=["2","Enter"]`（番号セレクタ）または `keys=["Down","Enter"]`（矢印セレクタ）を送る
-4. 必要に応じてもう一度 `agent.pane_snapshot` でモーダル解除を確認。モーダルが入力を握っていた間にミッション文が失われた場合は `agent.inject` で再投入
-5. 自動 `blocked` レポートは `owner.inbox.resolve action=resolved` で片付ける
+1. オーナー受信箱に `{kind: "blocked", summary: "helper paused on approval prompt", from_agent_id: "helper-1"}`
+   または `"... on model picker"` などのレポートが現れます。
+2. `agent.pane_snapshot agent_id=helper-1 tail_lines=30` でモーダルの本文を確認します。
+3. 適切な応答を選び、番号で選ぶ画面なら
+   `agent.pane_send_key agent_id=helper-1 keys=["2","Enter"]`、矢印で選ぶ画面なら
+   `keys=["Down","Enter"]` を送ります。
+4. 必要に応じて、もう一度 `agent.pane_snapshot` を呼び、モーダルが閉じたことを確認します。
+   モーダルが入力を受け取っていた間にミッション文が失われた場合は、`agent.inject` で
+   再送します。
+5. 自動生成された `blocked` レポートを、`owner.inbox.resolve action=resolved` で解決済みに
+   します。
 
-検出器はレポートを投函するだけで、キーを自動で押すことはしません。応答は operator（または user）が判断します。これにより、正規表現一致で `No, and always deny` のような取り返しのつかない選択肢を踏むことを防ぎます。
+検出器はレポートを送るだけで、キーを自動的に押すことはありません。どの応答を送るかは、
+オペレーターまたはユーザーが判断します。これにより、正規表現に一致しただけで
+`No, and always deny` のような取り返しのつかない選択肢を実行することを防ぎます。
 
-### Worktree 分離とセキュリティ
+### ワークツリーの分離とセキュリティ
 
-- 各ヘルパーは独自ブランチ上の分離された git ワークツリーを取得
-- assignment の target paths は stream root 配下の読み取り参照です。ヘルパーは編集とコミットを、元リポジトリのチェックアウトではなく割り当てられたワークツリー上のヘルパーブランチで行います
-- helperのpublish制御はruntimeごとに異なります:
+- 各ヘルパーには、専用ブランチ上の分離された Git ワークツリーを割り当てます。
+- ミッションの `target_paths` は、作業ストリームのルートを基準にした読み取り対象です。
+  ヘルパーは、元リポジトリのチェックアウトではなく、割り当てられたワークツリー上の
+  ヘルパーブランチで編集とコミットを行います。
+- ヘルパーによる公開操作の制御方法は、実行環境ごとに異なります。
   - **Claude Code:** `deniedTools` に `Bash(git push*)` を含む
-  - **Antigravity:** `agy-helper-policy.mjs` が直接的な `git push` コマンド形式へ `PreToolUse` のdeny判定を返す。これはコマンド文字列のguardrailであり、難読化されたshellに対するセキュリティ境界ではありません
-  - **Codex:** エージェント指示で制約し、技術的なdeny ruleは持ちません
-- 生成する権限設定/pluginファイル（現在はClaude CodeとAntigravity）は書き込み後 `chmod 444` で保護され、ヘルパーが自身の権限を変更できない
+  - **Antigravity:** `agy-helper-policy.mjs` が、直接的な `git push` コマンドに対して
+    `PreToolUse` の拒否判定を返します。これはコマンド文字列に対する安全策であり、難読化した
+    シェルコマンドを防ぐセキュリティ境界ではありません。
+  - **Codex:** エージェント向けの指示で制約します。技術的な拒否規則はありません。
+- 生成した権限設定／プラグインファイル（現在は Claude Code と Antigravity）は、書き込み後に
+  `chmod 444` で保護します。ヘルパーは自身の権限を変更できません。
 
 ### ヘルパーの削除
 
-- **Delete** ボタンで tmux ペイン、ワークツリー、実行時記録、割当記録、owner inbox 記録をまとめて削除
-- MCP 経由: `agent.delete`
+- **Delete** ボタンは、tmux ペイン、ワークツリー、実行時記録、ミッション記録、オーナー
+  受信箱の記録をまとめて削除します。
+- MCP から削除する場合は、`agent.delete` を使います。
 
 ### シャットダウンと復旧
 
-- 起動時の既定動作は cleanup-first です。以前のヘルパーは自動復元せず、削除または状態から消去します
-- active stream のヘルパーは tmux / ワークツリー / 実行時状態 / 割当状態 / owner inbox 状態から除去されます
-- 他リポジトリに属する非表示ヘルパー記録も、現在のリポジトリ側の状態には残さず消去します
-- 将来 resume を足す場合でも、起動時の自動復元ではなくオペレーターの明示操作で行う想定です
+- 起動時は、後始末を優先します。以前のヘルパーを自動復元せず、削除するか状態記録から
+  取り除きます。
+- 現在の作業ストリームに属するヘルパーは、tmux、ワークツリー、実行時状態、ミッション状態、
+  オーナー受信箱から取り除きます。
+- 別のリポジトリに属する非表示のヘルパー記録も、現在のリポジトリ側の状態には残しません。
+- 将来、再開機能を追加する場合も、起動時に自動復元するのではなく、オペレーターの明示的な
+  操作で再開する想定です。

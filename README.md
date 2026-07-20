@@ -18,6 +18,7 @@ A face and operator companion app for coding agents.
 - [At a Glance](#en-at-a-glance)
 - [Features](#en-features)
 - [Quick Start](#en-quick-start)
+- [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english)
 - [Agent Setup](#en-agent-setup)
 - [Detailed Guides](#en-detailed-guides)
 - [Documentation Index](doc/README.md#english)
@@ -31,6 +32,7 @@ A face and operator companion app for coding agents.
 - **3D face + TTS + MCP signaling** give your agent a voice and expressions that reflect its state.
 - **Optional AtomS3R desk devices** — two similarly-named M5Stack boards you can add: **AtomS3R** (face + voice I/O — the physical desk face you talk to) and **AtomS3R-M12** (camera + voice output — ambient scene awareness, no microphone). See [AtomS3R Devices](doc/guides/atom-devices.md#english).
 - **M12 vision subsystem** adds AtomS3R-M12 camera awareness: diffusiongemma (vLLM) captions, hierarchical situation memory, `GET /situation` agent-context injection, and spoken alerts through the M12 Echo Base. See [M12 Vision Guide](doc/guides/m12-vision.md#english) and [vision-worker README](vision-worker/README.md#english).
+- **Generic browser media** carries one trusted local 128-kbit/s MP3 source to the authenticated desktop or mobile browser without exposing the source URL. See [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english).
 - **Multi-agent support** (experimental) — spawn helper agents in isolated worktrees with permission presets and durable mission tracking. See [Multi-Agent Guide](doc/guides/multi-agent.md).
 - **Tailscale Serve** for secure remote access from phone or tablet.
 
@@ -41,7 +43,7 @@ A face and operator companion app for coding agents.
 - **Terminal mirror** — read-only tmux tail snapshots at 500ms change-only intervals; lines render at native width with horizontal scroll, and on touch devices you can pinch-to-zoom (anchored under your fingers) and double-tap to reset
 - **Multi-agent** (experimental) — spawn/focus/delete helpers from desktop tiles or mobile list, permission presets, mission assignment and delivery, owner inbox. A background stuck-detector scans each helper's tmux pane and posts auto `blocked` reports to the owner inbox when a known CLI modal (approval prompt, model picker, usage-limit notice, survey) is visible, so the operator notices stalled helpers without polling. See [Multi-Agent Guide](doc/guides/multi-agent.md).
 - **M12 vision** — AtomS3R-M12 camera + diffusiongemma (vLLM) captioner, change-gated SQLite memory with tiered summaries, `GET /situation` digest injection, corrections, keyword watches, and Echo Base spoken alerts. See [M12 Vision Guide](doc/guides/m12-vision.md#english).
-- **MCP signaling** — `face.event` / `face.say` / `face.ping` plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`)
+- **MCP signaling** — `face.event` / `face.say` / `face.ping`, generic `media.play` / `media.stop` / `media.status` ([integration guide](doc/guides/generic-browser-media.md#english)), plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`)
 - **3D face** — eyebrow/eye/mouth/head animation, state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`), drag control, panel toggles
 - **TTS** — Kokoro ONNX + Misaki default, optional Qwen3-TTS Japanese backend, freshness-first speech policy. See [TTS and Speech Guide](doc/guides/tts-and-speech.md).
 - **ASR** — Parakeet batch, optional Voxtral realtime. See [Operator Stack and ASR Guide](doc/guides/operator-stack.md).
@@ -383,6 +385,22 @@ cd /path/to/target-repo
 
 See [Audio target and UI mode](doc/guides/operator-stack.md#audio-target-and-ui-mode) for when to pick `browser`, `local`, or `both`.
 
+<a id="en-generic-browser-media"></a>
+### Generic browser media channel
+
+The Face App can carry one trusted external MP3 source through the same authenticated browser origin without learning anything about the source application. The control surface is limited to play, stop, and status; catalogs, queues, and source startup remain the external application's responsibility.
+
+For the complete third-party contract—including producer-service preparation, an optional searchable/local-file catalog profile, architecture and sequence diagrams, source response headers, HTTP and MCP schemas, authentication, iPhone/iPad behavior, optional TTS focus, security, and acceptance checks—see [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english).
+
+Allow each trusted source endpoint by exact scheme, host, port, and path:
+
+```bash
+export MH_MEDIA_ALLOWED_ENDPOINTS=http://127.0.0.1:9000/audio.mp3
+./scripts/run-operator-once.sh --profile realtime
+```
+
+Comma-separate multiple endpoints. Matching uses the exact scheme, hostname, effective port, and pathname; the requested URL may add a query. The source must directly return `audio/mpeg` and declare `X-Media-Nominal-Bitrate: 128000`. Minimum Headroom verifies that trusted-producer declaration and forwards bytes unchanged; it does not inspect MP3 frames, transcode, or fall back to PCM.
+
 <a id="en-agent-setup"></a>
 ## Agent Setup
 
@@ -482,12 +500,13 @@ The script auto-detects the repo root (no hard-coded paths), exports `MH_FACE_AG
 
 ### Tool name style
 
-If your MCP client rejects tool names with dots (for example `face.event`), set env `MCP_TOOL_NAME_STYLE=underscore`. Tools are then published as `face_event`, `face_say`, `face_ping`.
+If your MCP client rejects tool names with dots (for example `face.event` or `media.play`), set env `MCP_TOOL_NAME_STYLE=underscore`. Tools are then published with names such as `face_event`, `face_say`, `face_ping`, and `media_play`.
 
 <a id="en-detailed-guides"></a>
 ## Detailed Guides
 
 - [Documentation Index](doc/README.md#english) — full map of repository docs, guides, examples, specs, firmware, and vision-worker references
+- [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english) — prepare a third-party MP3 producer/controller, including optional catalog and local-file safety, HTTP/MCP contracts, mobile playback, security, and optional TTS focus
 - [AtomS3R Devices](doc/guides/atom-devices.md#english) — the two physical Atom devices (face vs M12 camera), which docs belong to which, and the `--asr-lang` gotcha
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english) — launcher choice, tmux bridge, operator UI, keyboard shortcuts, hidden mobile recovery, batch/realtime ASR, Tailscale remote operation
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization

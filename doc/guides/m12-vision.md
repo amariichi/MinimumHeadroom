@@ -327,21 +327,44 @@ must not be used for driving, street crossing, or other safety-critical alerts.
 <a id="japanese"></a>
 ## 日本語
 
-### このサブシステムがすること
+このガイドでは、AtomS3R-M12 の視覚サブシステムを説明します。M12 カメラがフレームを送り、
+`vision-worker` が diffusiongemma を使って変化した場面を構造化します。SQLite が短期記憶を
+保存し、`GET /situation` がローカルのエージェントや会話 LLM 向けの簡潔な要約を返します。
 
-M12 の視覚経路は、リスクの高い自動化ではなく、周囲状況をゆるく把握するための仕組みです。カメラが今何を見ているか、その見え方がどれくらい安定しているか、最近何が変わったか、キーワード監視が反応したか、ユーザーの訂正が有効かをエージェントが答えられるようにします。
+### このサブシステムの役割
 
-ワーカーは低コストな層に分かれています。`NetworkCaptureSource` が JPEG を取得し、`ChangeGate` が不要なモデル呼び出しを避け、`Pipeline` がモデルの構造化された観測結果を整合し、`VisionDB` と `FrameStore` が第 0 層の記憶を保存します。古い履歴の要約は `summarize.py` が作り、エージェントが読む状況要約は `situation.py` が描画します。
+M12 の視覚経路は、リスクの高い自動化ではなく、周囲の状況を大まかに把握するための
+仕組みです。エージェントは、カメラが今何を見ているか、その場面がどれくらいの間変わって
+いないか、最近何が変わったかを答えられます。以前見た物を `見覚え` として会話の中で
+思い出したり、
+キーワード監視の反応やユーザーによる訂正が有効かを確認したりすることもできます。
 
-M12 のレンズは、場面、物体、大きな文字を見る用途に向いています。文書スキャナーではありません。細かい印字、宿題の紙面、密な画面、小さなラベルは、スマホカメラや画像を直接渡す経路を使ってください。
+ワーカーは、処理コストの低い層を組み合わせて動きます。`NetworkCaptureSource` が JPEG を
+取得し、`ChangeGate` が不要なモデル呼び出しを避け、`Pipeline` がモデルから得た構造化観測を
+まとめます。`VisionDB` と `FrameStore` は第 0 層の記憶を保存します。古い履歴は
+`summarize.py` が要約し、エージェントが読む状況要約は `situation.py` が生成します。
+
+M12 のレンズは、場面、物体、大きな文字を見る用途に向いています。文書スキャナーでは
+ありません。細かい印字、宿題の紙面、情報が密集した画面、小さなラベルには、スマートフォンの
+カメラや、画像を直接渡す経路を使ってください。
 
 ### 認識の流れ
 
 図は英語セクションの Mermaid 図「Perception Flow」を参照してください。
 
-この図は、継続認識ループと保存対象のオンデマンド観察が使う、ライブフレームから記録までの経路を示しています。重要なのは、重いモデルの前に安価な判定ゲートが動く一方で、保存される行が意味のある場面変化を表すかどうかの最終判断は、モデル自身の `changed` 判定が持つことです。
+この図は、継続認識ループと保存する単発観察の両方が使う、ライブフレームから記録までの
+経路を示しています。重いモデルを呼ぶ前に、低コストな判定ゲートで不要な処理を省きます。
+ただし、保存候補が意味のある場面変化かどうかは、最終的にモデル自身の `changed` 判定で
+決めます。
 
-実装メモ: `run-vision-stack.sh` は `VISION_CAMERA_URL` を `<m12-base>/snapshot` に解決します。`NetworkCaptureSource` は `VISION_CAMERA_AUTH_TOKEN` または `MH_FACE_AUTH_TOKEN` から `X-Headroom-Auth` を送り、`ChangeGate.is_changed()` は平均ハッシュのハミング距離と縮小画像の画素差分を組み合わせます。`Pipeline._commit()` は元フレームと観測行を保存してから、警告と読み上げのコールバックを発火します。モデルプロンプトに渡すのは前回のテキストだけで、前回画像は渡しません。そのため diffusiongemma 呼び出しは毎回 1 回の画像入力処理を行います。
+実装上、`run-vision-stack.sh` は `VISION_CAMERA_URL` を `<m12-base>/snapshot` に解決します。
+`NetworkCaptureSource` は、`VISION_CAMERA_AUTH_TOKEN` または `MH_FACE_AUTH_TOKEN` の値を
+`X-Headroom-Auth` ヘッダーで送ります。`ChangeGate.is_changed()` は、平均ハッシュの
+ハミング距離と縮小画像の画素差分を組み合わせて判定します。
+
+`Pipeline._commit()` は元フレームと観測行を保存してから、警告と読み上げのコールバックを
+呼び出します。モデルのプロンプトへ渡すのは前回のテキストだけで、前回画像は渡しません。
+そのため、diffusiongemma は呼び出しごとに画像を1回処理します。
 
 ### 記憶のライフサイクルと忘却
 
@@ -351,25 +374,78 @@ M12 のレンズは、場面、物体、大きな文字を見る用途に向い�
 
 - 第 0 層: 生の変化記録とフレームの保存先。
 - 第 1-4 層: 閉じた時間区間ごとのキャッシュ済みテキスト要約。
-- エンティティ: 名前の付いた物のコールバック索引です。視覚モデルが返す `salient_objects`（目立つ物。人は含めません）を名前ごとに 1 行で保存し、初回・最終確認時刻と回数を持ちます。`/situation` は `entities` として返し、テキスト要約には「1 時間〜14 日前に見た・今は視界にない物」を最大 2 行の `見覚え:` 行として描画します。会話で自然に話を戻すための素材です。
+- エンティティ: 以前見た物を会話で自然に思い出すための小さな索引です。視覚モデルが返す
+  `salient_objects`（目立つ物。人は含めません）を名前ごとに1行で保存し、最初と最後に
+  確認した時刻、確認回数を持ちます。`/situation` はこれを `entities` として返します。
+  テキスト要約には、1時間〜14日前に見かけ、現在は視界にない物を、最大2行の
+  `見覚え:` 行として表示します。
 
-最近の出来事はそのまま残します。古い出来事は、より粗い時間区間へ要約します。忘却は明示的に行われます。古い観測は要約済みになってから削除され、要約層ごとに保持上限があり、エンティティは最終確認から 14 日で失効します（上限 40 行）。
+最近の出来事はそのまま残し、古い出来事は、より粗い時間区間へ要約します。古い観測を
+削除するのは、要約が完了してからです。要約層ごとに保持上限を設け、エンティティは最終確認
+から14日で失効します。保存するエンティティは最大40行です。
 
-第 0 層は `db.py` 内の SQLite `frames` テーブルと `observations` テーブルです。`observations.human_note` には、過去の記録へ紐づけた訂正を保持できます。第 1 層は生の観測を閉じた 10 分区間へ要約し、第 2 層は第 1 層を 1 時間区間へ、第 3 層は第 2 層を 6 時間区間へ、第 4 層は第 3 層を 1 日区間へ要約します。`/situation` には、最近の生の変化と、内容がある最新の要約区間が入ります。第 1 層は最大 3 区間、第 2 層は最大 2 区間、第 3 層と第 4 層は各 1 区間です。
+第 0 層は、`db.py` 内の SQLite `frames` テーブルと `observations` テーブルです。
+`observations.human_note` には、過去の記録に紐づく訂正を保存できます。第 1 層は生の観測を
+完了済みの10分区間へ、第 2 層は第 1 層を1時間区間へ、第 3 層は第 2 層を6時間区間へ、
+第 4 層は第 3 層を1日区間へ要約します。
 
-LLM による要約は、認識処理が忙しくないときだけ予約されます。具体的には、ループ稼働中で場面が待機状態のとき、またはループが停止しているとき（単発観察だけの使い方では `/situation` の読み取りが統合役を引き継ぎます。奪い合う認識処理が存在しないためです）。それ以外のとき、読み取りは即時に作れる抽出的な代替要約を返します。`stable_seconds` は確認済みの安定時間です。成功した取得からだけ増え、カメラが古い状態になると現在値ではなくなります。生の変化を残す既定件数は `VISION_MAX_CHANGES=50` で、未統合の第 1 層行は保護され、強制上限は 500 行です。要約の保持数は `TIER_RETENTION` で、第 1 層が 12、第 2 層が 26、第 3 層が 12、第 4 層が 14 を保持し、最も粗い層ではおおむね 2 週間を見渡せます。
+`/situation` には、最近の生の変化と、内容のある最新の要約区間が入ります。第 1 層からは
+最大3区間、第 2 層からは最大2区間、第 3 層と第 4 層からは各1区間を返します。
+
+LLM による要約は、認識処理が空いているときだけ実行します。継続認識ループが動いている
+場合は、場面が待機状態になったときに要約します。ループが停止している場合は、単発観察だけの
+利用を想定し、`/situation` の読み取り時に要約を進めます。それ以外のタイミングでは、
+すぐに作れる抽出的な代替要約を返します。
+
+`stable_seconds` は、取得に成功した画像から確認できた安定時間です。取得に成功したときだけ
+増え、カメラから新しい画像が届かず stale 状態になると、ライブな値としては更新されません。
+生の変化は、既定では `VISION_MAX_CHANGES=50` 件を残します。まだ第 1 層へ統合していない行を
+保護しつつ、500行を強制上限とします。要約の保持数は `TIER_RETENTION` で決まり、第 1 層は12、
+第 2 層は26、第 3 層は12、第 4 層は14区間です。最も粗い層では、おおむね2週間を見渡せます。
 
 ### 利用とフィードバック
 
 図は英語セクションの Mermaid 図「Consumption And Feedback」を参照してください。
 
-この記憶が役立つのは、エージェントが低コストで利用でき、人間が誤りを訂正できる場合だけです。英語版の図は、プロンプト投入時フック、`POST /look`、キーワード監視、変化の読み上げ、訂正の戻し経路を示しています。
+この記憶を実用的にするには、エージェントが少ない処理で参照でき、人間が誤りを訂正できる
+必要があります。英語版の図は、プロンプト送信時のフック、`POST /look`、キーワード監視、
+変化の読み上げ、人間の訂正を記憶へ戻す経路を示しています。
 
-重要な点: フックは `MH_SITUATION_INJECT=1` で明示的に有効化し、セッションごとに `X-Situation-Watermark` ヘッダーを保存します。目立つ出来事があるまでは 1 行の存在通知に留め、必要になってから完全なブロックへ拡張します。Claude Code はシェルフックを直接 `UserPromptSubmit` で実行し、Codex は `situation-context-hook-codex.mjs`（`additionalContext`）、Antigravity は `situation-context-hook-agy.mjs`（`PreInvocation` → 一時的な `ephemeralMessage`、watermark キーは会話 ID 由来の `MH_SITUATION_SESSION_KEY`）でラップします。`POST /look` は新しいフレームを取得します。既定の `store=1` は通常の処理経路に通し、`store=0` は一時的な観察だけを行います。監視は現在キーワードのみで、`kind="enum"` は 501 を返します。`WatchRegistry.evaluate()` は概要、OCR、変化テキストに対して NFKC 正規化と大文字小文字の統一を使います。
+状況注入フックは、`MH_SITUATION_INJECT=1` で明示的に有効化します。フックはセッションごとに
+`X-Situation-Watermark` ヘッダーを保存します。目立つ出来事が起こるまでは、状況が存在する
+ことだけを1行で知らせ、必要になった時点で完全な情報ブロックへ切り替えます。
 
-`ChangeNarrator` は、信頼度が低い行、初回基準行、変化なしの行、短すぎる行を読み飛ばします。`WebhookAlertSink` は `{"text": ..., "watch": ...}` を設定済み Webhook へ POST します。実行中のスタックは `http://127.0.0.1:8096/alert` を使います。その後、スピーカーブリッジが Kokoro 音声を合成し、WAV バイト列を M12 の `/api/headroom/audio` エンドポイントへ `X-Headroom-Auth` 付きで送ります。
+Claude Code は `UserPromptSubmit` からシェルフックを直接実行します。Codex は
+`situation-context-hook-codex.mjs` を使って `additionalContext` に包みます。Antigravity は
+`situation-context-hook-agy.mjs` を使い、`PreInvocation` から一時的な `ephemeralMessage` として
+渡します。Antigravity のウォーターマーク用キーは、会話 ID から作った
+`MH_SITUATION_SESSION_KEY` です。
 
-`POST /correction` は MCP ツール `vision_correct` としてもエージェントに公開されており、会話中の訂正をシェル承認なしで記憶へ届けられます。同様に `POST /perception/start|stop` と `GET /perception/status` は MCP ツール `vision_watch`、`POST /perception/narrate` は `vision_narrate` として公開されており、「見続けて」「実況やめて」「ミュート」のような音声指示もシェル承認なしで処理できます。まだ場面が存在しない場合はリクエストを拒否します。有効な訂正はメモリ上にあり、特定の場面に紐づきます。保存済みの場面変化、`VISION_CORRECTION_HASH_DRIFT` を超えるハッシュのずれ、または `VISION_CORRECTION_TTL_S` によって失効します。このエンドポイントは、基準となる記録の `observations.human_note` にも訂正を書き込み、それを含む要約を無効化します。`VISION_CORRECTION_TO_MODEL=1` の場合、最も新しい有効な訂正は、diffusiongemma プロンプト内で別個の「古い可能性がある」助言として渡されます。
+`POST /look` は新しいフレームを取得します。既定の `store=1` は通常の処理経路へ通し、
+`store=0` は保存しない一時的な観察だけを行います。現在の監視はキーワードだけに対応し、
+`kind="enum"` には 501 を返します。`WatchRegistry.evaluate()` は、概要、OCR、変化テキストを
+NFKC で正規化し、大文字と小文字も区別せずに照合します。
+
+`ChangeNarrator` は、信頼度が低い観測、最初の基準観測、変化がない観測、短すぎる文を
+読み上げません。`WebhookAlertSink` は `{"text": ..., "watch": ...}` を設定済みの Webhook へ
+POST します。実行中のスタックでは `http://127.0.0.1:8096/alert` を使います。その後、
+スピーカーブリッジが Kokoro で音声を合成し、WAV バイト列を `X-Headroom-Auth` 付きで
+M12 の `/api/headroom/audio` エンドポイントへ送ります。
+
+`POST /correction` は MCP ツール `vision_correct` としても公開されています。そのため、
+エージェントは会話中の訂正をシェル承認なしで記憶へ渡せます。同様に、
+`POST /perception/start|stop` と `GET /perception/status` は `vision_watch`、
+`POST /perception/narrate` は `vision_narrate` として公開されています。「見続けて」
+「実況やめて」「ミュート」といった音声指示も、シェル承認なしで処理できます。
+
+まだ場面が記録されていない場合、訂正リクエストは拒否されます。有効な訂正はメモリ上で
+特定の場面に紐づきます。新しい場面変化が保存されたとき、画像ハッシュのずれが
+`VISION_CORRECTION_HASH_DRIFT` を超えたとき、または `VISION_CORRECTION_TTL_S` の期限を
+迎えたときに失効します。
+
+このエンドポイントは、基準となる記録の `observations.human_note` にも訂正を書き込み、
+その記録を含む要約を無効化します。`VISION_CORRECTION_TO_MODEL=1` の場合は、最新の有効な
+訂正を、古くなっている可能性のある独立した助言として diffusiongemma のプロンプトへ渡します。
 
 ### 運用クイックリファレンス
 
@@ -378,10 +454,22 @@ LLM による要約は、認識処理が忙しくないときだけ予約され�
     ./scripts/run-vision-stack.sh --check
     ./scripts/run-vision-stack.sh
 
-`--check` は何も起動しません。永続環境変数ファイル、M12 の発見、diffusiongemma の状態、vision-worker のヘルス確認用エンドポイント、M12 警告スピーカーのポートがすでに開いているかを確認します。起動スクリプトは diffusiongemma vLLM、`vision-worker`、M12 警告スピーカーブリッジを起動または再利用します。Voxtral や ASR 経路は起動しません。ASR はオペレータースタックが担当します。
+`--check` は何も起動しません。永続環境変数ファイル、M12 の検出状況、diffusiongemma の状態、
+vision-worker のヘルス確認用エンドポイント、M12 警告スピーカーのポートが既に開いているかを
+確認します。
 
-ライブ設定と環境変数表は [vision-worker/README.md](../../vision-worker/README.md#key-environment-variables) を参照してください。この README には、スタック全体の簡易動作確認チェックリストと `--check` の注記もあります。
-標準の diffusiongemma/vLLM 経路、Hugging Face モデルカードへのリンク、別の OpenAI 互換視覚エンドポイントへ差し替える場合に必要な JSON 契約は [vision-worker/README.md](../../vision-worker/README.md#real-model-diffusiongemma-via-vllm) にまとめています。
+起動スクリプトは、diffusiongemma vLLM、`vision-worker`、M12 警告スピーカーブリッジを
+起動または再利用します。Voxtral や ASR 経路は起動しません。ASR はオペレータースタックが
+担当します。
+
+ライブ設定と環境変数表は、[vision-worker/README.md](../../vision-worker/README.md#key-environment-variables)
+を参照してください。この README には、スタック全体の簡易動作確認チェックリストと `--check` の
+注記もあります。
+
+標準の diffusiongemma/vLLM 経路、Hugging Face モデルカードへのリンク、別の OpenAI 互換
+視覚エンドポイントへ差し替える場合に必要な JSON 契約は、
+[vision-worker/README.md](../../vision-worker/README.md#real-model-diffusiongemma-via-vllm)に
+まとめています。
 
 スタック起動後に役立つヘルス確認:
 
@@ -389,4 +477,6 @@ LLM による要約は、認識処理が忙しくないときだけ予約され�
     curl -s http://127.0.0.1:8095/situation
     curl -s -X POST http://127.0.0.1:8095/look
 
-エージェント向けの振る舞いでは、安全上の境界を見える形に保ってください。このサブシステムは情報提供と補助のためのものです。低頻度でサンプリングし、ネットワーク越しに動くため、運転、道路横断、その他の安全上重要な警告には使ってはいけません。
+エージェント向けの振る舞いでは、安全上の境界を明示してください。このサブシステムは、
+情報提供と補助のためのものです。低頻度でサンプリングし、ネットワーク越しに動くため、運転、
+道路横断、その他の安全上重要な警告には使ってはいけません。

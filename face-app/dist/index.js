@@ -23,6 +23,10 @@ import { createOwnerInboxStateStore } from './owner_inbox_state.js';
 import { createOwnerInboxApi } from './owner_inbox_api.js';
 import { createHookBridge } from './hook_bridge.js';
 import { createHelperStuckDetector } from './helper_stuck_detector.js';
+import { createMediaController, parseMediaAllowedEndpoints } from './media_controller.js';
+import { createMediaProxy } from './media_proxy.js';
+import { createMediaApi } from './media_api.js';
+import { createAudioFocusController } from './audio_focus_controller.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -210,6 +214,22 @@ const ownerInboxState = createOwnerInboxStateStore({
 });
 ownerInboxState.load();
 let liveServer = null;
+const mediaAllowedEndpoints = parseMediaAllowedEndpoints(process.env.MH_MEDIA_ALLOWED_ENDPOINTS, { log: console });
+const mediaController = createMediaController({
+  allowedEndpoints: mediaAllowedEndpoints,
+  broadcast(payload) {
+    return liveServer?.broadcast(payload) ?? false;
+  }
+});
+const mediaProxy = createMediaProxy({ controller: mediaController, log: console });
+const mediaApi = createMediaApi({ controller: mediaController, proxy: mediaProxy });
+const audioFocusController = createAudioFocusController({
+  releaseDelayMs: 1500,
+  broadcast(payload) {
+    return liveServer?.broadcast(payload) ?? false;
+  }
+});
+console.info(`[face-app] generic media=${mediaAllowedEndpoints.length > 0 ? 'enabled' : 'disabled'} endpoints=${mediaAllowedEndpoints.length}`);
 const agentLifecycleRuntime = createAgentLifecycleRuntime({
   stateStore: agentRuntimeState,
   assignmentStateStore: agentAssignmentState,
@@ -565,6 +585,9 @@ const server = await startFaceWebSocketServer({
   },
   async onHttpRequest(request, response) {
     const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (await mediaApi.handleHttpRequest(request, response)) {
+      return true;
+    }
     if (await agentLifecycleApi.handleHttpRequest(request, response)) {
       return true;
     }
@@ -661,6 +684,11 @@ const server = await startFaceWebSocketServer({
         browserAudio: {
           maxChannels: browserAudioMaxChannels
         },
+        media: {
+          enabled: mediaAllowedEndpoints.length > 0,
+          mimeType: 'audio/mpeg',
+          bitrate: 128000
+        },
         auth: {
           required: Boolean(authToken),
           tokenQueryParam: 'auth_token'
@@ -676,6 +704,8 @@ const server = await startFaceWebSocketServer({
   log: console
 });
 liveServer = server;
+mediaController.replay();
+audioFocusController.replay();
 
 try {
   const cleanupResult = await agentLifecycleRuntime.cleanupAgentsOnStartup();
@@ -726,6 +756,9 @@ if (ttsEnabled) {
       return server.broadcast(payload);
     },
     audioStore: ttsAudioStore,
+    onActivityChange(activity) {
+      audioFocusController.update(activity);
+    },
     defaultTtlMs: faceConfig.tts.defaultTtlMs,
     autoInterruptAfterMs: faceConfig.tts.autoInterruptAfterMs,
     qwenBoundarySpeaker: process.env.MH_QWEN_TTS_BOUNDARY_SPEAKER ?? 'Ono_Anna',
@@ -756,6 +789,8 @@ async function shutdown(signal) {
     if (ttsController) {
       await ttsController.stop();
     }
+    audioFocusController.close();
+    mediaController.close();
     if (operatorRealtimeAsrProxy) {
       await operatorRealtimeAsrProxy.closeAll();
     }

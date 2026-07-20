@@ -15,6 +15,7 @@ subsystem-specific guides.
 ### Guides
 
 - [AtomS3R Devices](guides/atom-devices.md#english) ([日本語](guides/atom-devices.md#japanese)) - Start here for hardware: the two physical Atom devices, AtomS3R vs AtomS3R-M12, which docs belong to which, and the `--asr-lang` gotcha.
+- [Generic Browser Media Integration](guides/generic-browser-media.md#english) ([日本語](guides/generic-browser-media.md#japanese)) - Prepare a source-agnostic third-party MP3 producer/controller, including optional catalog and local-file safety, diagrams, HTTP/MCP contracts, iPhone/iPad behavior, security, and optional TTS focus.
 - [Operator Stack and ASR Guide](guides/operator-stack.md#english) ([日本語](guides/operator-stack.md#japanese)) - Launcher choices, tmux bridge behavior, operator UI, ASR profiles, remote access, and recovery.
 - [TTS and Speech Guide](guides/tts-and-speech.md#english) ([日本語](guides/tts-and-speech.md#japanese)) - Kokoro/Qwen3 setup, speech gating, long-speech behavior, and text normalization.
 - [AtomS3R Voice Guide](guides/atoms3r-voice.md#english) ([日本語](guides/atoms3r-voice.md#japanese)) - The face AtomS3R: hands-free VAD, flashing/provisioning, ADPCM, tuning knobs, PTT, and troubleshooting.
@@ -47,6 +48,7 @@ subsystem-specific guides.
 ### ガイド
 
 - [AtomS3R Devices](guides/atom-devices.md#japanese) ([English](guides/atom-devices.md#english)) - 最初に読むハードウェア整理。顔 AtomS3R と AtomS3R-M12 の違い、対応する文書、`--asr-lang` の落とし穴。
+- [汎用ブラウザメディア連携](guides/generic-browser-media.md#japanese) ([English](guides/generic-browser-media.md#english)) - 第三者の MP3 配信元とコントローラーを準備する方法、任意のカタログ機能、ローカルファイルを安全に扱う方法、構成図、HTTP/MCP 契約、iPhone/iPad での挙動、セキュリティ、任意の TTS フォーカス連携。
 - [Operator Stack and ASR Guide](guides/operator-stack.md#japanese) ([English](guides/operator-stack.md#english)) - 起動スクリプト、tmux bridge、operator UI、ASR プロファイル、リモート利用、復旧。
 - [TTS and Speech Guide](guides/tts-and-speech.md#japanese) ([English](guides/tts-and-speech.md#english)) - Kokoro/Qwen3、発話ゲート、長文発話、発話前テキスト正規化。
 - [AtomS3R Voice Guide](guides/atoms3r-voice.md#japanese) ([English](guides/atoms3r-voice.md#english)) - 顔 AtomS3R の VAD、ファーム書き込み、プロビジョニング、ADPCM、調整ノブ、PTT、トラブルシュート。

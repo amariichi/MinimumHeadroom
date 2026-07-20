@@ -8,6 +8,8 @@ Purpose: provide a practical baseline so coding agents continuously report inten
 - `face_event` (primary status channel)
 - `face_say` (spoken status channel for key moments)
 
+<a id="stable-agent-id-identity"></a>
+
 ### 1.1 Stable `agent_id` identity
 
 Every `face_ping` / `face_event` / `face_say` payload must carry an `agent_id` that matches the caller's real identity. Prefer setting `MH_FACE_AGENT_ID` in the agent process environment so the MCP server can auto-fill `agent_id` for all three tools. If that environment default is unavailable, pass `agent_id` explicitly.
@@ -115,6 +117,8 @@ This preserves freshness even for similar text.
   - `owner.inbox.list`
   - `owner.inbox.resolve`
   - `agent.delete`
+- Capture `active_stream_id` from the first `agent.list(scope="stream")` result. A helper that belongs to the current user task must use that stream, even when `source_repo_path` or `target_repo_root` points at another repository. Omit `stream_id` to use the active default or pass the exact active value; do not derive a new stream from the helper repository.
+- For cross-repository missions, use absolute `target_paths`. After spawn, require `visible_in_active_stream=true` and confirm the helper appears in a fresh `agent.list(scope="stream")`. If spawn returns a visibility warning, treat it as `needs_attention` unless the separate stream was intentional.
 - Treat `agent.assign` as the durable mission record and `agent.inject` as controlled delivery for bootstrap or explicit reinstruction.
 - For review, investigation, or other narrow helper work, shape the mission explicitly:
   - set `role` when it helps the helper stay narrow (`reviewer`, `investigator`, `implementer`, `docs-check`)

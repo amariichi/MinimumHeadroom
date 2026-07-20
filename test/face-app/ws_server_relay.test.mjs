@@ -190,6 +190,69 @@ test('ws server replays latest replayable payloads to newly connected clients', 
   assert.deepEqual(replayed.lines, ['hello']);
 });
 
+test('audio focus observers receive only replayable focus state and cannot inject payloads', async (t) => {
+  const received = [];
+  const authToken = 'focus/+token=';
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    relayPayloads: true,
+    authToken,
+    onPayload(payload) {
+      received.push(payload);
+    },
+    log: { info: () => {}, error: () => {} }
+  });
+  t.after(async () => server.stop());
+
+  server.broadcast({ v: 1, type: 'media_state', state: 'active', revision: 1, ts: Date.now() });
+  server.broadcast({ v: 1, type: 'audio_focus', state: 'normal', revision: 1, ts: Date.now() });
+
+  const encodedAuth = Buffer.from(authToken, 'utf8').toString('base64url');
+  const focus = new WebSocket(server.url, ['mh-audio-focus-v1', 'mh-face-auth-b64.' + encodedAuth]);
+  const viewerUrl = new URL(server.url);
+  viewerUrl.searchParams.set('auth_token', authToken);
+  const viewer = new WebSocket(viewerUrl);
+  const replayPromise = waitForMessage(focus);
+  t.after(() => {
+    focus.close();
+    viewer.close();
+  });
+  await waitForOpen(focus);
+  await waitForOpen(viewer);
+  assert.equal(focus.protocol, 'mh-audio-focus-v1');
+
+  const replay = await replayPromise;
+  assert.equal(replay.type, 'audio_focus');
+  assert.equal(replay.state, 'normal');
+
+  let focusMessages = 0;
+  let viewerMessages = 0;
+  focus.addEventListener('message', () => {
+    focusMessages += 1;
+  });
+  viewer.addEventListener('message', () => {
+    viewerMessages += 1;
+  });
+  await delay(30);
+  const viewerReplayMessages = viewerMessages;
+  server.broadcast({ v: 1, type: 'event', name: 'cmd_started', ts: Date.now() });
+  await delay(30);
+  assert.equal(focusMessages, 0);
+  assert.equal(viewerMessages, viewerReplayMessages + 1);
+
+  const viewerMessagesBeforeInjection = viewerMessages;
+  focus.send(JSON.stringify({ v: 1, type: 'event', name: 'injected', ts: Date.now() }));
+  await delay(60);
+  assert.equal(received.length, 0);
+  assert.equal(viewerMessages, viewerMessagesBeforeInjection);
+
+  const nextFocus = waitForMessage(focus);
+  server.broadcast({ v: 1, type: 'audio_focus', state: 'speech', revision: 2, ts: Date.now() });
+  assert.equal((await nextFocus).state, 'speech');
+});
+
 test('ws server allows custom HTTP API route handling', async (t) => {
   const server = await startFaceWebSocketServer({
     host: '127.0.0.1',
@@ -333,5 +396,22 @@ test("ws server suppresses audio payloads to arduino clients by default", async 
   });
   const arduinoState = await arduinoStatePromise;
   assert.equal(arduinoState.type, "tts_state");
+  server.broadcast({
+    v: 1,
+    type: "media_state",
+    state: "active",
+    revision: 1,
+    ts: Date.now()
+  });
+  server.broadcast({
+    v: 1,
+    type: "audio_focus",
+    state: "speech",
+    revision: 1,
+    ts: Date.now()
+  });
+  await delay(20);
   assert.equal(arduinoMessages.some((payload) => payload.type === "tts_audio"), false);
+  assert.equal(arduinoMessages.some((payload) => payload.type === "media_state"), false);
+  assert.equal(arduinoMessages.some((payload) => payload.type === "audio_focus"), false);
 });
