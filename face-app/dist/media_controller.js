@@ -53,9 +53,11 @@ function sameEndpoint(left, right) {
 export function parseMediaAllowedEndpoints(value, { log = console } = {}) {
   const endpoints = [];
   const seen = new Set();
+  let itemNumber = 0;
   for (const raw of String(value ?? '').split(',')) {
     const item = raw.trim();
     if (!item) continue;
+    itemNumber += 1;
     try {
       const url = new URL(item);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('scheme');
@@ -67,7 +69,7 @@ export function parseMediaAllowedEndpoints(value, { log = console } = {}) {
         endpoints.push(url);
       }
     } catch (error) {
-      log.warn?.('[face-app] ignoring invalid MH_MEDIA_ALLOWED_ENDPOINTS item: ' + item + ' (' + error.message + ')');
+      log.warn?.('[face-app] ignoring invalid MH_MEDIA_ALLOWED_ENDPOINTS item #' + itemNumber + ' (' + error.message + ')');
     }
   }
   return endpoints;

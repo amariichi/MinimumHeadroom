@@ -13,6 +13,9 @@ test('media endpoint allowlist ignores unsafe configuration and matches exact pa
   );
   assert.equal(allowedEndpoints.length, 2);
   assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /item #3/);
+  assert.match(warnings[1], /item #4/);
+  assert.doesNotMatch(warnings.join('\n'), /user:pass|bad\.test|\?x=1/);
 
   const controller = createMediaController({
     allowedEndpoints,
