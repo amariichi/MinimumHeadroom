@@ -24,6 +24,17 @@ test('shouldIgnoreToggleTarget returns false for non-interactive targets', () =>
   assert.equal(shouldIgnoreToggleTarget(null), false);
 });
 
+test('shouldIgnoreToggleTarget ignores draggable panels marked as stage gesture exclusions', () => {
+  const target = {
+    closest(selector) {
+      assert.match(selector, /data-stage-gesture-ignore/);
+      return { dataset: { stageGestureIgnore: '' } };
+    }
+  };
+
+  assert.equal(shouldIgnoreToggleTarget(target), true);
+});
+
 test('createDoubleTapTracker recognizes a valid double tap', () => {
   const trackTap = createDoubleTapTracker({ maxIntervalMs: 300, maxDistancePx: 20 });
   assert.equal(trackTap(1_000, 100, 100), false);

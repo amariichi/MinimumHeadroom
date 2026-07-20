@@ -330,6 +330,7 @@ body.face-display-hidden #face-canvas {
     linear-gradient(135deg, rgba(8, 27, 31, 0.94), rgba(6, 14, 23, 0.92));
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.38);
   backdrop-filter: blur(8px);
+  transform: translate(var(--draggable-panel-x, 0px), var(--draggable-panel-y, 0px));
 }
 
 .media-player::before {
@@ -348,6 +349,30 @@ body.face-display-hidden #face-canvas {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.media-player-header {
+  position: relative;
+  min-height: 18px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.media-player.is-dragging .media-player-header {
+  cursor: grabbing;
+}
+
+.media-player-drag-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 26px;
+  height: 5px;
+  border-top: 1px solid rgba(139, 163, 185, 0.6);
+  border-bottom: 1px solid rgba(139, 163, 185, 0.42);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .media-player-kicker,
