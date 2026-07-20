@@ -72,6 +72,7 @@ import {
   createFaceRig
 } from './face_rig.js';
 import { createMediaPlayer } from './media_player.js';
+import { createDraggablePanel } from './draggable_panel.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -93,6 +94,7 @@ const xrButtonSlot = document.getElementById('xr-button-slot');
 const uiHiddenHintEl = document.getElementById('ui-hidden-hint');
 const audioReplayButtonEl = document.getElementById('audio-replay');
 const mediaPlayerEl = document.getElementById('media-player');
+const mediaPlayerHeaderEl = mediaPlayerEl?.querySelector('[data-media-player-drag-handle]');
 const mediaPlayerStatusEl = document.getElementById('media-player-status');
 const mediaPlayerTitleEl = document.getElementById('media-player-title');
 const mediaPlayerSubtitleEl = document.getElementById('media-player-subtitle');
@@ -399,6 +401,7 @@ let pendingReplayPayload = null;
 let browserAudioMixer = null;
 let browserAudioMaxChannels = BROWSER_AUDIO_MAX_CHANNELS_DEFAULT;
 let silentAudioDataUrl = null;
+let mediaPlayerDragController = null;
 const mediaPlayer = createMediaPlayer({
   onStateChange: renderMediaPlayerState
 });
@@ -4186,9 +4189,20 @@ function renderMediaPlayerState(state) {
     mediaPlayerErrorEl.textContent = '';
     mediaPlayerErrorEl.classList.add('hidden');
   }
+  if (visible) {
+    mediaPlayerDragController?.clampToBounds();
+  }
 }
 
 function installMediaPlayerControls() {
+  if (mediaPlayerEl && mediaPlayerHeaderEl && stageEl) {
+    mediaPlayerDragController = createDraggablePanel({
+      element: mediaPlayerEl,
+      handle: mediaPlayerHeaderEl,
+      bounds: stageEl,
+      edgePadding: 8
+    });
+  }
   mediaPlayerResumeEl?.addEventListener('click', () => {
     void mediaPlayer.resume();
   });
@@ -6018,6 +6032,7 @@ window.addEventListener('beforeunload', () => {
 
   releaseOperatorMicCapture();
   stopActiveBrowserAudio();
+  mediaPlayerDragController?.destroy();
   mediaPlayer.destroy();
   renderer.setAnimationLoop(null);
   renderer.dispose();

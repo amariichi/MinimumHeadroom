@@ -209,9 +209,10 @@
 
       <aside id="utterance" class="utterance hidden" aria-live="assertive"></aside>
       <div id="ui-hidden-hint" class="ui-hidden-hint hidden" aria-live="polite">UI hidden. Double tap, double click, or press Esc.</div>
-      <section id="media-player" class="media-player hidden" aria-live="polite" aria-label="Media playback">
-        <header class="media-player-header">
+      <section id="media-player" class="media-player hidden" data-stage-gesture-ignore aria-live="polite" aria-label="Media playback. Drag the top bar to move.">
+        <header class="media-player-header" data-media-player-drag-handle title="Drag to move">
           <span class="media-player-kicker">Media</span>
+          <span class="media-player-drag-grip" aria-hidden="true"></span>
           <span id="media-player-status" class="media-player-status">idle</span>
         </header>
         <p id="media-player-title" class="media-player-title">No media</p>

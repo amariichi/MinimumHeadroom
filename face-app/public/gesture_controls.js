@@ -1,4 +1,4 @@
-export const DEFAULT_INTERACTIVE_TOGGLE_SELECTOR = "button,input,select,textarea,label,a,[role='button']";
+export const DEFAULT_INTERACTIVE_TOGGLE_SELECTOR = "button,input,select,textarea,label,a,[role='button'],[data-stage-gesture-ignore]";
 export const DEFAULT_PAGE_ZOOM_ALLOWED_SELECTOR = ".operator-mirror";
 
 export function shouldIgnoreToggleTarget(target, selector = DEFAULT_INTERACTIVE_TOGGLE_SELECTOR) {
