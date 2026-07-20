@@ -139,33 +139,34 @@ Qwen3 does not use this split.
 <a id="japanese"></a>
 ## 日本語
 
-### 既定 backend
+### 既定のバックエンド
 
-既定の TTS は Kokoro ONNX + Misaki です。現状では、Kokoro が安定した既定経路で、Qwen3 は任意の上級者向け backend です。
+既定の TTS は Kokoro ONNX + Misaki です。現在は Kokoro が安定した標準経路で、Qwen3 は
+上級者向けの任意のバックエンドです。
 
-Kokoro のモデルファイルは `assets/kokoro/` に置きます:
+Kokoro のモデルファイルは `assets/kokoro/` に置きます。
 
 - `kokoro-v1.0.onnx`
 - `voices-v1.0.bin`
 
-これらの大きいモデルファイルは git では意図的に無視しています。
+これらの大きなモデルファイルは、意図的に Git の管理対象から除外しています。
 
 ### 任意の Qwen3 セットアップ
 
-Qwen3 環境を導入するには:
+Qwen3 の環境を導入するには、次のコマンドを実行します。
 
     ./scripts/setup-qwen3-tts.sh
 
 このスクリプトは `./.venv-qwen-tts` を作り、既定の Kokoro 経路を軽いまま保ちます。
 
-Qwen3 での確認や起動:
+Qwen3 の動作確認と起動には、次のコマンドを使います。
 
     TTS_ENGINE=qwen3 ./scripts/run-tts-worker.sh --smoke
     TTS_ENGINE=qwen3 ./scripts/run-face-app.sh
 
 ### 現在の Qwen3 既定値
 
-現在の既定値:
+現在の既定値は次のとおりです。
 
 <details>
 <summary>Qwen3 環境変数</summary>
@@ -180,27 +181,33 @@ Qwen3 での確認や起動:
 
 </details>
 
-`face-app` 側では `MH_QWEN_TTS_BOUNDARY_SPEAKER` も使えます。現在の既定は `Ono_Anna` で、mixed-script 境界リスク文にだけ使います。worker 自体の既定話者は `Serena` のままです。
+`face-app` 側では `MH_QWEN_TTS_BOUNDARY_SPEAKER` も使えます。現在の既定値は `Ono_Anna` で、
+日本語と英語が切り替わる境界を含む、読み上げが不安定になりやすい文だけに使用します。
+ワーカー自体の既定話者は `Serena` のままです。
 
 ### Qwen3 の発話調整
 
-Qwen3 は Kokoro のような ASCII / 非ASCII の単純分岐を使いません。1 つの話者、1 つの言語プロファイルで全文を読みます。
+Qwen3 は、Kokoro のような ASCII / 非 ASCII の単純な分岐を使いません。1つの話者と1つの
+言語プロファイルで、全文を読み上げます。
 
-現在の挙動:
+現在の動作は次のとおりです。
 
-- English プロファイルの文頭が CJK 漢字なら、音声生成時だけ `はい、` を前置き
-- ASCII トークンの直後に漢字が来る場合は、音声用テキストへ日本語句読点を補って切り替えを緩和
-- 合成前に speech-only alias を適用
+- English プロファイルで文頭が CJK 漢字の場合は、音声生成時だけ `はい、` を前置きします。
+- ASCII トークンの直後に漢字が続く場合は、読み上げ用テキストへ日本語の句読点を補い、
+  言語の切り替わりを滑らかにします。
+- 合成前に、読み上げだけに使う別名を適用します。
   - `request` -> `リクエスト`
   - `pull request` -> `プルリクエスト`
 
-`MH_QWEN_TTS_SPEED` は現在 `1.0` が既定です。これは生の波形をそのまま使う設定で、`1.0` より大きくすると速くなりますが、time-stretch によって明瞭さが少し落ちることがあります。
+`MH_QWEN_TTS_SPEED` の現在の既定値は `1.0` です。生成した波形をそのまま使う設定です。
+`1.0` より大きくすると読み上げは速くなりますが、時間方向の伸縮によって明瞭さが少し
+低下することがあります。
 
 ### 発話ゲート
 
 `face-app` はリポジトリルートの `config.yaml`（または `FACE_CONFIG_PATH`）を読み、`speech_gate` を使って発話頻度を制御します。
 
-チェックイン済みの既定値:
+リポジトリに含まれる既定値:
 
     speech_gate:
       min_interval_priority1_ms: 1500
@@ -210,40 +217,41 @@ Qwen3 は Kokoro のような ASCII / 非ASCII の単純分岐を使いません
       session_limit_low_priority: 12
       dedupe_ms_low_priority: 800
 
-これは `face.say` の優先度・全体ウィンドウ・セッションウィンドウ・重複抑制時間に効きます。
+これらの値は、`face.say` の優先度、全体の時間枠、セッション単位の時間枠、重複を抑制する
+時間に適用されます。
 
 ### 長文発話の挙動
 
-現在の長文関連ルール:
+長文に関する現在の規則:
 
 - `ttl_ms` 未指定時の既定は `60000`
 - `mcp-server` 側では `FACE_SAY_DEFAULT_TTL_MS` で上書き可能
 - `face-app` 側では `config.yaml` の `tts.default_ttl_ms` に対応
 - `tts.auto_interrupt_after_ms` で、遅れて来た `replace` を `interrupt` 扱いに昇格できる
 
-発話中は:
+発話中は、次のように処理します。
 
-- `policy=replace`: 現在の再生を継続し、保留は最新 1 件だけ
-- `policy=interrupt`（または `priority=3`）: 現在の再生を即停止
+- `policy=replace`: 現在の再生を続け、保留する発話は最新の1件だけにします。
+- `policy=interrupt`（または `priority=3`）: 現在の再生を直ちに停止します。
 
 ### 発話前のテキスト正規化
 
 現在は、英語寄りの文と日本語寄りの文で正規化経路を分けています。
 
-英語テキストの正規化（日本語スクリプトを含まない文）:
+英語テキストの正規化（日本語の文字を含まない文）:
 
 - スマートクォートを ASCII クォートへ
 - 三点リーダや `...` を半角スペースへ
 - `。` `、` `・` を半角スペースへ
-- no-break space を半角スペースへ
+- 改行されない空白（no-break space）を半角スペースへ
 - ラテン文字に付いた結合文字を削る
 - ASCII トークン間のダッシュを空白へ
 
-日本語テキストの正規化（日本語スクリプトを含む文）:
+日本語テキストの正規化（日本語の文字を含む文）:
 
 - スマートクォートを ASCII クォートへ
 - 三点リーダや `...` を `、` へ
-- no-break space を半角スペースへ
+- 改行されない空白（no-break space）を半角スペースへ
 - ラテン文字に付いた結合文字を削る
 - 日本語の句読点は保持
 - 日本語の数値列の中の単発小数区切りを `点` に変換
@@ -254,10 +262,10 @@ Qwen3 は Kokoro のような ASCII / 非ASCII の単純分岐を使いません
 
 ### Kokoro のみの言語ルーティング
 
-単純な言語分岐を使うのは Kokoro だけです:
+単純な言語分岐を使うのは Kokoro だけです。
 
-- ASCII のみ -> 英語音声（`en-us`, speed `1.0`）
-- 非ASCII を含む -> 日本語音声（`j`, speed `1.2`）
+- ASCII のみ → 英語音声（`en-us`、速度 `1.0`）
+- 非 ASCII を含む → 日本語音声（`j`、速度 `1.2`）
 
 Qwen3 はこの分岐を使いません。
 

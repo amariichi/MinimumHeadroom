@@ -92,13 +92,18 @@ device's story is spread across several files. Read them in this order:
 
 ## 日本語
 
+このプロジェクトでは、最大 **2台**の M5Stack Atom 実機を使えます。名前がほぼ同じため、
+1台のデバイスだと誤解しやすい点に注意してください。このページは、それぞれの役割と違い、
+参照すべきドキュメントを示す案内図です。
+
 ### 2つのデバイス（要点）
 
-- **AtomS3R** — *顔＋音声入出力。* 128×128 の LCD 顔と Atomic Echo Base による発話、
-  そして PTT／ハンズフリー音声入力用のマイクを備えます。話しかける相手の卓上端末で、
-  **operator stack** に属します。
+- **AtomS3R** — *顔＋音声入出力。* 128×128 の LCD に表示する顔、Atomic Echo Base による
+  発話、PTT／ハンズフリー音声入力用のマイクを備えます。対話に使う卓上端末で、
+  **オペレータースタック**に属します。
 - **AtomS3R-M12** — *カメラ＋音声出力。* カメラと、音声アラート用の Atomic Echo Base を
-  備えます。**マイクは非搭載** — 見る／喋る専用です。**vision stack** に属します。
+  備えます。**マイクは搭載しておらず**、見ることと話すことに特化しています。
+  **視覚スタック**に属します。
 
 どちらも「AtomS3R」基板なので名前が衝突します。ドキュメント中では、無印の
 **AtomS3R** は顔デバイス、**AtomS3R-M12** はカメラデバイスを指します。
@@ -106,36 +111,38 @@ device's story is spread across several files. Read them in this order:
 | | **AtomS3R**（顔＋音声入出力） | **AtomS3R-M12**（カメラ＋音声出力） |
 | --- | --- | --- |
 | 役割 | 話しかける卓上の顔 | シーンを説明するアンビエントカメラ |
-| マイク（音声入力） | **あり** — PTT + ハンズフリー VAD | **なし** — firmware でマイク無効 |
+| マイク（音声入力） | **あり** — PTT + ハンズフリー VAD | **なし** — ファームウェアで無効 |
 | スピーカ（音声出力） | Atomic Echo Base | Atomic Echo Base |
 | 画面 | 128×128 LCD 顔 | なし（`-DHEADROOM_NO_DISPLAY`） |
 | カメラ | なし | あり |
-| 接続先 | operator stack（face-app, ASR, TTS） | vision stack（vision-worker, diffusiongemma） |
-| ファーム build env | `m5stack-atoms3r` | `atoms3r-m12` |
-| ファーム エントリ | `src/main.cpp` | `src/main_m12.cpp` |
+| 接続先 | オペレータースタック（face-app、ASR、TTS） | 視覚スタック（vision-worker、diffusiongemma） |
+| ファームウェアのビルド環境 | `m5stack-atoms3r` | `atoms3r-m12` |
+| ファームウェアのエントリーポイント | `src/main.cpp` | `src/main_m12.cpp` |
 | `--asr-lang` プロビジョン | **有効**（音声を取り込むため） | **無視**（マイク無し） |
 
-どちらのデバイスも必須ではありません — コアの顔＋音声体験はハード無しのブラウザだけで
-動きます。各デバイスが何を足すかは[ハードウェア段階](../../README.ja.md#ハードウェア段階tiers)を参照。
+どちらのデバイスも必須ではありません。中心となる顔と音声の機能は、専用ハードウェアが
+なくてもブラウザだけで動きます。各デバイスが追加する機能は、
+[ハードウェア段階](../../README.ja.md#ハードウェア段階tiers)を参照してください。
 
 ### 1つのファームプロジェクト・2つのビルドターゲット
 
 両デバイスが1つのファームフォルダ `firmware/atoms3r-headroom/` に同居しているのは
-意図的です。ソースの大半（Wi-Fi transport・設定・シリアルプロビジョン・セットアップ
-ポータル・音声パス）を共有しているためで、ビルドを2つの PlatformIO 環境に分けています:
+意図的です。Wi-Fi 通信、設定、シリアルプロビジョニング、セットアップポータル、音声経路など、
+ソースの大半を共有しているためです。ビルドは2つの PlatformIO 環境に分けています。
 
-- `env:m5stack-atoms3r` は `src/main.cpp` をビルド → **顔**デバイス。
-- `env:atoms3r-m12` は顔 env を継承し、`main.cpp` と LCD レンダラを除外、
-  `-DHEADROOM_M12 -DHEADROOM_NO_DISPLAY` を追加して `src/main_m12.cpp` をビルド →
-  **カメラ**デバイス。
+- `env:m5stack-atoms3r` は `src/main.cpp` をビルドし、**顔デバイス**を生成します。
+- `env:atoms3r-m12` は顔デバイス用の環境を継承し、`main.cpp` と LCD レンダラーを除外します。
+  `-DHEADROOM_M12 -DHEADROOM_NO_DISPLAY` を追加して `src/main_m12.cpp` をビルドし、
+  **カメラデバイス**を生成します。
 
-つまり1フォルダから2つのファームができます。各デバイスは自分の env で焼いてください。
-[firmware README](../../firmware/atoms3r-headroom/README.md) を参照。
+このように、1つのフォルダーから2種類のファームウェアを生成できます。各デバイスに対応する
+環境を選んで書き込んでください。詳しくは
+[firmware README](../../firmware/atoms3r-headroom/README.md)を参照してください。
 
-### プロビジョンと `--asr-lang` の落とし穴
+### プロビジョニングと `--asr-lang` の注意点
 
-プロビジョンは Wi-Fi・face-app URL・認証トークン・device id・ASR 言語を、USB シリアル
-経由で**1台ずつ**デバイスに書き込みます:
+プロビジョニングでは、Wi-Fi、face-app の URL、認証トークン、デバイス ID、ASR の言語を、
+USB シリアル経由で**1台ずつ**書き込みます。
 
 ```bash
 node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 --device-id atom-... [options]
@@ -143,23 +150,23 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 --device-id atom-... [opt
 
 `--asr-lang ja|en` は**デバイスが取り込む音声**の言語を設定します。**AtomS3R-M12 は
 マイクを持たない**ため、このオプションは**顔 AtomS3R でのみ**意味を持ちます。`--asr-lang`
-は顔デバイスにだけプロビジョンしてください（M12 に設定しても効果はありません）。
-デプロイ言語を変えたとき（[`MH_LANG`](../../README.ja.md#ja-language-mh-lang) 参照）は、
-顔デバイスを一度だけ再プロビジョンします。
+は顔デバイスにだけ設定してください（M12 に設定しても効果はありません）。既定の運用言語を
+変えたときは、顔デバイスを一度だけ再プロビジョニングします。詳しくは
+[`MH_LANG`](../../README.ja.md#ja-language-mh-lang)を参照してください。
 
-### 各デバイスのドキュメントの所在（読む順）
+### デバイス別の読む順序
 
-ドキュメントはサブシステム別（firmware・worker・ガイド）に並んでいるため、各デバイスの
-話は複数ファイルに分かれています。次の順で読んでください:
+ドキュメントは、ファームウェア、ワーカー、ガイドなどのサブシステム別に分かれています。
+各デバイスについては、次の順に読んでください。
 
 **AtomS3R（顔＋音声入出力）:**
-1. [Firmware README](../../firmware/atoms3r-headroom/README.md) — ビルド・焼き・セットアップポータル・USB プロビジョン（`m5stack-atoms3r` env）。
-2. [AtomS3R Voice Guide](atoms3r-voice.md#japanese) — ハンズフリー VAD・PTT・調整ノブ・トラブルシュート。
+1. [Firmware README](../../firmware/atoms3r-headroom/README.md) — ビルド、書き込み、セットアップポータル、USB プロビジョニング（`m5stack-atoms3r` 環境）。
+2. [AtomS3R Voice Guide](atoms3r-voice.md#japanese) — ハンズフリー VAD、PTT、調整項目、トラブルシューティング。
 3. [Operator Stack and ASR Guide](operator-stack.md#japanese) — 顔デバイスが接続するスタック。
-4. [RMH Voice-First Mode](../../examples/rmh-voice-mode/README.md) — 顔デバイス越しにコーディングエージェントと会話。
+4. [RMH Voice-First Mode](../../examples/rmh-voice-mode/README.md) — 顔デバイスを通じてコーディングエージェントと会話する方法。
 
 **AtomS3R-M12（カメラ＋音声出力）:**
-1. [M12 Camera Firmware Spec](../../firmware/atoms3r-headroom/doc/m12-camera-firmware.md) — カメラピンマップ・音声とカメラの共存・`atoms3r-m12` env。
-2. [vision-worker README](../../vision-worker/README.md) — vision worker + diffusiongemma の起動・環境変数。
-3. [M12 Vision Guide](m12-vision.md#japanese) — 情報のライフサイクル: 知覚・メモリ・忘却・修正・アラート。
+1. [M12 Camera Firmware Spec](../../firmware/atoms3r-headroom/doc/m12-camera-firmware.md) — カメラのピン配置、音声とカメラの共存、`atoms3r-m12` 環境。
+2. [vision-worker README](../../vision-worker/README.md) — vision-worker と diffusiongemma の起動、環境変数。
+3. [M12 Vision Guide](m12-vision.md#japanese) — 知覚、記憶、忘却、修正、アラートを含む情報のライフサイクル。
 4. [atoms3r-vision skill](../../doc/examples/skills/atoms3r-vision/SKILL.md) — エージェントがカメラメモリを問い合わせる方法。

@@ -8,6 +8,8 @@ Purpose: provide a practical baseline so coding agents continuously report inten
 - `face_event` (primary status channel)
 - `face_say` (spoken status channel for key moments)
 
+<a id="stable-agent-id-identity"></a>
+
 ### 1.1 Stable `agent_id` identity
 
 Every `face_ping` / `face_event` / `face_say` payload must carry an `agent_id` that matches the caller's real identity. Prefer setting `MH_FACE_AGENT_ID` in the agent process environment so the MCP server can auto-fill `agent_id` for all three tools. If that environment default is unavailable, pass `agent_id` explicitly.

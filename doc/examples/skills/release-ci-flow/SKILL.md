@@ -10,7 +10,7 @@ Use this skill when the user wants a reliable release process with GitHub Action
 ## Inputs you must confirm
 
 - Target branch name (default `main`)
-- Next version tag (for example `v1.1`)
+- Next version tag (for example `v1.1.0`)
 - Merge style (`squash` preferred unless the user says otherwise)
 - Whether branch protection requires passing checks
 

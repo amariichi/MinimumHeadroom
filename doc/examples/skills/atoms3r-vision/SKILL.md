@@ -15,7 +15,7 @@ The M12 has a **fixed, soft (slightly out-of-focus) wide lens** and streams a sm
 
 - For **scene / object / "what's around me"** questions → this skill is the right tool.
 - For **fine reading** (documents, labels, homework, dense screens) → do **not** use the M12; route the user to the **phone-camera path** instead (a separate capability). Say so plainly rather than returning an unreliable transcription.
-- `ocr_full` is reliable only for large text; treat it as a hint, never as an exact transcription. Fetching the full stored frame (`GET /frame/{id}`) lets you look yourself, but the lens is still soft — it does not turn the M12 into a document scanner. `full`-resolution capture is **not** worth the bandwidth and does not sharpen the soft optics.
+- `ocr_full` is reliable only for large text; treat it as a hint, never as an exact transcription. Fetching the full stored frame (`GET /frame/{id}`) lets you look yourself, but the lens is still soft — it does not turn the M12 into a document scanner. Full-resolution capture is **not** worth the bandwidth and does not sharpen the soft optics.
 
 ## ⚠️ Safety boundary
 

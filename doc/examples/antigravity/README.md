@@ -122,7 +122,7 @@ plugin without starting a conversation:
 The GUI reads its MCP server list from `~/.gemini/config/mcp_config.json`. **A common failure mode is that this file exists but is 0 bytes**, which causes `unexpected end of JSON input` in `~/.config/Antigravity/logs/language_server.log` and silently disables every MCP server. Always check the file is valid JSON before debugging anything else:
 
     cat ~/.gemini/config/mcp_config.json | head -c 100
-    node -e 'JSON.parse(require("fs").readFileSync("/home/'$USER'/.gemini/config/mcp_config.json","utf8"))'   # exits non-zero on parse error
+    node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME+"/.gemini/config/mcp_config.json","utf8"))'   # exits non-zero on parse error
 
 ### Register the MCP server
 
@@ -157,7 +157,8 @@ The MCP registration above already makes the tools callable from the GUI; the pl
 
 **Fully quit** Antigravity — not just close the window. The Electron process keeps running on close-to-tray, and stale processes will not re-read configs.
 
-    pkill -f '/opt/antigravity-2/antigravity'
+    pgrep -af antigravity              # verify the installed executable path first
+    pkill -f '/opt/antigravity-2/antigravity'  # adjust this path for your installation
     # then relaunch from the desktop launcher
 
 ### Verify in the GUI

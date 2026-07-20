@@ -292,7 +292,12 @@ Then open the served URL from the phone or tablet with the token once:
 
 The browser stores the token in `sessionStorage`, and face-app also sets an `mh_face_auth` cookie for that origin. The visible URL is then cleaned, so mobile home-screen shortcuts can use the clean URL after the first token bootstrap. Keep firewall/Tailscale rules as the primary network boundary; the token is an application-layer backstop for accidental exposure or tailnet-internal misuse.
 
-Local browser access uses the same `?auth_token=<token>` bootstrap; bookmark `http://127.0.0.1:8765/?auth_token=<token>` once. If you also run UFW with default deny incoming, see the README's `Binding to 0.0.0.0` section for the Docker bridge allow rule and the shell-inheritance note for the token.
+Local browser access uses the same `?auth_token=<token>` bootstrap. Open
+`http://127.0.0.1:8765/?auth_token=<token>` once, then bookmark the clean URL
+shown after authentication. Repeat the bootstrap if the cookie expires or the
+token changes. If you also run UFW with default deny incoming, see the README's
+`Binding to 0.0.0.0` section for the Docker bridge allow rule and the
+shell-inheritance note for the token.
 
 ### Normal shutdown
 
@@ -343,15 +348,20 @@ Wrong pane is mirrored on mobile:
 
 ### どの起動スクリプトを使うか
 
-`./scripts/run-face-app.sh` は、フェイス画面と音声出力だけを使いたいときに使います。この経路では `FACE_OPERATOR_PANEL_ENABLED=0` が既定なので、オペレーターパネルは明示的に有効化しない限り表示されません。
+`./scripts/run-face-app.sh` は、フェイス画面と音声出力だけを使いたい場合に選びます。この経路では
+`FACE_OPERATOR_PANEL_ENABLED=0` が既定値なので、明示的に有効化しない限りオペレーターパネルは
+表示されません。
 
-`./scripts/run-operator-once.sh --profile qwen3-realtime` は、現在の推奨フル構成です。tmux の実際のエージェントペインを自動で解決し、`MH_BRIDGE_TMUX_PANE` と `MH_BRIDGE_RECOVERY_TMUX_PANE` の両方を安全に設定します。
+`./scripts/run-operator-once.sh --profile qwen3-realtime` は、実際のモバイル運用における現在の
+推奨フル構成です。実エージェントの tmux ペインを自動で特定し、
+`MH_BRIDGE_TMUX_PANE` と `MH_BRIDGE_RECOVERY_TMUX_PANE` の両方をスタックへ渡します。
 
-`./scripts/run-operator-stack.sh` の直接起動は、tmux ペインの接続先や起動構成を自分で明示的に管理したいとき向けです。
+`./scripts/run-operator-stack.sh` を直接起動する方法は、tmux ペインの接続先や起動構成を自分で
+管理したい場合に使います。
 
 ### クイックスタート
 
-最小の face 単体:
+フェイス画面だけを起動する最小構成:
 
     ./scripts/setup.sh
     ./scripts/run-face-app.sh
@@ -360,11 +370,11 @@ Wrong pane is mirrored on mobile:
 
     ./scripts/run-operator-once.sh --profile qwen3-realtime
 
-まずエージェント側をシェルだけで開く:
+最初はエージェント側のペインをシェルとして開く場合:
 
     ./scripts/run-operator-once.sh --profile qwen3-realtime --agent-shell
 
-意図的にスタックペインをミラーしたいデバッグ用途:
+デバッグのため、意図的にスタック側のペインをミラーする場合:
 
     ./scripts/run-operator-once.sh --bridge-target stack
 
@@ -372,23 +382,41 @@ Wrong pane is mirrored on mobile:
 
 `FACE_AUDIO_TARGET`:
 
-- `browser`（リモート向けの推奨）: 接続中のブラウザ／AtomS3R などへのみ送出。ワーカーのリモート先読み（既定 ~900 ms リード）とブラウザ／Atom 側 FIFO キューが有効になり、長文の文間ギャップが大幅に短くなります。PC ブラウザ・スマホブラウザ・AtomS3R いずれも対象。
-- `local`: ホストスピーカーのみ。ヘッドレス PC でワーカーに直接ローカル音声デバイスを叩かせたいとき。
-- `both`: ホストスピーカーで再生しつつリモートにもブロードキャスト。PC スピーカーとブラウザ／Atom を同時に使いたいとき便利だが、ワーカーの先読みはこのモードでは **無効**（ローカル再生クロックを早めに切れない）のため、リモート側は従来の「合成→送信→再生完了待ち」の間が残ります。
+- `browser`（リモート向けの推奨）: 接続中のブラウザや AtomS3R などへだけ音声を送ります。
+  ワーカーのリモート先読み（既定では約900 ms先）と、ブラウザ／Atom 側の FIFO キューが
+  有効になり、長文を読むときの文と文の間が大幅に短くなります。PC のブラウザ、モバイル
+  ブラウザ、AtomS3R のいずれでも利用できます。
+- `local`: ホストのスピーカーだけで再生します。画面のない PC で、ワーカーからローカルの
+  音声デバイスへ直接出力したい場合に使います。
+- `both`: ホストのスピーカーで再生しながら、リモートにも送信します。PC のスピーカーと
+  ブラウザ／Atom を同時に使う場合に便利です。ただし、このモードではワーカーの先読みが
+  **無効**になります。ローカル再生のクロックを早めに進められないため、リモート側には従来の
+  「合成 → 送信 → 再生完了待ち」の間が残ります。
 
 `--ui-mode <auto|pc|mobile>` / `FACE_UI_MODE`:
 
-- `auto`: 画面条件に応じて自動選択
-- `pc`: デスクトップ向け（右側 `Debug Values` パネルは既定で非表示）
-- `mobile`: モバイル向けオーバーレイ
+- `auto`: 画面の条件に応じて自動的に選択します。
+- `pc`: デスクトップ向けです。右側の `Debug Values` パネルは、既定では非表示です。
+- `mobile`: モバイル向けのオーバーレイを表示します。
 
 `run-face-app.sh` は `FACE_OPERATOR_PANEL_ENABLED=0` が既定、`run-operator-stack.sh` は `FACE_OPERATOR_PANEL_ENABLED=1` を強制します。
 
 ### フルオペレータースタックの中身
 
-`run-operator-once.sh` は tmux セッションを作成または再利用し、ウィンドウを 2 ペインに分け、0 番にエージェント、1 番に統合スタックを起動し、ブリッジの接続先を既定で 0 番へ向けます。
+`run-operator-once.sh` は tmux セッションを作成または再利用し、ウィンドウを2つのペインへ
+分割します。0番のペインでエージェントを、1番のペインで統合スタックを起動します。
+ブリッジの接続先は、既定で0番のペインです。
 
-また、オペレーターペインには `MH_FACE_AGENT_ID=__operator__` と `MH_FACE_AGENT_LABEL=Operator` を export します。`run-operator-stack.sh` が任意起動 MCP サーバーを起動する場合、その MCP サーバーも同じオペレーター識別子に束縛され、フェイスツールは `agent_id=__operator__` を自動補完し、矛盾する明示 ID を拒否します。ヘルパーペインは生成時に割り当てられたヘルパー ID を受け取り、Docker 経由のヘルパーコマンドには `docker exec -e` でその識別子が渡されます。別の未束縛 MCP サーバーを使うクライアントでは `face_ping` / `face_event` / `face_say` の全呼び出しに `agent_id` を明示してください。
+また、オペレーターペインの環境には、`MH_FACE_AGENT_ID=__operator__` と
+`MH_FACE_AGENT_LABEL=Operator` を設定します。`run-operator-stack.sh` がオプションの
+MCP サーバーを起動する場合、そのサーバーも同じオペレーター識別子へ関連付けられます。
+フェイスツールは `agent_id=__operator__` を自動補完し、異なる ID が明示された呼び出しを
+拒否します。
+
+ヘルパーペインには、生成時に割り当てられたヘルパー ID を渡します。Docker 経由でヘルパーを
+起動する場合は、`docker exec -e` で識別子を渡します。識別子が関連付けられていない別の
+MCP サーバーを使う場合は、`face_ping`、`face_event`、`face_say` のすべての呼び出しで
+`agent_id` を明示してください。
 
 <a id="ja-docker-and-helper-agent-commands"></a>
 ### Docker とヘルパーエージェントのコマンド
@@ -398,14 +426,19 @@ Wrong pane is mirrored on mobile:
 - `--agent-cmd <command>` は主オペレーターペインを起動します。
 - `MH_AGENT_DEFAULT_CMD=<command>` は、あとでヘルパーエージェントを生成するときに `face-app` が使うテンプレートです。
 
-`run-operator-once.sh` はオペレーターペインの環境に `MH_FACE_AGENT_ID=__operator__` を設定しますが、`--agent-cmd` に渡された任意の Docker コマンドを書き換えるわけではありません。主オペレーター自体を Docker 経由で動かす場合は、そのコマンドにオペレーター識別子を明示してください。
+`run-operator-once.sh` は、オペレーターペインの環境に `MH_FACE_AGENT_ID=__operator__` を
+設定します。ただし、`--agent-cmd` に渡された Docker コマンド自体は書き換えません。
+主オペレーターを Docker 経由で動かす場合は、そのコマンドにオペレーター識別子を明示して
+ください。
 
 ```bash
 ./scripts/run-operator-once.sh --profile realtime \
   --agent-cmd 'docker exec -it -e MH_FACE_AGENT_ID=__operator__ -e MH_FACE_AGENT_LABEL=Operator agent-container agent-cli'
 ```
 
-ヘルパーエージェントは `face-app` が作成し、各ヘルパー ID を知っているため扱いが異なります。`MH_AGENT_DEFAULT_CMD` が `docker exec` で始まる場合、`face-app` はコンテナ名の前にヘルパー識別子を挿入します。
+ヘルパーエージェントは `face-app` が作成し、各ヘルパーの ID も把握しているため、扱いが
+異なります。`MH_AGENT_DEFAULT_CMD` が `docker exec` で始まる場合、`face-app` はコンテナ名の
+前にヘルパー識別子を挿入します。
 
 ```bash
 MH_AGENT_DEFAULT_CMD='docker exec -it agent-container agent-cli' \
@@ -424,22 +457,30 @@ docker exec -it -e MH_FACE_AGENT_ID=helper-1 -e MH_FACE_AGENT_LABEL=helper-1 age
 env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 ```
 
-これはエージェントプロセスと、そのプロセス環境から起動された MCP サーバーに識別子を渡します。MCP のフェイスツールは `MH_FACE_AGENT_ID` があれば `agent_id` を自動補完し、矛盾する明示 ID を対応方法つきで拒否します。別の未束縛 MCP サーバーを使うクライアントでは、`face_ping` / `face_event` / `face_say` の全呼び出しに `agent_id` を明示してください。
+この設定により、エージェントプロセスと、同じプロセス環境から起動された MCP サーバーへ
+識別子が渡ります。`MH_FACE_AGENT_ID` があれば、MCP のフェイスツールは `agent_id` を
+自動補完します。異なる ID が明示されていた場合は、修正方法を添えて拒否します。識別子が
+関連付けられていない別の MCP サーバーを使う場合は、`face_ping`、`face_event`、`face_say` の
+すべての呼び出しで `agent_id` を明示してください。
 
-エージェントプロセスが Docker の別ネットワーク名前空間で動く場合は、README の `FACE_WS_HOST=0.0.0.0` の説明も参照してください。ループバック外へ face-app をバインドする場合は `MH_FACE_AUTH_TOKEN` が必須です。スタック起動前のシェルで export しておくと、`face-app`、オペレーターブリッジ、スタックが任意起動する MCP サーバーが同じトークンを継承します。
+エージェントプロセスが Docker の別ネットワーク名前空間で動く場合は、README にある
+`FACE_WS_HOST=0.0.0.0` の説明も参照してください。ループバック以外へ face-app をバインドする
+場合は、`MH_FACE_AUTH_TOKEN` が必須です。スタックを起動する前にシェルへ設定すると、
+`face-app`、オペレーターブリッジ、スタックが任意で起動する MCP サーバーへ、同じトークンが
+引き継がれます。
 
-`run-operator-stack.sh` が起動するもの:
+`run-operator-stack.sh` は、次のコンポーネントを起動します。
 
 - `face-app`
 - `operator-bridge`
-- batch `asr-worker`（無効化しない限り）
-- 任意のリアルタイム ASR（有効時）
+- バッチ処理用の `asr-worker`（無効化しない限り）
+- 任意のリアルタイム ASR（`run-vllm-voxtral.sh`、有効時）
 
 `run-operator-bridge.sh` は 1 つの tmux ペインだけをミラーし、承認済みの入力を `tmux send-keys` でそのペインへ送ります。
 
 ### tmux ペインの接続先
 
-重要な bridge 変数:
+主なブリッジ用の環境変数:
 
 <details>
 <summary>Bridge 環境変数</summary>
@@ -453,9 +494,10 @@ env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 
 </details>
 
-`run-operator-once.sh` を使うと、これらのうち重要な接続先は自動で安全に埋まります。
+`run-operator-stack.sh` を tmux 内で起動した場合は、`TMUX_PANE` を自動的に利用できます。
+`run-operator-once.sh` を使う場合は、重要な接続先をスクリプトが自動で設定します。
 
-`run-operator-once.sh` の profile 対応:
+`run-operator-once.sh` で選べるプロファイル:
 
 - `--profile default`: Kokoro TTS + バッチ ASR のみ
 - `--profile realtime`: Kokoro TTS + Voxtral リアルタイム ASR + Parakeet フォールバック
@@ -471,7 +513,7 @@ ASR は 2 系統あります。
 - ブラウザが `MediaRecorder` で録音
 - `POST /api/operator/asr?lang=ja|en`
 - `face-app` から `asr-worker` へ転送
-- `asr-worker` が Parakeet で変換
+- `asr-worker` が Parakeet で日本語・英語のバッチ文字起こしを実行
 - AtomS3R の連続 VAD は WebSocket で `atom_audio_frame` PCM を送り、`face-app` で発話区間を切ってから同じバッチ ASR とオペレーター応答経路を再利用
 
 任意のリアルタイム ASR:
@@ -479,23 +521,49 @@ ASR は 2 系統あります。
 - ブラウザが PCM16 チャンクを WebSocket で送る
 - `face-app` が Voxtral の vLLM リアルタイム WebSocket へ中継
 - 話している途中から増分テキストを表示
-- 空振りや明らかな誤認識時はバッチ側へ再確認できる
+- リアルタイム側の出力が空か明らかに不正な場合は、バッチ側のフォールバックが自動的に動く
 
-音声ターンの受理応答はローカルな固定テンプレートです。バッチ ASR が空でないターンを受理すると、`face-app` は要求または検出された ASR 言語に応じて `Checking.`、`One moment.`、`Let me check.`、`確認します。`、`少々お待ちください。`、`確認しますね。` のような短い固定フレーズを話し、同じ文を吹き出しにも表示します。文は言語と入力元ごとにローテーションするため、ミュート運用でも目で受理状態が分かります。無効化するには `MH_FIXED_ACK_ENABLED=0` を設定します。この経路ではコーディングエージェントや LLM に受理応答文を生成させません。
+音声ターンを受理したときの応答には、ローカルの固定テンプレートを使います。バッチ ASR が
+空でないターンを受理すると、`face-app` は要求または検出された言語に応じて、`Checking.`、
+`One moment.`、`Let me check.`、`確認します。`、`少々お待ちください。`、`確認しますね。` などの
+短いフレーズを話します。同じ文を吹き出しにも表示するため、ミュート中でも受理したことを
+確認できます。文は言語と入力元ごとに順番を変えます。無効にするには
+`MH_FIXED_ACK_ENABLED=0` を設定してください。この経路では、コーディングエージェントや LLM に
+応答文を生成させません。
 
-AtomS3R の連続 VAD は Atom ファームウェアの `continuous_vad_enabled` 設定だけで制御されます（デバイス側のダブルタップ、または `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off` でトグル）。デバイス側 OFF のときマイクフレームは送られないので、PC 側のブリッジは常に組み込まれたまま何もしない経路として動きます。
+AtomS3R の連続 VAD は、Atom ファームウェアの `continuous_vad_enabled` だけで制御します。
+デバイス側のダブルタップ、または `scripts/atoms3r-provision.mjs --vad-on` / `--vad-off` で
+切り替えられます。デバイス側でオフにするとマイクフレームは送信されず、PC 側のブリッジは
+組み込まれたまま、何も処理しない状態になります。
 
-PC 側ブリッジには差し替え可能な VAD バックエンドが 2 つあります。`MH_ATOM_VAD_BACKEND` で選択:
+PC 側ブリッジには、差し替え可能な VAD バックエンドが2つあります。
+`MH_ATOM_VAD_BACKEND` で選択します。
 
-- `rms` (デフォルト): 組み込みの決定的 RMS エネルギーゲート。軽量で別ワーカー不要、静かな部屋向け。
-- `silero`: 各フレームを `silero-vad-worker` HTTP サービスに転送し、ML ベースで発話/非発話を判定。駅・路上・カフェなど環境音がある場所で有効。CPU 1〜3 ms/フレーム。`scripts/run-silero-vad-worker.sh` で起動（このバックエンドを選ぶと `run-operator-stack.sh` が自動で立ち上げます）。`MH_SILERO_VAD_BASE_URL` (デフォルト `http://127.0.0.1:8092`) と `MH_SILERO_VAD_THRESHOLD` (デフォルト 0.5) で調整。
+- `rms`（既定）: 組み込みの決定的な RMS エネルギーゲートです。軽量で別ワーカーは不要ですが、
+  閾値を超える環境音はすべて発話として検出されます。静かな部屋に向いています。
+- `silero`: 各フレームを `silero-vad-worker` の HTTP サービスへ転送し、機械学習によって
+  発話か非発話かを判定します。駅、路上、カフェなど、環境音のある場所に向いています。
+  CPU 使用時間の目安は、1フレームあたり1〜3 msです。`scripts/run-silero-vad-worker.sh` で
+  起動します。このバックエンドを選ぶと、`run-operator-stack.sh` がワーカーを自動的に
+  起動します。
+  `MH_SILERO_VAD_BASE_URL`（既定値 `http://127.0.0.1:8092`）と
+  `MH_SILERO_VAD_THRESHOLD`（既定値 `0.5`）で調整できます。
 
-AtomS3R ファームウェアにも独自の RMS ゲート（`vad_rms`、NVS、`scripts/atoms3r-provision.mjs --vad-rms` で設定）が入っており、モバイル回線経由の帯域節約のため弱いフレームをそもそも送りません。`MH_ATOM_VAD_BACKEND=silero` を騒がしい場所で使う場合は、Silero の判別力を活かすためファームウェア側ゲートを低め（~0.005）に保ちます。書き込み・USB プロビジョニング・ADPCM 圧縮・各チューニング（`MH_ATOM_VAD_END_SILENCE_MS` / `_THRESHOLD_RMS` / `_MAX_UTTERANCE_MS`、`vad_tail`）・PTT・トラブルシュートは **[AtomS3R Voice Guide](atoms3r-voice.md#japanese)** を参照。
+AtomS3R のファームウェアにも独自の RMS ゲートがあります。`vad_rms` として NVS に保存し、
+`scripts/atoms3r-provision.mjs --vad-rms` で設定します。モバイル回線の通信量を抑えるため、
+エネルギーの小さいフレームは送信しません。騒がしい場所で `MH_ATOM_VAD_BACKEND=silero` を
+使う場合は、Silero の判別力を活かせるよう、ファームウェア側のゲートを低め（約0.005）に
+設定します。
 
-主な batch ASR 変数:
+ファームウェアの書き込み、USB プロビジョニング、ADPCM 圧縮、調整項目
+（`MH_ATOM_VAD_END_SILENCE_MS` / `_THRESHOLD_RMS` / `_MAX_UTTERANCE_MS`、`vad_tail`）、
+PTT、トラブルシューティングについては、
+**[AtomS3R Voice Guide](atoms3r-voice.md#japanese)**を参照してください。
+
+主なバッチ ASR 変数:
 
 <details>
-<summary>batch ASR 環境変数</summary>
+<summary>バッチ ASR 環境変数</summary>
 
 - `MH_OPERATOR_ASR_BASE_URL`
 - `MH_OPERATOR_ASR_ENDPOINT_URL`
@@ -503,17 +571,17 @@ AtomS3R ファームウェアにも独自の RMS ゲート（`vad_rms`、NVS、`
 - `MH_OPERATOR_ASR_MODEL_JA`
 - `MH_OPERATOR_ASR_MODEL_EN`
 - `MH_FIXED_ACK_ENABLED=0`: 固定受理応答の音声を無効化
-- `MH_ATOM_VAD_BACKEND=rms|silero` (デフォルト `rms`): PC 側 VAD バックエンド選択
-- `MH_SILERO_VAD_BASE_URL`: silero-vad-worker URL (デフォルト `http://127.0.0.1:8092`)
-- `MH_SILERO_VAD_THRESHOLD`: Silero の発話確率しきい値 (デフォルト `0.5`)
-- `MH_STACK_START_SILERO_VAD=0`: silero-vad-worker の自動起動をスキップ (外部で起動済みのとき)
+- `MH_ATOM_VAD_BACKEND=rms|silero`（既定値 `rms`）: PC 側の VAD バックエンドを選択
+- `MH_SILERO_VAD_BASE_URL`: silero-vad-worker の URL（既定値 `http://127.0.0.1:8092`）
+- `MH_SILERO_VAD_THRESHOLD`: Silero の発話確率しきい値（既定値 `0.5`）
+- `MH_STACK_START_SILERO_VAD=0`: 外部で起動済みの場合に silero-vad-worker の自動起動を省略
 
 </details>
 
-主な realtime ASR 変数:
+主なリアルタイム ASR 変数:
 
 <details>
-<summary>realtime ASR 環境変数</summary>
+<summary>リアルタイム ASR 環境変数</summary>
 
 - `MH_OPERATOR_REALTIME_ASR_ENABLED=1`
 - `MH_OPERATOR_REALTIME_ASR_WS_URL`
@@ -527,39 +595,40 @@ AtomS3R ファームウェアにも独自の RMS ゲート（`vad_rms`、NVS、`
 
 ### 推奨起動モード
 
-通常運用では、まず `run-operator-once.sh --profile ...` を使ってください。bridge の接続先を安全に埋められ、README など他の説明とも profile 名が一致します。
+通常運用では、まず `run-operator-once.sh --profile ...` を使ってください。ブリッジの接続先が
+安全に設定され、README などの説明で使うプロファイル名とも一致します。
 
-Parakeet のみ（最小 VRAM、realtime なし）:
+Parakeet のみ（必要な VRAM が最小、リアルタイム ASR なし）:
 
     ./scripts/run-operator-once.sh --profile default
 
-Voxtral realtime + Parakeet fallback（現在の本命、VRAM 多め）:
+Voxtral リアルタイム ASR + Parakeet フォールバック（現在の推奨、VRAM は多め）:
 
     ./scripts/run-operator-once.sh --profile realtime
 
-Qwen3 TTS + batch ASR のみ:
+Qwen3 TTS + バッチ ASR のみ:
 
     ./scripts/run-operator-once.sh --profile qwen3
 
-Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback:
+Qwen3 TTS + Voxtral リアルタイム ASR + Parakeet フォールバック:
 
     ./scripts/run-operator-once.sh --profile qwen3-realtime
 
 ### 低レベルな `run-operator-stack.sh` 相当例
 
-以下は tmux pane の接続先や stack 配線を自分で管理したい場合だけ使ってください。
+以下は、tmux ペインの接続先やスタックの構成を自分で管理したい場合だけ使ってください。
 
-Parakeet のみ（最小 VRAM、realtime なし）:
+Parakeet のみ（必要な VRAM が最小、リアルタイム ASR なし）:
 
     npm run setup
     MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
 
-Voxtral realtime + Parakeet fallback（現在の本命、VRAM 多め）:
+Voxtral リアルタイム ASR + Parakeet フォールバック（現在の推奨、VRAM は多め）:
 
     npm run setup:all
     MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
 
-Voxtral realtime のみ（ハイブリッドより省 VRAM）:
+Voxtral リアルタイム ASR のみ（ハイブリッド構成より VRAM を節約）:
 
     npm run setup:all
     MH_STACK_START_REALTIME_ASR=1 MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_STACK_SKIP_ASR=1 MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
@@ -568,29 +637,34 @@ Voxtral realtime のみ（ハイブリッドより省 VRAM）:
 
     MH_OPERATOR_REALTIME_ASR_ENABLED=1 MH_OPERATOR_REALTIME_ASR_WS_URL=ws://127.0.0.1:8090/v1/realtime MH_BRIDGE_TMUX_PANE=agent:0.0 ./scripts/run-operator-stack.sh
 
-### Operator UI の挙動
+### オペレーター UI の挙動
 
-operator panel は `FACE_OPERATOR_PANEL_ENABLED=1` のときだけ表示されます。
+オペレーターパネルは `FACE_OPERATOR_PANEL_ENABLED=1` のときだけ表示されます。
 
-フル operator stack では:
+フルオペレータースタックでは:
 
 - `Esc` は常時表示
 - `Restart` は復旧時またはオフライン時のみ
 - `↑`, `Select`, `↓` は常時表示
 - デスクトップでは `Esc` の近くに `?` ボタンを表示（キーボード操作の早見表）
-- terminal mirror は読み取り専用
+- ターミナルミラーは読み取り専用
 
 `PTT JA` / `PTT EN` の文字起こしは、テキスト入力欄の末尾固定ではなく、現在のカーソル位置へ入ります。
 
 マルチエージェント操作は、次の単純なモデルに寄せています。
 
-- デスクトップは通常の face/operator レイアウトを維持しつつ、operator pane 内に現在エージェントバーを表示します。
-- そのバーを押すと、最初の 1 エージェント状態からでも `Agents` を開けます。
-- `+Agent` は id / branch / worktree を安全な既定値で自動生成して補助エージェントを追加します。
-- デスクトップのタイルやモバイルの一覧行を押すと、見た目だけではなく実際の operator の接続先が切り替わります。
-- 通常の visible action は `Delete` のみで、裏側では pane の停止/切り離し、worktree cleanup、runtime record 削除までまとめて行います。
-- 組み込みの `operator` 行は primary pane を表しており、helper agent の削除フローでは消しません。
-- tmux を完全に終了してから `./scripts/run-operator-once.sh` で新規起動した場合も、helper agent の worktree が残っていれば新しい tmux pane を作って復元し、worktree が無ければ `missing` として再表示します。
+- デスクトップは通常のフェイス／オペレーターレイアウトを維持しつつ、オペレーターペイン内に
+  現在のエージェントを示すバーを表示します。
+- そのバーを押すと、主オペレーターしかいない状態でも `Agents` 画面を開けます。
+- `+Agent` は ID、ブランチ、ワークツリーを安全な既定値で自動生成し、補助エージェントを追加します。
+- デスクトップのタイルやモバイルの一覧行を押すと、表示だけでなく、オペレーターが実際に
+  接続するエージェントも切り替わります。
+- 通常時に表示される操作は `Delete` だけです。裏側では、ペインの停止と切り離し、
+  ワークツリーの掃除、実行状態の記録削除までまとめて行います。
+- 組み込みの `operator` 行は主ペインを表しており、補助エージェントの削除操作では消えません。
+- tmux を完全に終了してから `./scripts/run-operator-once.sh` で新規起動した場合も、補助
+  エージェントのワークツリーが残っていれば、新しい tmux ペインを作って復元します。
+  ワークツリーがなければ、`missing` として再表示します。
 
 ### キーボードショートカット
 
@@ -603,11 +677,13 @@ operator panel は `FACE_OPERATOR_PANEL_ENABLED=1` のときだけ表示され�
 - `Enter`: `Select`
 - `Shift+Enter`: `Send Text`
 - `ArrowUp` / `ArrowDown`: 選択肢移動
-- `PageUp` / `PageDown`: terminal mirror スクロール
+- `PageUp` / `PageDown`: ターミナルミラーをスクロール
 
 ### 隠し復旧（モバイル）
 
-モバイルで `Esc` を短時間に 4 回連打すると、4 回目は通常の Escape 送信ではなく、`POST /api/operator/recover-default` を呼ぶ隠し復旧になります。`operator-bridge` はその要求を受けて、ミラー対象と入力送信先を `MH_BRIDGE_RECOVERY_TMUX_PANE` に戻します。
+モバイルで `Esc` を短時間に4回押すと、4回目は通常の Escape キーとして送信されず、
+`POST /api/operator/recover-default` を呼ぶ隠し復旧になります。`operator-bridge` は要求を受け、
+ミラー対象と入力送信先を `MH_BRIDGE_RECOVERY_TMUX_PANE` へ戻します。
 
 これは、外出先でモバイル UI しか触れず、間違った tmux ペインが映ってしまった場合の復旧用です。
 
@@ -623,25 +699,40 @@ operator panel は `FACE_OPERATOR_PANEL_ENABLED=1` のときだけ表示され�
 
     https://<tailscale-host>:8443/?auth_token=<token>
 
-ブラウザは `sessionStorage` に token を保存し、face-app も同じ origin の `mh_face_auth` cookie を設定します。その後、表示 URL から token を取り除くため、初回 bootstrap 後はモバイルのホーム画面ショートカットも token なしのきれいな URL で使えます。firewall / Tailscale の境界を主な防御として維持し、この token は accidental exposure や tailnet 内部の誤用へのアプリ層の追加防御として扱ってください。
+ブラウザは `sessionStorage` にトークンを保存し、face-app も同じオリジンの `mh_face_auth`
+Cookie を設定します。その後、表示 URL からトークンを取り除くため、初回設定後はモバイルの
+ホーム画面ショートカットもトークンなしの URL で使えます。ファイアウォールと Tailscale の
+境界を主な防御として維持してください。このトークンは、誤って外部へ公開した場合や tailnet
+内部での誤用に備える、アプリケーション層の追加防御です。
 
-PC ブラウザでのローカルアクセスも同じ `?auth_token=<token>` 手順です。`http://127.0.0.1:8765/?auth_token=<token>` を一度だけ開き、その状態をブックマーク。UFW を `default deny incoming` で運用している場合の Docker bridge 許可ルールと、token のシェル継承(`~/.profile` で source する話)は README の `### docker / リモートエージェント向けに 0.0.0.0 でバインドする場合` を参照してください。
+PC ブラウザからローカルで接続する場合も、同じ `?auth_token=<token>` 手順を使います。
+`http://127.0.0.1:8765/?auth_token=<token>` を一度だけ開き、認証後に表示されるトークンなしの
+URL をブックマークしてください。Cookie の期限が切れた場合やトークンを変更した場合は、
+この初回認証をやり直します。UFW を `default deny incoming` で運用する場合の Docker
+ブリッジ許可ルールと、トークンをシェルへ引き継ぐ方法（`~/.profile` から読み込む設定）は、README の
+「docker / リモートエージェント向けに 0.0.0.0 でバインドする場合」を参照してください。
 
 ### 通常の終了方法
 
-通常の operator 終了では `tmux kill-server` ではなく、tmux の window または session を閉じます。
+通常のオペレーター終了では `tmux kill-server` を使わず、tmux のウィンドウまたはセッションを
+閉じます。
 
 推奨:
 
     tmux kill-window -t agent:operator
 
-この operator stack 専用の session で運用している場合:
+このオペレータースタック専用のセッションで運用している場合:
 
     tmux kill-session -t agent
 
-再起動や復旧には `./scripts/restart-operator-stack-in-place.sh` を使い、ad hoc な tmux pane 操作は避けます。通常運用中の pane 消失は、ブラウザ UI 上の別 lifecycle ではなく復旧対象として扱います。
+再起動や復旧には `./scripts/restart-operator-stack-in-place.sh` を使い、場当たり的な tmux ペイン
+操作は避けてください。通常運用中にペインが消えた場合は、ブラウザ UI 上の別のライフサイクル
+ではなく、復旧対象として扱います。
 
-一方で、window や session を完全に閉じてから `./scripts/run-operator-once.sh` で立ち上げ直した場合は、face-app の起動時 reconcile が保存済み helper record を読みます。worktree が残っている helper には新しい tmux pane を割り当て、worktree が無い helper は `missing` として残し、`Delete` だけできる状態にします。
+一方、ウィンドウやセッションを完全に閉じてから `./scripts/run-operator-once.sh` で立ち上げ直すと、
+face-app は起動時の照合処理で、保存済みの補助エージェント記録を読み込みます。ワークツリーが
+残っているエージェントには新しい tmux ペインを割り当てます。ワークツリーがないエージェントは
+`missing` のまま残し、`Delete` だけを実行できる状態にします。
 
 ### トラブルシュート
 
