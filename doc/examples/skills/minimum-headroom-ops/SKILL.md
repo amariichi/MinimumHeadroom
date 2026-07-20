@@ -88,14 +88,22 @@ For concrete timing and priority rules, follow `doc/examples/AGENT_RULES.md`.
 
 When acting as the user-facing operator, prefer first-class MCP tools over raw `tmux send-keys` or direct HTTP calls. Standard flow:
 
-1. `agent.list scope=stream` — see current helpers
-2. `agent.spawn` — create a helper with a `permission_preset` and (optionally) a `create_worktree` / `create_tmux` request
+1. `agent.list scope=stream` — see current helpers and retain `active_stream_id`
+2. `agent.spawn` — create a helper with a `permission_preset` and (optionally) a `create_worktree` / `create_tmux` request. Helpers for the current user task use the active stream even when their source repository differs; omit `stream_id` for the active default or pass the exact active value.
 3. `agent.assign` — store the mission durably; set `role`, `target_paths`, `completion_criteria`, `timebox_minutes`, `max_findings` when they help bound the work
 4. `agent.inject` — deliver the stored mission to the helper's LLM input
 5. `agent.assignment.list` — confirm `delivery_state` reaches `acked`
 6. `owner.inbox.list` — read helper reports as they arrive
 7. `owner.inbox.resolve` — close out done / review_findings / informational items
 8. `agent.delete` — remove finished helpers (also cascades to assignment and inbox records)
+
+For cross-repository work, pass `source_repo_path` and `target_repo_root`
+explicitly and use absolute mission `target_paths`. After spawn, require
+`visible_in_active_stream=true` and confirm the helper appears in another
+`agent.list scope=stream` result. A visibility warning means the helper is
+outside the active managed list; signaling may still surface a provisional
+browser tile. Treat the warning as `needs_attention` unless the separate stream
+was intentional. `session_id` does not control browser visibility.
 
 ## Recovering a helper stuck on a CLI modal
 

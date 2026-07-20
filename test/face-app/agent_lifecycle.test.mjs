@@ -261,6 +261,11 @@ test('agent lifecycle runtime inherits default external source repo path for hel
   });
 
   assert.equal(result.agent.source_repo_path, externalRepoRoot);
+  assert.equal(result.agent.stream_id, `repo:${repoRoot}`);
+  assert.equal(result.active_stream_id, `repo:${repoRoot}`);
+  assert.equal(result.resolved_stream_id, `repo:${repoRoot}`);
+  assert.equal(result.visible_in_active_stream, true);
+  assert.equal(result.visibility_warning, null);
   assert.equal(
     commands.some(
       (entry) =>
@@ -271,6 +276,35 @@ test('agent lifecycle runtime inherits default external source repo path for hel
     ),
     true
   );
+
+  cleanup(repoRoot);
+  cleanup(externalRepoRoot);
+});
+
+test('agent lifecycle runtime preserves an explicit non-active stream and reports browser visibility', async () => {
+  const externalRepoRoot = createTempRoot('mh-agent-explicit-other-stream-');
+  const { repoRoot, runtime, stateStore } = createRuntimeHarness();
+  const otherStreamId = `repo:${externalRepoRoot}`;
+
+  const result = await runtime.addAgent({
+    id: 'agent-explicit-other-stream',
+    create_worktree: false,
+    create_tmux: false,
+    source_repo_path: externalRepoRoot,
+    target_repo_root: externalRepoRoot,
+    stream_id: otherStreamId
+  });
+
+  assert.equal(result.agent.stream_id, otherStreamId);
+  assert.equal(result.active_stream_id, `repo:${repoRoot}`);
+  assert.equal(result.resolved_stream_id, otherStreamId);
+  assert.equal(result.visible_in_active_stream, false);
+  assert.match(result.visibility_warning, /outside the authoritative active-stream list/);
+  assert.match(result.visibility_warning, /provisional browser tile/);
+  assert.deepEqual(stateStore.listAgents().map((agent) => agent.id), []);
+  assert.deepEqual(stateStore.listAgents({ scope: 'all' }).map((agent) => agent.id), [
+    'agent-explicit-other-stream'
+  ]);
 
   cleanup(repoRoot);
   cleanup(externalRepoRoot);
@@ -2001,6 +2035,8 @@ test('addAgent reports launch_failed with pane tail when helper stays in a shell
   assert.equal(result.launch_failed, true);
   assert.equal(result.agent.id, 'agent-launch-fail');
   assert.equal(result.agent.pane_id, '%62');
+  assert.equal(result.visible_in_active_stream, true);
+  assert.equal(result.visibility_warning, null);
   assert.match(result.agent.last_message, /launch_failed/);
   assert.deepEqual(result.launch_failure.pane_tail, ['codex: unknown option --full-auto', 'user@host:~/repo$ ']);
   assert.equal(stateStore.getAgent('agent-launch-fail')?.pane_id, '%62');

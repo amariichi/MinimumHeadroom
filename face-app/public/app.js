@@ -28,6 +28,7 @@ import {
   deriveAgentTileTone,
   deriveDashboardMode,
   deriveOwnerInboxToneOptions,
+  formatDashboardAgentCount,
   normalizePersistedDashboardSelection,
   normalizeDashboardAgent,
   resolveRestoredDashboardSelection,
@@ -1247,8 +1248,7 @@ function syncSelectedDashboardAgentToMirrorPane() {
 }
 
 function formatDashboardVisibleCount() {
-  const count = getDashboardVisibleCount();
-  return `${count} agent${count === 1 ? '' : 's'}`;
+  return formatDashboardAgentCount(getDashboardVisibleCount(), agentDashboardState.hiddenAgentCount);
 }
 
 function computeDesktopAgentGridColumns(count) {
@@ -2352,12 +2352,16 @@ async function refreshAgentDashboardState(options = {}) {
       const unresolvedCount = Number.isFinite(ownerInboxViewState?.summary?.unresolved_count)
         ? Math.max(0, Math.floor(ownerInboxViewState.summary.unresolved_count))
         : 0;
+      const hiddenAgentCount = Number.isFinite(nextDashboardState.hiddenAgentCount)
+        ? Math.max(0, Math.floor(nextDashboardState.hiddenAgentCount))
+        : 0;
+      const needsWarning = unresolvedCount > 0 || hiddenAgentCount > 0;
       const countText = formatDashboardVisibleCount();
       setAgentDashboardStatus(
         unresolvedCount > 0
           ? `${countText} · inbox ${unresolvedCount}`
           : countText,
-        unresolvedCount > 0 ? 'warn' : 'ok'
+        needsWarning ? 'warn' : 'ok'
       );
     }
   })()

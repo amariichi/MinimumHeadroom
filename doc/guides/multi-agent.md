@@ -22,6 +22,40 @@ If you are using the minimum-headroom operator/helper runtime, also install the 
 - Desktop renders the operator plus up to 7 helpers (8 tiles total)
 - Via MCP, `agent.spawn` accepts `id` as the canonical helper-name field and also accepts `agent_id` as a compatibility alias
 
+### Active Stream and Cross-Repository Work
+
+A stream groups one user-visible task under one owner. It controls browser
+visibility, mission assignment, and the owner inbox; it is not a Git repository
+or filesystem boundary. `source_repo_path`, `target_repo_root`, worktrees,
+permission presets, and `target_paths` control where a helper works.
+
+The operator launcher derives the active stream from its `--repo` target, and
+the browser shows only helpers in that active stream. `session_id` groups
+conversation or signaling events and does not affect this visibility.
+
+`agent.spawn` uses the active stream when `stream_id` is omitted, including
+when the helper works in another repository. An explicitly different
+`stream_id` is still accepted, but the result contains
+`visible_in_active_stream=false` and a warning that the helper is outside the
+authoritative active-stream list. Activity signaling from that helper can
+still surface a provisional browser tile. The browser reports how many
+registered helpers are outside the active stream without treating them as
+normal managed helpers in the active owner lifecycle.
+
+For a helper that belongs to the current user task:
+
+1. Call `agent.list(scope="stream")` and retain its `active_stream_id`.
+2. Omit `stream_id` at spawn or pass that exact active value. If the helper
+   works in another repository, set `source_repo_path` and `target_repo_root`
+   separately and use absolute `target_paths` in the mission.
+3. After spawn, require `visible_in_active_stream=true` and confirm the helper
+   appears in another `agent.list(scope="stream")` result.
+
+Use a different stream only for a genuinely independent user task or owner
+lifecycle. If `agent.list(scope="all")` contains a helper that the stream-scoped
+list does not, delete and recreate it in the active stream unless that
+separation was intentional.
+
 ### Permission Presets
 
 `agent.spawn` accepts a `permission_preset` parameter (`reviewer`, `implementer`, `full`) to auto-configure tool permissions for the helper.
@@ -163,6 +197,37 @@ minimum-headroom のオペレーター／ヘルパー実行環境を使う場合
 - デスクトップには、オペレーターと最大7体のヘルパーを同時に表示できます（合計8タイル）。
 - MCP の `agent.spawn` では、ヘルパー名の標準フィールドは `id` です。互換用の別名として、
   `agent_id` も受け付けます。
+
+### Active stream とリポジトリを跨ぐ作業
+
+stream は、一人のオーナーが担当する一つのユーザー作業をまとめる単位です。ブラウザでの表示、
+ミッション割当、owner inbox の範囲を決めますが、Git リポジトリやファイルアクセスの境界では
+ありません。ヘルパーが実際に作業する場所は、`source_repo_path`、`target_repo_root`、
+ワークツリー、権限プリセット、`target_paths` で決まります。
+
+オペレーターの起動スクリプトは、`--repo` の対象から active stream を決めます。ブラウザに
+表示されるのは、この active stream に属するヘルパーだけです。`session_id` は会話や通知を
+まとめる識別子であり、ブラウザの表示には影響しません。
+
+`agent.spawn` で `stream_id` を省略すると、別リポジトリで作業する場合も active stream を
+使います。別の `stream_id` を明示することもできますが、結果には
+`visible_in_active_stream=false` と、active stream の正式な一覧には含まれないという警告が
+含まれます。そのヘルパーから動作通知が届いた場合は、一時的な provisional タイルがブラウザに
+表示されることがあります。ブラウザには active stream 外の登録済みヘルパー数も示しますが、
+active stream の通常の管理対象としては扱いません。
+
+現在のユーザー作業に属するヘルパーは、次の手順で生成します。
+
+1. `agent.list(scope="stream")` を呼び、返された `active_stream_id` を控えます。
+2. 生成時は `stream_id` を省略するか、控えた active stream ID をそのまま渡します。
+   別リポジトリで作業させる場合は、`source_repo_path` と `target_repo_root` を別途指定し、
+   ミッションの `target_paths` には絶対パスを使います。
+3. 生成結果が `visible_in_active_stream=true` であることと、再度呼んだ
+   `agent.list(scope="stream")` にヘルパーが含まれることを確認します。
+
+別の stream を使うのは、独立したユーザー作業として扱う場合や、オーナーのライフサイクルを
+分ける場合だけです。`agent.list(scope="all")` には存在するのに stream 単位の一覧に出ない
+ヘルパーは、その分離が意図したものでなければ削除し、active stream で作り直してください。
 
 ### 権限プリセット
 

@@ -269,7 +269,7 @@ const BASE_TOOL_DEFINITIONS = [
   },
   {
     name: 'agent.spawn',
-    description: 'Create a managed helper agent and optionally its worktree/tmux pane.',
+    description: 'Create a managed helper agent and optionally its worktree/tmux pane. Omitted stream_id uses the active operator stream; an explicit different stream is preserved outside the active managed list, though signaling may surface a provisional browser tile.',
     inputSchema: {
       type: 'object',
       additionalProperties: true,
@@ -1893,7 +1893,13 @@ async function handleToolCall(params) {
         });
       }
       const agentId = apiPayload?.result?.agent?.id ?? payload.id ?? '-';
-      return toolTextResult(`spawned agent id=${agentId}`, {
+      const visibilityWarning = typeof apiPayload?.result?.visibility_warning === 'string'
+        ? apiPayload.result.visibility_warning.trim()
+        : '';
+      const text = visibilityWarning
+        ? `spawned agent id=${agentId}; warning: ${visibilityWarning}`
+        : `spawned agent id=${agentId}`;
+      return toolTextResult(text, {
         structuredContent: { ok: true, http: url, request: payload, result: apiPayload.result }
       });
     } catch (error) {

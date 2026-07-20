@@ -5,6 +5,7 @@ import {
   deriveAssignmentToneOptions,
   deriveAgentTileTone,
   deriveDashboardMode,
+  formatDashboardAgentCount,
   normalizePersistedDashboardSelection,
   normalizeAgentStatus,
   normalizeDashboardAgent,
@@ -153,6 +154,12 @@ test('deriveDashboardMode supports additional active tiles on desktop', () => {
   assert.equal(deriveDashboardMode(agents, { isMobileUi: false }), 'single');
   assert.equal(deriveDashboardMode(agents, { isMobileUi: false, additionalActiveCount: 1 }), 'multi');
   assert.equal(deriveDashboardMode(agents, { isMobileUi: true, additionalActiveCount: 1 }), 'single');
+});
+
+test('formatDashboardAgentCount reports helpers registered outside the active stream', () => {
+  assert.equal(formatDashboardAgentCount(1, 0), '1 agent');
+  assert.equal(formatDashboardAgentCount(2, 1), '2 agents · 1 helper outside active stream');
+  assert.equal(formatDashboardAgentCount(1, 2), '1 agent · 2 helpers outside active stream');
 });
 
 test('shouldRefreshAgentActivityFromState seeds new agents and tracks state changes', () => {

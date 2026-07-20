@@ -21,6 +21,8 @@ Paste this into your project `AGENTS.md` and customize.
 ## Operator-led multi-agent workflow (recommended)
 
 - Use MCP lifecycle tools as the standard path: `agent.list(scope="stream")`, `agent.spawn`, `agent.assign`, `agent.inject`, `agent.assignment.list`, `owner.inbox.list`, `owner.inbox.resolve`, `agent.delete`.
+- Capture `active_stream_id` from `agent.list(scope="stream")`. Helpers for the current user task stay in that stream even when they work in another repository; omit `stream_id` to use the active default or pass that exact value.
+- For cross-repository missions, pass explicit repository fields, use absolute `target_paths`, require `visible_in_active_stream=true`, and verify the helper appears in a fresh stream-scoped list. Treat a visibility warning as `needs_attention` unless separation is intentional.
 - When spawning a helper, pass `permission_preset` to auto-configure tool permissions. Values: `reviewer` (read-only tools), `implementer` (adds Edit/Write and Bash; `git push` denied), `full` (widest per-runtime preset; see `doc/guides/multi-agent.md`). Also pass `agent_cmd` (`claude`, `agy`, or `codex`) so the runtime applies that CLI's launch flags, environment, hooks, or settings as appropriate.
 - Treat `agent.assign` as the durable mission record and `agent.inject` as controlled delivery for bootstrap or explicit reinstruction.
 - For review, investigation, implementation, or docs-check helpers, make the mission concrete with `role`, `target_paths`, `completion_criteria`, `timebox_minutes`, and `max_findings` when possible.

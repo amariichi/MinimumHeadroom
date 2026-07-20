@@ -84,10 +84,11 @@ test('mcp agent lifecycle tools call the face-app HTTP API', async () => {
       rawBody += chunk.toString('utf8');
     });
     request.on('end', () => {
+      const parsedBody = rawBody === '' ? null : JSON.parse(rawBody);
       requests.push({
         method: request.method,
         url: request.url,
-        body: rawBody === '' ? null : JSON.parse(rawBody)
+        body: parsedBody
       });
 
       if (request.url?.startsWith('/api/agents?')) {
@@ -102,18 +103,27 @@ test('mcp agent lifecycle tools call the face-app HTTP API', async () => {
       }
 
       if (request.url === '/api/agents/add') {
+        const activeStreamId = 'repo:/tmp/target';
+        const resolvedStreamId = parsedBody?.stream_id ?? activeStreamId;
+        const visibleInActiveStream = resolvedStreamId === activeStreamId;
         response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify({
           ok: true,
           result: {
             action: 'add',
             agent: {
-              id: 'helper-a',
-              session_id: 'helper-a',
-              source_repo_path: '/tmp/target',
-              target_repo_root: '/tmp/target',
-              stream_id: 'repo:/tmp/target'
-            }
+              id: parsedBody?.id ?? 'helper-a',
+              session_id: parsedBody?.id ?? 'helper-a',
+              source_repo_path: parsedBody?.source_repo_path ?? '/tmp/target',
+              target_repo_root: parsedBody?.target_repo_root ?? '/tmp/target',
+              stream_id: resolvedStreamId
+            },
+            active_stream_id: activeStreamId,
+            resolved_stream_id: resolvedStreamId,
+            visible_in_active_stream: visibleInActiveStream,
+            visibility_warning: visibleInActiveStream
+              ? null
+              : `helper stream ${resolvedStreamId} differs from active stream ${activeStreamId}; this helper is outside the authoritative active-stream list, though signaling can still surface a provisional browser tile`
           }
         }));
         return;
@@ -243,9 +253,25 @@ test('mcp agent lifecycle tools call the face-app HTTP API', async () => {
         create_tmux: false
       }
     });
-    assert.match(aliasSpawnResponse.result.content[0].text, /spawned agent id=helper-a/);
+    assert.match(aliasSpawnResponse.result.content[0].text, /spawned agent id=helper-b/);
     const aliasSpawnRequest = requests.find((item) => item.url === '/api/agents/add' && item.body?.id === 'helper-b');
     assert.equal(aliasSpawnRequest?.body?.id, 'helper-b');
+
+    const hiddenSpawnResponse = await rpc.call('tools/call', {
+      name: 'agent.spawn',
+      arguments: {
+        id: 'helper-hidden',
+        source_repo_path: '/tmp/other',
+        target_repo_root: '/tmp/other',
+        stream_id: 'repo:/tmp/other',
+        create_worktree: false,
+        create_tmux: false
+      }
+    });
+    assert.match(hiddenSpawnResponse.result.content[0].text, /warning: .*outside the authoritative active-stream list/);
+    assert.match(hiddenSpawnResponse.result.content[0].text, /provisional browser tile/);
+    assert.equal(hiddenSpawnResponse.result.structuredContent.result.visible_in_active_stream, false);
+    assert.equal(hiddenSpawnResponse.result.structuredContent.result.resolved_stream_id, 'repo:/tmp/other');
 
     const focusResponse = await rpc.call('tools/call', {
       name: 'agent.focus',

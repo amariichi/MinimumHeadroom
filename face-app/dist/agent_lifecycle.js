@@ -809,7 +809,17 @@ export function createAgentLifecycleRuntime(options = {}) {
     const sessionId = asNonEmptyString(input.session_id) ?? agentId;
     const sourceRepoPath = resolveRepoPath(input.source_repo_path);
     const targetRepoRoot = normalizeRepoPath(input.target_repo_root) ?? sourceRepoPath ?? activeTargetRepoRoot;
-    const streamId = deriveStableStreamId(input.stream_id, targetRepoRoot, activeTargetRepoRoot);
+    const requestedStreamId = asNonEmptyString(input.stream_id);
+    const streamId = deriveStableStreamId(requestedStreamId ?? activeStreamId, targetRepoRoot, activeTargetRepoRoot);
+    const visibleInActiveStream = streamId === activeStreamId;
+    const streamVisibility = {
+      active_stream_id: activeStreamId,
+      resolved_stream_id: streamId,
+      visible_in_active_stream: visibleInActiveStream,
+      visibility_warning: visibleInActiveStream
+        ? null
+        : `helper stream ${streamId} differs from active stream ${activeStreamId}; this helper is outside the authoritative active-stream list, though signaling can still surface a provisional browser tile`
+    };
     const worktreePath = resolveWorktreePath(input.worktree_path, agentId);
     const explicitWorktreePath = asNonEmptyString(input.worktree_path);
     const branch = resolveBranchName(agentId, input.branch);
@@ -962,6 +972,7 @@ export function createAgentLifecycleRuntime(options = {}) {
             ...result,
             agent: patched.agent,
             state: patched.state,
+            ...streamVisibility,
             launch_failed: true,
             launch_failure: launchVerification,
             sandbox_fallback: codexSandboxPreflight.sandbox_fallback,
@@ -977,6 +988,7 @@ export function createAgentLifecycleRuntime(options = {}) {
       }
       return {
         ...result,
+        ...streamVisibility,
         sandbox_fallback: codexSandboxPreflight.sandbox_fallback,
         sandbox_fallback_reason: codexSandboxPreflight.sandbox_fallback_reason,
         orchestration: {
