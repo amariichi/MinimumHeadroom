@@ -1,6 +1,6 @@
 {
   "name": "minimum-headroom",
-  "version": "1.22.2",
+  "version": "1.23.0",
   "description": "Voice-first Minimum Headroom MCP tools, face/status hooks, and M12 shared-vision skills for Antigravity CLI.",
   "author": {
     "name": "minimum-headroom contributors"
