@@ -32,7 +32,7 @@
 - **3D フェイス + TTS + MCP シグナリング** でエージェントに声と表情を与え、状態をリアルタイムに反映します。
 - **任意の AtomS3R 卓上デバイス** — 名前のよく似た2種類の M5Stack 基板を追加できます: **AtomS3R**（顔＋音声入出力 — 話しかける物理の卓上フェイス）と **AtomS3R-M12**（カメラ＋音声出力 — 周囲状況の把握、マイク非搭載）。[AtomS3R Devices](doc/guides/atom-devices.md#japanese) を参照。
 - **M12 視覚サブシステム** — AtomS3R-M12 カメラ、diffusiongemma（vLLM）による画像説明、階層化された状況メモリ、`GET /situation` によるエージェント文脈への注入、M12 Echo Base への音声アラートを追加します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) と [vision-worker README](vision-worker/README.md#japanese) を参照。
-- **汎用ブラウザメディア** — 信頼済みローカルMP3配信元1件を、そのURLを公開せず、認証済みデスクトップ／モバイルブラウザへ128 kbit/sで中継します。[汎用ブラウザメディア連携ガイド](doc/guides/generic-browser-media.md#japanese)を参照。
+- **汎用ブラウザメディア** — 信頼済みのローカル MP3 配信元を1件だけ、URL をブラウザへ公開せず、認証済みのデスクトップ／モバイルブラウザへ128 kbit/sで中継します。[汎用ブラウザメディア連携ガイド](doc/guides/generic-browser-media.md#japanese)を参照。
 - **マルチエージェント対応**（実験的） — 分離ワークツリーにヘルパーを生成し、権限プリセットとミッション追跡で管理します。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
 - **Tailscale Serve** でスマホ/タブレットから安全にリモートアクセス。
 
@@ -203,16 +203,16 @@ sequenceDiagram
 
 ### ハードウェア段階（Tiers）
 
-フルセットのハードウェアは必須ではありません。各段が前の段に機能を積み増す構成で、コア体験は素の PC だけで成立します:
+フルセットのハードウェアは必須ではありません。各段階で前の段階に機能を加える構成になっており、コア機能は PC だけでも利用できます:
 
-| 段 | ハードウェア | できること |
+| 段階 | ハードウェア | できること |
 |----|--------------|-----------|
-| 0 | Linux PC のみ（**GPU 不要**） | ブラウザの 3D 顔、Kokoro TTS（CPU）、Parakeet バッチ ASR（`MH_ASR_DEVICE=cpu`）、スマホ用オペレーター画面 — コア体験 |
-| 1 | + AtomS3R + Atomic Echo Base | 声と PTT・ハンズフリーマイクを備えた物理の卓上フェイス（RMH 体験） |
-| 2 | + ミドルレンジ NVIDIA GPU | リアルタイム ASR（Voxtral）とローカル推論の高速化 |
-| 3 | + 32GB VRAM GPU + AtomS3R-M12 +（Atomic Echo Base） | diffusiongemma による常時カメラ知覚、階層化された状況メモリ、音声シーンアラート |
+| 段階 0 | Linux PC のみ（**GPU 不要**） | ブラウザの 3D 顔、Kokoro TTS（CPU）、Parakeet バッチ ASR（`MH_ASR_DEVICE=cpu`）、スマホ用オペレーター画面 — コア体験 |
+| 段階 1 | + AtomS3R + Atomic Echo Base | 声と PTT・ハンズフリーマイクを備えた物理の卓上フェイス（RMH 体験） |
+| 段階 2 | + ミドルレンジ NVIDIA GPU | リアルタイム ASR（Voxtral）とローカル推論の高速化 |
+| 段階 3 | + 32GB VRAM GPU + AtomS3R-M12 +（Atomic Echo Base） | diffusiongemma による常時カメラ知覚、階層化された状況メモリ、音声シーンアラート |
 
-32GB という数字は既定構成であってアーキテクチャ上の要件ではありません。視覚ワーカーは OpenAI 互換エンドポイント（`VISION_MODEL_URL`）なら何でも接続できるため、小型のローカル VLM やホスト型モデルを指せば、より軽いハードウェアでも段 3 を動かせます。
+32GB という数字は既定構成であってアーキテクチャ上の要件ではありません。視覚ワーカーは OpenAI 互換エンドポイント（`VISION_MODEL_URL`）なら何でも接続できるため、小型のローカル VLM やホスト型モデルを指せば、より軽いハードウェアでも段階 3 を動かせます。
 
 <a id="ja-quick-start"></a>
 ## クイックスタート
@@ -239,7 +239,7 @@ node scripts/atoms3r-provision.mjs --asr-lang en
 Kokoro の音声はアクセントに強く結びついています。`jf_alpha` の英語はかなり日本語訛りに聞こえ、`af_heart` の日本語も同じように不自然です。混在言語セッションでは Kokoro 音声を 1 つ選ぶ必要があります。TTS はチャンクごとにテキスト言語を自動判定し、エージェントは話しかけられた言語で返答します。
 
 目的に合わせて起動パスを選んでください。
-開始前に、利用するコーディングエージェントで MCP 設定を行い（[エージェント設定](#ja-agent-setup) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。すぐ使えるひな形が必要なら、`doc/examples/AGENTS.sample.md` を project-local `AGENTS.md` のテンプレートとして使ってください。
+開始前に、利用するコーディングエージェントで MCP 設定を行い（[エージェント設定](#ja-agent-setup) を参照）、エージェント向け `AGENTS.md` を設定し、`doc/examples/AGENT_RULES.md` の内容をエージェント指示へ反映してください。すぐ使えるひな形が必要なら、`doc/examples/AGENTS.sample.md` をプロジェクトローカルな `AGENTS.md` のテンプレートとして使ってください。
 
 うまく動かない場合は、まず `./scripts/doctor.sh` を実行して環境を確認してください。
 
@@ -289,7 +289,7 @@ https://<tailscale-host>:8443/?auth_token=<token>
 
 ブラウザは `sessionStorage` にトークンを保存し、face-app も同じオリジンの `mh_face_auth` cookie を設定します。その後、表示 URL からはトークンを取り除くため、モバイルのホーム画面ショートカットにトークン付き URL を残す必要はありません。
 
-PC ブラウザのローカルアクセスも同じ手順です。`http://127.0.0.1:8765/?auth_token=<token>` を初回だけ開き、その状態をブックマークしておけば次回からはワンクリック。`?auth_token=...` 無しで開くと、静的 UI は読み込まれても `/api/agents/state` が 401 になり、ダッシュボードに `agent state error` が出ます。
+PC ブラウザのローカルアクセスも同じ手順です。`http://127.0.0.1:8765/?auth_token=<token>` を初回だけ開き、その状態をブックマークしておけば、次回からはワンクリックで開けます。`?auth_token=...` 無しで開くと、静的 UI は読み込まれても `/api/agents/state` が 401 になり、ダッシュボードに `agent state error` が出ます。
 
 UFW などホストのファイアウォールを `default deny incoming` で運用している場合、Docker ブリッジからホストの `8765` / `8081` への受信も落ちるので、Docker の既定アドレスプールを明示的に許可してください。多くのディストロでは UFW は `sudo ufw enable` を実行するまで無効です(`sudo ufw status` で確認)。リモートマシンで初めて UFW を設定するときは、ロックアウト防止のため `sudo ufw enable` の **前**に `sudo ufw allow OpenSSH` を入れてください。
 
@@ -386,18 +386,18 @@ cd /path/to/target-repo
 <a id="ja-generic-browser-media"></a>
 ### 汎用ブラウザメディア連携
 
-Face Appは、配信元アプリケーションの詳細を知らずに、信頼済みMP3配信元1件を同じ認証済みブラウザoriginへ中継できます。Minimum Headroomの操作面は再生、停止、状態取得だけで、カタログ、キュー、配信元起動は外部アプリケーションが担当します。
+Face App は、配信元アプリケーションの実装を知らなくても、信頼済みの MP3 配信元を1件だけ、同じ認証済みブラウザのオリジン経由で中継できます。Minimum Headroom 側でできる操作は再生・停止・状態取得に限られます。カタログ、キュー、配信元の起動は外部アプリケーションが担当します。
 
-第三者アプリの実装に必要な構成図・シーケンス図、配信元応答ヘッダー、HTTP/MCPスキーマ、認証、iPhone/iPad挙動、任意のTTSフォーカス、セキュリティ、受け入れ確認は[汎用ブラウザメディア連携ガイド](doc/guides/generic-browser-media.md#japanese)にまとめています。
+第三者アプリの実装に必要な情報は、[汎用ブラウザメディア連携ガイド](doc/guides/generic-browser-media.md#japanese)にまとめています。配信元サービスの準備、任意の検索／ローカルファイルカタログ、推奨するループバック制御プロファイル、構成図とシーケンス図、配信元の応答ヘッダー、HTTP/MCP のスキーマ、認証、iPhone/iPad での挙動、任意の TTS フォーカス連携、セキュリティ、受け入れ確認を扱います。
 
-許可する配信元は、scheme、hostname、実効port、pathnameを正確に指定します。
+許可する配信元は、スキーム、ホスト名、実効ポート、パスまで正確に指定します。
 
 ```bash
 export MH_MEDIA_ALLOWED_ENDPOINTS=http://127.0.0.1:9000/audio.mp3
 ./scripts/run-operator-once.sh --profile realtime
 ```
 
-複数指定はカンマ区切りです。要求URLには一致したパスへのクエリを追加できます。配信元は `audio/mpeg` と `X-Media-Nominal-Bitrate: 128000` を直接返す必要があります。このヘッダーは信頼済み配信元による宣言であり、Minimum HeadroomはMP3フレーム解析、再エンコード、PCMフォールバックを行いません。
+複数指定はカンマで区切ります。要求 URL には、一致したパスへのクエリを追加できます。配信元は `audio/mpeg` と `X-Media-Nominal-Bitrate: 128000` を直接返す必要があります。このヘッダーは信頼済み配信元による宣言です。Minimum Headroom は宣言を確認したうえでバイト列をそのまま中継し、MP3 フレーム解析・再エンコード・PCM フォールバックは行いません。
 
 <a id="ja-agent-setup"></a>
 ## エージェント設定
@@ -473,11 +473,11 @@ cp "$MH_OPS_SKILL" \
 
 詳細パスマトリクス、よくある失敗パターン（特に GUI の 0 バイト `mcp_config.json` トラップ）、権限プリセット、`GEMINI.md` ルール配置は [Antigravity setup](doc/examples/antigravity/README.md) を参照。RMH 音声優先ランチャ `examples/rmh-voice-mode/start-rmh.sh --agent agy` は CLI のプラグインインストールをマシン固有のパス解決込みで自動実行します。
 
-agy 1.1.1でも、RMHと管理対象helperは対話TUI経路なのでprint modeの変更を受けません。
+agy 1.1.1 でも、RMH と管理対象ヘルパーは対話型 TUI 経路で動くため、print mode の変更の影響を受けません。
 ランチャは `agy models` に表示される名前を `--model '<name>'` で受け取り、利用可能なら
-`~/.agents/skills` の正本をpluginへ同期します。別の自動処理では `agy -p -` を使わず、
-stdinを渡す場合はprompt flag自体を省略してください。詳細は
-[agy 1.1.1互換メモ](doc/examples/antigravity/README.md#print-mode-on-agy-111)を参照してください。
+`~/.agents/skills` の正本をプラグインへ同期します。agy を別の自動化に組み込む場合は `agy -p -` を使わず、
+標準入力を渡すときは prompt flag 自体を省略してください。詳細は
+[agy 1.1.1 互換メモ](doc/examples/antigravity/README.md#print-mode-on-agy-111)を参照してください。
 
 ### Hook ブリッジ（face_say の安全網）
 
@@ -517,7 +517,7 @@ MCP クライアントがドット付きツール名（例: `face.event`、`medi
 ## 詳細ガイド
 
 - [ドキュメント索引](doc/README.md#japanese) — ガイド、設定例、仕様、ファームウェア、vision-worker への入口
-- [汎用ブラウザメディア連携](doc/guides/generic-browser-media.md#japanese) — 第三者MP3配信元／コントローラー、HTTP/MCP契約、モバイル再生、セキュリティ、任意TTSフォーカスの実装ガイド
+- [汎用ブラウザメディア連携](doc/guides/generic-browser-media.md#japanese) — 第三者の MP3 配信元とコントローラーの準備、任意のカタログ機能とローカルファイルの安全な扱い、HTTP/MCP 契約、モバイル再生、セキュリティ、任意の TTS フォーカス連携を解説
 - [AtomS3R Devices](doc/guides/atom-devices.md#japanese) — 2つの物理 Atom デバイス（顔 と M12 カメラ）の違い、どの文書がどちらのものか、`--asr-lang` の落とし穴
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) — 起動スクリプトの選び方、tmux ブリッジ、オペレーター画面、キーボードショートカット、バッチ / リアルタイム ASR、隠し復旧、Tailscale リモート運用
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化

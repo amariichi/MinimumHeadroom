@@ -390,7 +390,7 @@ See [Audio target and UI mode](doc/guides/operator-stack.md#audio-target-and-ui-
 
 The Face App can carry one trusted external MP3 source through the same authenticated browser origin without learning anything about the source application. The control surface is limited to play, stop, and status; catalogs, queues, and source startup remain the external application's responsibility.
 
-For the complete third-party contract—including architecture and sequence diagrams, source response headers, HTTP and MCP schemas, authentication, iPhone/iPad behavior, optional TTS focus, security, and acceptance checks—see [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english).
+For the complete third-party contract—including producer-service preparation, an optional searchable/local-file catalog profile, architecture and sequence diagrams, source response headers, HTTP and MCP schemas, authentication, iPhone/iPad behavior, optional TTS focus, security, and acceptance checks—see [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english).
 
 Allow each trusted source endpoint by exact scheme, host, port, and path:
 
@@ -506,7 +506,7 @@ If your MCP client rejects tool names with dots (for example `face.event` or `me
 ## Detailed Guides
 
 - [Documentation Index](doc/README.md#english) — full map of repository docs, guides, examples, specs, firmware, and vision-worker references
-- [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english) — build a third-party MP3 producer/controller integration, including HTTP/MCP contracts, mobile playback, security, and optional TTS focus
+- [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english) — prepare a third-party MP3 producer/controller, including optional catalog and local-file safety, HTTP/MCP contracts, mobile playback, security, and optional TTS focus
 - [AtomS3R Devices](doc/guides/atom-devices.md#english) — the two physical Atom devices (face vs M12 camera), which docs belong to which, and the `--asr-lang` gotcha
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english) — launcher choice, tmux bridge, operator UI, keyboard shortcuts, hidden mobile recovery, batch/realtime ASR, Tailscale remote operation
 - [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization
