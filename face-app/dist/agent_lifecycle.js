@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { isPlainShellCommand } from './tmux_shell.js';
+
+export { isPlainShellCommand } from './tmux_shell.js';
 
 function toLogger(log) {
   if (!log) {
@@ -269,7 +272,6 @@ async function runProcess(command, args, options = {}) {
 const PERMISSION_PRESETS = new Set(['reviewer', 'implementer', 'full']);
 const CODEX_SANDBOX_OK_TOKEN = '__mh_userns_ok__';
 const CODEX_SANDBOX_MODES_REQUIRING_PREFLIGHT = new Set(['read-only', 'workspace-write']);
-const PLAIN_SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'dash', 'fish']);
 let codexSandboxProbeCache = null;
 
 export function inferAgentType(agentCmd) {
@@ -373,16 +375,6 @@ async function probeCodexSandboxOnce(runCommandFn, log) {
 
 export function resetCodexSandboxProbeCacheForTests() {
   codexSandboxProbeCache = null;
-}
-
-export function isPlainShellCommand(command) {
-  const source = asNonEmptyString(command);
-  if (!source) {
-    return false;
-  }
-  const firstWord = source.split(/\s+/)[0] ?? '';
-  const basename = path.basename(firstWord).replace(/^-+/, '').toLowerCase();
-  return PLAIN_SHELL_COMMANDS.has(basename);
 }
 
 export function buildPermissionConfig(agentType, preset, options = {}) {

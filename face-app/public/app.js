@@ -128,6 +128,7 @@ const operatorTextSendButtonEl = document.getElementById('operator-text-send');
 const operatorTextClearButtonEl = document.getElementById('operator-text-clear');
 const operatorTextCancelButtonEl = document.getElementById('operator-text-cancel');
 const operatorTextCtrlButtonEl = document.getElementById('operator-text-ctrl');
+const operatorTextTabButtonEl = document.getElementById('operator-text-tab');
 const operatorTextSlashButtonEl = document.getElementById('operator-text-slash');
 const operatorKeyLeftEl = document.getElementById('operator-key-left');
 const operatorKeyUpEl = document.getElementById('operator-key-up');
@@ -443,6 +444,9 @@ const OPERATOR_MIRROR_TAP_MAX_DURATION_MS = 260;
 const OPERATOR_MIRROR_DOUBLE_TAP_INTERVAL_MS = 320;
 let operatorKeyboardHelpOpen = false;
 let operatorCtrlChordArmed = false;
+let operatorTerminalDraftActive = false;
+let operatorTerminalClearPending = false;
+let operatorTerminalKeyPending = null;
 const operatorBatchAsrConfig = {
   enabled: false
 };
@@ -831,6 +835,8 @@ function handleCompletedOperatorFocusResult(options = {}) {
   const statusPrefix =
     typeof options.statusPrefix === 'string' && options.statusPrefix.trim() !== '' ? options.statusPrefix.trim() : 'pane switched';
 
+  operatorTerminalKeyPending = null;
+  setOperatorTerminalDraftActive(false);
   operatorMirrorPaneId = paneId ?? operatorMirrorPaneId;
   if (paneId) {
     operatorMirrorActivitySuppression = {
@@ -2695,6 +2701,9 @@ function sendOperatorResponse(responseKind, value, extra = {}) {
   if (extra.submit === false) {
     payload.submit = false;
   }
+  if (typeof extra.prefixText === 'string' && extra.prefixText !== '') {
+    payload.prefix_text = extra.prefixText;
+  }
 
   const sent = sendSocketPayload(payload);
   if (!sent) {
@@ -3146,10 +3155,128 @@ function sendOperatorRealtimeAsrPayload(type, extra = {}) {
   });
 }
 
+function resetOperatorLocalTextInput({ focusTextInput = false } = {}) {
+  if (!operatorTextInputEl) {
+    return false;
+  }
+  cancelPendingOperatorRealtimeAsr(true);
+  clearOperatorRealtimeAudioBuffer();
+  operatorTextInputEl.value = '';
+  syncOperatorTextInputHeight();
+  if (focusTextInput) {
+    operatorTextInputEl.focus({ preventScroll: true });
+  }
+  return true;
+}
+
+function setOperatorTerminalDraftActive(active) {
+  operatorTerminalDraftActive = active === true;
+  if (!operatorTerminalDraftActive) {
+    operatorTerminalClearPending = false;
+  }
+  if (operatorTextCardEl) {
+    operatorTextCardEl.classList.toggle('is-terminal-draft', operatorTerminalDraftActive);
+  }
+}
+
+function normalizeOperatorTerminalAckKey(token) {
+  const normalized = typeof token === 'string' ? token.trim().toLowerCase() : '';
+  if (normalized === 'enter' || normalized === 'return' || normalized === 'c-m') {
+    return 'C-m';
+  }
+  if (normalized === 'tab') {
+    return 'Tab';
+  }
+  return token;
+}
+
+function sendOperatorTerminalDraftKey(token, { finish = false, focusTextInput = true, statusText = null } = {}) {
+  if (!operatorTextInputEl) {
+    return false;
+  }
+  if (operatorTerminalKeyPending) {
+    setOperatorStatusLine('terminal key pending', 'default');
+    return false;
+  }
+  if (operatorTerminalClearPending) {
+    setOperatorStatusLine('terminal clear pending', 'default');
+    return false;
+  }
+
+  const prefixText = operatorTextInputEl.value;
+  const pending = {
+    token: normalizeOperatorTerminalAckKey(token),
+    prefixText,
+    finish,
+    focusTextInput,
+    previousTerminalDraftActive: operatorTerminalDraftActive
+  };
+  operatorTerminalKeyPending = pending;
+  const sent = sendOperatorResponse('key', token, {
+    ...(prefixText === '' ? {} : { prefixText })
+  });
+  if (!sent) {
+    operatorTerminalKeyPending = null;
+    return false;
+  }
+
+  if (statusText) {
+    setOperatorStatusLine(statusText, 'default');
+  }
+  return true;
+}
+
+function settleOperatorTerminalDraftKey(responseValue, succeeded) {
+  const pending = operatorTerminalKeyPending;
+  if (!pending || pending.token !== responseValue) {
+    return false;
+  }
+  operatorTerminalKeyPending = null;
+
+  if (!succeeded) {
+    setOperatorTerminalDraftActive(pending.previousTerminalDraftActive);
+    updateOperatorUi();
+    return true;
+  }
+
+  if (operatorTextInputEl && pending.prefixText !== '' && operatorTextInputEl.value.startsWith(pending.prefixText)) {
+    operatorTextInputEl.value = operatorTextInputEl.value.slice(pending.prefixText.length);
+    syncOperatorTextInputHeight();
+  }
+  setOperatorTerminalDraftActive(!pending.finish);
+  if (pending.focusTextInput && operatorTextInputEl) {
+    operatorTextInputEl.focus({ preventScroll: true });
+  }
+  updateOperatorUi();
+  return true;
+}
+
+function requestOperatorTabCompletion() {
+  if (operatorCtrlChordArmed) {
+    setOperatorCtrlChordArmed(false, { updateStatus: false });
+  }
+  return sendOperatorTerminalDraftKey('Tab', {
+    finish: false,
+    statusText: 'completion pending'
+  });
+}
+
 function submitOperatorTextInput() {
   if (!operatorTextInputEl) {
     return;
   }
+  if (operatorTerminalKeyPending) {
+    setOperatorStatusLine('terminal key pending', 'default');
+    return;
+  }
+  if (operatorTerminalDraftActive) {
+    sendOperatorTerminalDraftKey('Enter', {
+      finish: true,
+      statusText: 'send pending'
+    });
+    return;
+  }
+
   const text = operatorTextInputEl.value.trim();
   if (text === '') {
     setOperatorStatusLine('text is empty', 'warn');
@@ -3157,10 +3284,9 @@ function submitOperatorTextInput() {
   }
   const sent = sendOperatorResponse('text', text, { submit: true });
   if (sent) {
-    cancelPendingOperatorRealtimeAsr(true);
-    clearOperatorRealtimeAudioBuffer();
-    operatorTextInputEl.value = '';
-    syncOperatorTextInputHeight();
+    resetOperatorLocalTextInput();
+    setOperatorTerminalDraftActive(false);
+    updateOperatorUi();
     setOperatorStatusLine('text sent', 'ok');
   }
 }
@@ -3169,15 +3295,31 @@ function clearOperatorTextInput({ focusTextInput = false } = {}) {
   if (!operatorTextInputEl) {
     return false;
   }
-  cancelPendingOperatorRealtimeAsr(true);
-  clearOperatorRealtimeAudioBuffer();
-  operatorTextInputEl.value = '';
-  syncOperatorTextInputHeight();
-  setOperatorStatusLine('text cleared', 'default');
-  if (focusTextInput) {
-    operatorTextInputEl.focus({ preventScroll: true });
+  if (operatorTerminalKeyPending) {
+    setOperatorStatusLine('terminal key pending', 'default');
+    return false;
   }
-  return true;
+
+  const hadTerminalDraft = operatorTerminalDraftActive;
+  resetOperatorLocalTextInput({ focusTextInput });
+  if (!hadTerminalDraft) {
+    setOperatorTerminalDraftActive(false);
+    updateOperatorUi();
+    setOperatorStatusLine('text cleared', 'default');
+    return true;
+  }
+
+  if (operatorTerminalClearPending) {
+    setOperatorStatusLine('terminal clear pending', 'default');
+    return true;
+  }
+
+  const sent = sendOperatorResponse('key', 'C-u');
+  if (sent) {
+    operatorTerminalClearPending = true;
+    setOperatorStatusLine('clearing terminal input', 'default');
+  }
+  return sent;
 }
 
 function focusOperatorTextInput() {
@@ -3635,9 +3777,12 @@ function updateOperatorUi() {
   }
   if (operatorTextCardEl) {
     operatorTextCardEl.classList.toggle('hidden', false);
+    operatorTextCardEl.classList.toggle('is-terminal-draft', operatorTerminalDraftActive);
   }
   if (operatorTextInputEl) {
-    if (awaiting && inputKind === 'text') {
+    if (operatorTerminalDraftActive) {
+      operatorTextInputEl.placeholder = 'Continue terminal input';
+    } else if (awaiting && inputKind === 'text') {
       operatorTextInputEl.placeholder = 'Type response text';
     } else if (awaiting && inputKind) {
       operatorTextInputEl.placeholder = 'Type manual input (prompt expects choice)';
@@ -3646,7 +3791,7 @@ function updateOperatorUi() {
     }
   }
 
-  const hasTextDraft = operatorTextInputEl ? operatorTextInputEl.value.trim() !== '' : false;
+  const hasTextDraft = operatorTerminalDraftActive || (operatorTextInputEl ? operatorTextInputEl.value.trim() !== '' : false);
   if (!awaiting && !hasTextDraft) {
     if (flags.showRestart) {
       setOperatorStatusLine('recovery', 'warn');
@@ -3663,6 +3808,9 @@ function handleOperatorPrompt(payload) {
     return;
   }
 
+  if (operatorActivePrompt?.request_id !== payload.request_id) {
+    setOperatorTerminalDraftActive(false);
+  }
   operatorActivePrompt = payload;
   renderOperatorChoices(payload);
   dispatchOperatorUiAction({
@@ -3680,12 +3828,39 @@ function handleOperatorAck(payload) {
   const stage = typeof payload.stage === 'string' ? payload.stage : '-';
   const reason = typeof payload.reason === 'string' && payload.reason !== '' ? payload.reason : '';
   const ok = payload.ok === true;
+  const responseKind = typeof payload.response_kind === 'string' ? payload.response_kind : null;
+  const responseValue = typeof payload.response_value === 'string' ? payload.response_value : null;
 
   setOperatorAckLine(`ack: ${stage}${reason ? ` (${reason})` : ''}`, ok ? 'ok' : 'warn');
   if (!ok) {
-    setOperatorStatusLine(`ack failed: ${reason || 'unknown'}`, 'warn');
+    if (responseKind === 'key' && responseValue) {
+      settleOperatorTerminalDraftKey(responseValue, false);
+    }
+    if (responseKind === 'key' && responseValue === 'C-u') {
+      operatorTerminalClearPending = false;
+    }
+    if (reason === 'tab_requires_shell') {
+      setOperatorTerminalDraftActive(false);
+      updateOperatorUi();
+      setOperatorStatusLine('Tab completion needs a shell prompt', 'warn');
+    } else {
+      setOperatorStatusLine(`ack failed: ${reason || 'unknown'}`, 'warn');
+    }
   } else if (stage === 'sent_to_tmux') {
-    setOperatorStatusLine('input delivered', 'ok');
+    if (responseKind === 'key' && responseValue) {
+      settleOperatorTerminalDraftKey(responseValue, true);
+    }
+    if (responseKind === 'key' && responseValue === 'C-u') {
+      setOperatorTerminalDraftActive(false);
+      updateOperatorUi();
+      setOperatorStatusLine('terminal input cleared', 'ok');
+    } else if (responseKind === 'key' && responseValue === 'Tab') {
+      setOperatorStatusLine('completion requested', 'ok');
+    } else if (responseKind === 'key' && responseValue === 'C-m') {
+      setOperatorStatusLine('text sent', 'ok');
+    } else {
+      setOperatorStatusLine('input delivered', 'ok');
+    }
   }
 
   if (operatorEffectiveUiMode !== OPERATOR_UI_MODE_MOBILE) {
@@ -3697,7 +3872,7 @@ function handleOperatorAck(payload) {
     });
   }
 
-  if (ok && stage === 'sent_to_tmux') {
+  if (ok && stage === 'sent_to_tmux' && payload.request_resolved !== false) {
     operatorActivePrompt = null;
   }
 }
@@ -5680,6 +5855,14 @@ function installOperatorControls() {
       setOperatorCtrlChordArmed(!operatorCtrlChordArmed, { focusTextInput: !operatorCtrlChordArmed });
     });
   }
+  if (operatorTextTabButtonEl) {
+    operatorTextTabButtonEl.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+    });
+    operatorTextTabButtonEl.addEventListener('click', () => {
+      requestOperatorTabCompletion();
+    });
+  }
   if (operatorTextSlashButtonEl) {
     operatorTextSlashButtonEl.addEventListener('click', () => {
       if (operatorCtrlChordArmed) {
@@ -5701,6 +5884,19 @@ function installOperatorControls() {
       syncOperatorTextInputHeight();
     });
     operatorTextInputEl.addEventListener('keydown', (event) => {
+      if (
+        event.key === 'Tab' &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.isComposing
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        requestOperatorTabCompletion();
+        return;
+      }
       if (operatorCtrlChordArmed) {
         const token = normalizeOperatorCtrlChordKey(event);
         if (token) {
@@ -5708,8 +5904,12 @@ function installOperatorControls() {
           event.stopPropagation();
           setOperatorCtrlChordArmed(false, { updateStatus: false });
           hideOperatorKeyboard(false);
-          sendOperatorResponse('key', token, { requestId: null, submit: false });
-          setOperatorStatusLine(`sent ${token}`, 'ok');
+          if (operatorTerminalDraftActive) {
+            sendOperatorTerminalDraftKey(token, { focusTextInput: false, statusText: `sent ${token}` });
+          } else {
+            sendOperatorResponse('key', token, { requestId: null, submit: false });
+            setOperatorStatusLine(`sent ${token}`, 'ok');
+          }
           return;
         }
         if (event.key === 'Escape') {
@@ -5745,7 +5945,14 @@ function installOperatorControls() {
       if (operatorCtrlChordArmed) {
         setOperatorCtrlChordArmed(false, { updateStatus: false });
       }
-      sendOperatorResponse('key', token, { submit: false });
+      if (operatorTerminalDraftActive) {
+        sendOperatorTerminalDraftKey(token, {
+          finish: token === 'Enter',
+          statusText: token === 'Enter' ? 'send pending' : `${token} pending`
+        });
+      } else {
+        sendOperatorResponse('key', token, { submit: false });
+      }
     });
   }
   updateOperatorCtrlButtonState();

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { isPlainShellCommand } from './tmux_shell.js';
 
 const OPERATOR_PROMPT_STATES = new Set(['awaiting_input', 'awaiting_approval']);
 const OPERATOR_INPUT_KINDS = new Set(['text', 'choice_single', 'key']);
@@ -16,6 +17,7 @@ const KEY_TOKEN_MAP = new Map([
   ['enter', 'C-m'],
   ['return', 'C-m'],
   ['c-m', 'C-m'],
+  ['tab', 'Tab'],
   ['up', 'Up'],
   ['arrowup', 'Up'],
   ['down', 'Down'],
@@ -230,6 +232,11 @@ export function createTmuxController(options = {}) {
     await runTmux(['send-keys', '-t', activePane, '-l', '--', text]);
   }
 
+  async function getPaneCurrentCommand() {
+    const result = await runTmux(['display-message', '-p', '-t', activePane, '#{pane_current_command}']);
+    return asNonEmptyString(result.stdout) ?? '';
+  }
+
   async function pasteTextToPane(text, submit) {
     const bufferName = `mh-bridge-${randomUUID().slice(0, 8)}`;
     await runTmux(['load-buffer', '-b', bufferName, '-'], text);
@@ -264,10 +271,23 @@ export function createTmuxController(options = {}) {
       activePane = nextPane;
       return activePane;
     },
-    async sendKey(tokenOrValue) {
+    async sendKey(tokenOrValue, options = {}) {
       const token = normalizeOperatorKeyToken(tokenOrValue);
       if (!token) {
         throw reasonError('unsupported_key', `unsupported key token: ${tokenOrValue}`);
+      }
+      if (token === 'Tab') {
+        const currentCommand = await getPaneCurrentCommand();
+        if (!isPlainShellCommand(currentCommand)) {
+          throw reasonError(
+            'tab_requires_shell',
+            `Tab completion requires a shell prompt (current command: ${currentCommand || 'unknown'})`
+          );
+        }
+      }
+      const prefixText = typeof options.prefixText === 'string' ? options.prefixText : '';
+      if (prefixText !== '') {
+        await pasteTextToPane(prefixText, false);
       }
       await sendRawKeyToken(token);
     },
@@ -418,7 +438,7 @@ export function createOperatorBridgeRuntime(options = {}) {
     });
   }
 
-  function emitAck(sessionId, requestId, ok, stage, reason = null, detail = null) {
+  function emitAck(sessionId, requestId, ok, stage, reason = null, detail = null, response = {}) {
     emit({
       type: 'operator_ack',
       session_id: normalizeSessionId(sessionId, defaultSessionId),
@@ -426,7 +446,10 @@ export function createOperatorBridgeRuntime(options = {}) {
       ok,
       stage,
       reason: reason ?? null,
-      detail: detail ?? null
+      detail: detail ?? null,
+      response_kind: asNonEmptyString(response.responseKind),
+      response_value: asNonEmptyString(response.responseValue),
+      request_resolved: response.requestResolved === true
     });
   }
 
@@ -555,15 +578,24 @@ export function createOperatorBridgeRuntime(options = {}) {
       return;
     }
 
-    emitAck(sessionId, requestId, true, 'received', null, null);
+    const responseMeta = {
+      responseKind,
+      responseValue: typeof payload.value === 'string' ? payload.value : null,
+      requestResolved: false
+    };
+    emitAck(sessionId, requestId, true, 'received', null, null, responseMeta);
 
     try {
+      let requestResolved = false;
       if (responseKind === 'key') {
         const token = normalizeOperatorKeyToken(payload.value);
         if (!token) {
           throw reasonError('unsupported_key', 'unsupported key');
         }
-        await tmuxController.sendKey(token);
+        responseMeta.responseValue = token;
+        const prefixText = typeof payload.prefix_text === 'string' ? payload.prefix_text : '';
+        await tmuxController.sendKey(token, { prefixText });
+        requestResolved = token === 'C-m';
       } else if (responseKind === 'restart') {
         await tmuxController.restart();
       } else if (responseKind === 'text') {
@@ -571,20 +603,26 @@ export function createOperatorBridgeRuntime(options = {}) {
         if (!text) {
           throw reasonError('empty_text', 'text value is empty');
         }
+        const submit = payload.submit !== false;
         await tmuxController.sendText(text, {
-          submit: payload.submit !== false,
+          submit,
           reinforceSubmit: false
         });
+        requestResolved = submit;
       } else if (responseKind === 'choice_single') {
         const choice = normalizeChoiceValue(payload.value);
         if (!choice) {
           throw reasonError('empty_choice', 'choice value is empty');
         }
+        const submit = payload.submit !== false;
         await tmuxController.sendText(choice, {
-          submit: payload.submit !== false,
+          submit,
           reinforceSubmit: isManualFreeChoice
         });
+        requestResolved = submit;
       }
+
+      responseMeta.requestResolved = requestResolved;
 
       updateSessionState(sessionId, {
         tmux_online: true,
@@ -592,20 +630,30 @@ export function createOperatorBridgeRuntime(options = {}) {
         reason: null
       });
 
-      if (requestId && responseKind !== 'key') {
+      if (requestId && requestResolved) {
         activeRequestBySession.delete(sessionId);
       }
 
-      emitAck(sessionId, requestId, true, 'sent_to_tmux', null, null);
+      emitAck(sessionId, requestId, true, 'sent_to_tmux', null, null, responseMeta);
       emitState(sessionId);
     } catch (error) {
       const reason = asNonEmptyString(error?.reason) ?? 'tmux_send_failed';
-      updateSessionState(sessionId, {
-        tmux_online: false,
-        recovery_mode: true,
-        reason
-      });
-      emitAck(sessionId, requestId, false, 'failed', reason, error.message);
+      const inputRefused = reason === 'tab_requires_shell';
+      updateSessionState(
+        sessionId,
+        inputRefused
+          ? {
+              tmux_online: true,
+              recovery_mode: false,
+              reason: null
+            }
+          : {
+              tmux_online: false,
+              recovery_mode: true,
+              reason
+            }
+      );
+      emitAck(sessionId, requestId, false, 'failed', reason, error.message, responseMeta);
       emitState(sessionId);
     }
   }
