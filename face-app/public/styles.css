@@ -1115,6 +1115,7 @@ body.ui-mode-pc .operator-btn.face-mode-toggle {
 
 .operator-text-actions .operator-btn {
   min-height: 40px;
+  min-width: 40px;
   font-size: 0.8rem;
   font-weight: 700;
   line-height: 1.1;
@@ -1129,6 +1130,14 @@ body.ui-mode-pc .operator-btn.face-mode-toggle {
   padding: 6px;
   display: grid;
   gap: 6px;
+}
+
+.operator-text-card.is-terminal-draft {
+  border-color: rgba(118, 226, 255, 0.56);
+}
+
+.operator-text-card.is-terminal-draft .operator-text-input {
+  border-color: rgba(118, 226, 255, 0.5);
 }
 
 .operator-text-input {
