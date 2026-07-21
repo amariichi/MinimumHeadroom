@@ -3790,7 +3790,7 @@ function handleOperatorTerminalSnapshot(payload) {
 
 function showUtterance(text, ttlMs) {
   utteranceEl.textContent = text;
-  utteranceEl.classList.remove('hidden');
+  utteranceEl.classList.add('is-visible');
   const ttl = typeof ttlMs === 'number' && Number.isFinite(ttlMs) ? ttlMs : 3500;
   utteranceExpiresAt = Date.now() + Math.max(900, Math.min(ttl, 10_000));
 }
@@ -5863,7 +5863,7 @@ function tick(nowMs) {
   applyControlsToRig(rig, renderedControls);
 
   if (utteranceExpiresAt > 0 && Date.now() >= utteranceExpiresAt) {
-    utteranceEl.classList.add('hidden');
+    utteranceEl.classList.remove('is-visible');
     utteranceExpiresAt = 0;
   }
 

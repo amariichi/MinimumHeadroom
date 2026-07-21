@@ -259,7 +259,7 @@ body.face-display-hidden #face-canvas {
   z-index: 3;
   left: 50%;
   bottom: clamp(14px, 4vh, 40px);
-  transform: translateX(-50%);
+  transform: translate(-50%, 8px);
   max-width: min(72vw, 880px);
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.22);
@@ -270,6 +270,23 @@ body.face-display-hidden #face-canvas {
   font-weight: 700;
   letter-spacing: 0.03em;
   box-shadow: 0 14px 28px rgba(0, 0, 0, 0.34);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 320ms ease-in,
+    transform 320ms cubic-bezier(0.4, 0, 1, 1),
+    visibility 0s linear 320ms;
+}
+
+.utterance.is-visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 180ms ease-out,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0s;
 }
 
 .hidden {
@@ -1299,6 +1316,13 @@ body.ui-mode-mobile .panel {
   display: none;
 }
 
+body.ui-mode-mobile .utterance {
+  z-index: 7;
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(145deg, rgba(255, 150, 76, 0.97), rgba(209, 99, 49, 0.96));
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.46);
+}
+
 body.ui-mode-mobile .agent-dashboard {
   display: none;
 }
@@ -1700,5 +1724,13 @@ body.ui-mode-mobile .media-player-button {
   body.ui-mode-mobile .operator-text-card {
     padding: 6px;
     gap: 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .utterance,
+  .utterance.is-visible {
+    transform: translateX(-50%);
+    transition: none;
   }
 }
