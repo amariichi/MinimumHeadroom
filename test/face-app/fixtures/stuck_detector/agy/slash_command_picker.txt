@@ -4,4 +4,4 @@
 > /exit (quit)  Exit the CLI
 
   ↑/↓ Navigate · enter Select · tab Complete
-esc to cancel                                                                             Gemini 3.5 Flash (Medium)
+esc to cancel                                                                             Gemini 3.6 Flash (Medium)
