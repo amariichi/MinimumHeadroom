@@ -178,6 +178,82 @@ test('Atom audio VAD bridge submits a completed utterance to ASR and operator re
   assert.equal(operatorResponses[0].source, 'atom-vad');
 });
 
+test('Atom audio VAD bridge retains configured pre-roll when a learned backend detects speech late', async () => {
+  const utterances = [];
+  let frameIndex = 0;
+  const vadBackend = {
+    name: 'delayed-onset',
+    synchronous: true,
+    decide() {
+      frameIndex += 1;
+      return { isSpeech: frameIndex === 3 };
+    }
+  };
+  const bridge = createAtomAudioVadBridge({
+    vadBackend,
+    preRollMs: 200,
+    endSilenceMs: 200,
+    minSpeechMs: 50,
+    onUtterance: (utterance) => {
+      utterances.push(utterance);
+      return { handled: true };
+    }
+  });
+
+  for (let seq = 1; seq <= 5; seq += 1) {
+    bridge.handlePayload(
+      audioPayload(
+        pcmFrame({
+          samples: 1600,
+          amplitude: seq <= 3 ? 3000 : 0
+        }),
+        { seq }
+      )
+    );
+  }
+  await bridge.drain();
+
+  assert.equal(utterances.length, 1);
+  // Two 100 ms warm-up frames, the first positive frame, and two trailing
+  // silence frames must all be present. Without pre-roll the initial 200 ms
+  // of real speech would be missing from the WAV passed to ASR.
+  assert.equal(utterances[0].wav.readUInt32LE(40), 5 * 1600 * 2);
+  assert.equal(utterances[0].utteranceMs, 500);
+  assert.equal(utterances[0].speechMs, 100);
+});
+
+test('Atom audio VAD bridge abandons a sub-minimum burst before the next real utterance', async () => {
+  const utterances = [];
+  const bridge = createAtomAudioVadBridge({
+    thresholdRms: 0.01,
+    endSilenceMs: 200,
+    minSpeechMs: 250,
+    onUtterance: (utterance) => {
+      utterances.push(utterance);
+      return { handled: true };
+    }
+  });
+
+  // A 100 ms click/burst is too short and must be discarded after 200 ms of
+  // silence instead of remaining active and being prepended to later speech.
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 2 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 3 }));
+
+  // A valid 300 ms utterance followed by the same 200 ms tail should submit
+  // exactly once and contain only these five frames.
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 4 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 5 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 6 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 7 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 8 }));
+  await bridge.drain();
+
+  assert.equal(utterances.length, 1);
+  assert.equal(utterances[0].wav.readUInt32LE(40), 5 * 1600 * 2);
+  assert.equal(utterances[0].speechMs, 300);
+});
+
 test('Atom audio VAD bridge uses MH_LANG as the default ASR language', async () => {
   const fetches = [];
   const bridge = createAtomAudioVadBridge({
@@ -409,13 +485,26 @@ test('createSileroVadBackend posts to the worker and returns its decision', asyn
       };
     }
   });
-  const decision = await backend.decide(pcmFrame({ samples: 1024, amplitude: 3000 }), 16000);
+  const decision = await backend.decide(
+    pcmFrame({ samples: 1024, amplitude: 3000 }),
+    16000,
+    {
+      sessionId: 'atom-session',
+      streamEpoch: 4,
+      generation: 7,
+      seq: 12
+    }
+  );
   assert.equal(decision.isSpeech, true);
   assert.equal(decision.confidence, 0.91);
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /\/v1\/vad$/);
   assert.equal(calls[0].body.sampleRate, 16000);
   assert.equal(calls[0].body.threshold, 0.3);
+  assert.equal(calls[0].body.sessionId, 'atom-session');
+  assert.equal(calls[0].body.streamEpoch, 4);
+  assert.equal(calls[0].body.generation, 7);
+  assert.equal(calls[0].body.sequence, 12);
   assert.ok(typeof calls[0].body.audioBase64 === 'string');
 });
 
@@ -489,6 +578,43 @@ test('Atom audio VAD bridge feeds frames through an async backend in arrival ord
   assert.equal(fetches.length, 1);
   assert.equal(operatorResponses.length, 1);
   assert.equal(operatorResponses[0].value, 'こんにちは');
+});
+
+test('Atom audio VAD bridge serializes async backend invocation, not only result application', async () => {
+  let calls = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const utterances = [];
+  const vadBackend = {
+    name: 'stateful-async',
+    async decide(frame) {
+      calls += 1;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setImmediate(resolve));
+      inFlight -= 1;
+      return { isSpeech: pcm16Rms(frame) >= 0.01 };
+    }
+  };
+  const bridge = createAtomAudioVadBridge({
+    vadBackend,
+    endSilenceMs: 200,
+    minSpeechMs: 50,
+    onUtterance: (utterance) => {
+      utterances.push(utterance);
+      return { handled: true };
+    }
+  });
+
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 2 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 3 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 4 }));
+  await bridge.drain();
+
+  assert.equal(calls, 4);
+  assert.equal(maxInFlight, 1);
+  assert.equal(utterances.length, 1);
 });
 
 test('Atom audio VAD bridge async backend respects resetSession epoch', async () => {
@@ -644,6 +770,34 @@ test('Atom audio VAD bridge drops frames when no ASR upstream is configured', ()
   assert.equal(directive.relay, false);
   assert.equal(directive.accepted, false);
   assert.equal(directive.reason, 'asr_not_configured');
+});
+
+test('Atom audio VAD bridge can hand a WAV directly to an interpreter without a legacy ASR URL', async () => {
+  const utterances = [];
+  const bridge = createAtomAudioVadBridge({
+    thresholdRms: 0.01,
+    endSilenceMs: 200,
+    minSpeechMs: 50,
+    onUtterance: (utterance) => {
+      utterances.push(utterance);
+      return { handled: true };
+    },
+    fetchImpl: async () => {
+      throw new Error('legacy ASR must not be called');
+    }
+  });
+
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1, generation: 2 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3200 }), { seq: 2, generation: 2 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 3, generation: 2 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 4, generation: 2 }));
+  await bridge.drain();
+
+  assert.equal(utterances.length, 1);
+  assert.equal(utterances[0].wav.subarray(0, 4).toString('ascii'), 'RIFF');
+  assert.equal(utterances[0].sessionId, 'atom-test');
+  assert.equal(utterances[0].generation, 2);
+  assert.ok(utterances[0].speechMs >= 100);
 });
 
 test('Atom audio VAD bridge finalizes on a receive-gap timer when the device stops sending', async () => {

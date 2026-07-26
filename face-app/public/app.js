@@ -73,6 +73,7 @@ import {
 } from './face_rig.js';
 import { createMediaPlayer } from './media_player.js';
 import { createDraggablePanel } from './draggable_panel.js';
+import { setupRuntimeModeUi } from './runtime_mode_ui.js';
 
 const canvas = document.getElementById('face-canvas');
 const stageEl = document.getElementById('stage');
@@ -6203,6 +6204,8 @@ async function bootstrap() {
   connectWebSocket();
   renderer.setAnimationLoop(tick);
 }
+
+setupRuntimeModeUi({ fetchImpl: authFetch });
 
 bootstrap().catch((error) => {
   markOperatorUiBootReady();

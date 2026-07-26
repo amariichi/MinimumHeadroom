@@ -3,11 +3,21 @@
 import { readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
+import {
+  ATOM_BRIDGE_SUBPROTOCOL,
+  buildAtomAudioPostHeaders,
+  buildAtomEndpointState,
+  buildAtomVolumeResult,
+  parseAtomVolumeSet,
+  shouldForwardAudioToAtom,
+  websocketServiceEndpointMatches
+} from './atoms3r_bridge_protocol.mjs';
 
 const DEFAULT_FACE_WS_URL = 'ws://127.0.0.1:8765/ws';
 const DEFAULT_ATOM_URL = 'http://atom-headroom.local';
 const DEFAULT_MAX_PAYLOAD_BYTES = 1_050_000;
 const DEFAULT_MOUTH_INTERVAL_MS = 80;
+const DEFAULT_HEALTH_HEARTBEAT_MS = 5000;
 
 const faceWsUrlInput = process.env.FACE_WS_URL ?? process.env.MH_FACE_WS_URL ?? DEFAULT_FACE_WS_URL;
 const atomUrlInput = process.env.ATOM_HEADROOM_URL;
@@ -17,6 +27,10 @@ const faceAuthToken = process.env.MH_FACE_AUTH_TOKEN ?? tokenFromUrl(faceWsUrlIn
 const atomAuthToken = process.env.ATOM_HEADROOM_AUTH_TOKEN ?? faceAuthToken;
 const maxPayloadBytes = positiveInt(process.env.ATOM_HEADROOM_MAX_PAYLOAD_BYTES, DEFAULT_MAX_PAYLOAD_BYTES);
 const mouthIntervalMs = positiveInt(process.env.ATOM_HEADROOM_MOUTH_INTERVAL_MS, DEFAULT_MOUTH_INTERVAL_MS);
+const healthHeartbeatMs = positiveInt(
+  process.env.ATOM_HEADROOM_HEALTH_HEARTBEAT_MS,
+  DEFAULT_HEALTH_HEARTBEAT_MS
+);
 const forwardAudio = process.env.ATOM_HEADROOM_FORWARD_AUDIO !== '0';
 const fetchAudioRef = process.env.ATOM_HEADROOM_FETCH_AUDIO_REF === '1';
 const discoveryEnabled = process.env.ATOM_HEADROOM_DISCOVERY !== '0';
@@ -37,10 +51,13 @@ const relayTypes = new Set(['event', 'tts_state', 'tts_mouth', 'tts_audio']);
 
 let ws = null;
 let reconnectTimer = null;
+let healthHeartbeatTimer = null;
+let healthHeartbeatInFlight = false;
 let postChain = Promise.resolve();
 let atomBaseUrl = configuredAtomBaseUrl;
 let atomPayloadUrl = '';
 let atomAudioUrl = '';
+let atomVolumeUrl = '';
 let atomHealthUrl = '';
 refreshAtomUrls();
 // Highest tts generation seen. On a barge-in/interrupt the server bumps the
@@ -76,23 +93,31 @@ console.log(
 
 await ensureAtomReachable('startup');
 connect();
+healthHeartbeatTimer = setInterval(() => {
+  void publishAtomEndpointState('heartbeat');
+}, healthHeartbeatMs);
 
 process.on('SIGINT', () => {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
   }
+  if (healthHeartbeatTimer) {
+    clearInterval(healthHeartbeatTimer);
+  }
   if (ws) {
+    sendEndpointState(false, null, 'shutdown');
     ws.close();
   }
   process.exit(0);
 });
 
 function connect() {
-  ws = new WebSocket(faceWsUrl);
+  ws = new WebSocket(faceWsUrl, ATOM_BRIDGE_SUBPROTOCOL);
 
   ws.addEventListener('open', () => {
     resetGenerationWindow('websocket_open');
     console.log('[atoms3r-bridge] connected to face-app websocket');
+    void publishAtomEndpointState('websocket_open');
   });
 
   ws.addEventListener('message', (event) => {
@@ -124,7 +149,15 @@ async function handleWsMessage(data) {
     return;
   }
 
+  if (payload.type === 'atom_volume_set') {
+    await handleVolumeSet(payload);
+    return;
+  }
+
   if (payload.type === 'tts_audio_ref') {
+    if (!shouldForwardAudioToAtom(payload)) {
+      return;
+    }
     observeGeneration(payload);
     console.log(
       `[atoms3r-bridge] received tts_audio_ref bytes=${Number.isInteger(payload.byte_length) ? payload.byte_length : 'unknown'}`
@@ -148,6 +181,9 @@ async function handleWsMessage(data) {
   if (payload.type === 'tts_state') {
     console.log(`[atoms3r-bridge] received tts_state phase=${payload.phase ?? 'unknown'}`);
   } else if (payload.type === 'tts_audio') {
+    if (!shouldForwardAudioToAtom(payload)) {
+      return;
+    }
     observeGeneration(payload);
     await forwardDirectAudio(payload);
     return;
@@ -192,7 +228,7 @@ async function forwardAudioRef(payload) {
   }
 
   const advertisedLength = Number.isInteger(payload.byte_length) ? payload.byte_length : null;
-  if (advertisedLength !== null && estimatedAudioPayloadBytes(advertisedLength) > maxPayloadBytes) {
+  if (advertisedLength !== null && advertisedLength > maxPayloadBytes) {
     console.error(`[atoms3r-bridge] skipping audio ref; advertised payload is too large (${advertisedLength} bytes)`);
     return;
   }
@@ -213,29 +249,28 @@ async function forwardAudioRef(payload) {
   }
 
   const contentLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
-  if (Number.isInteger(contentLength) && contentLength > 0 && estimatedAudioPayloadBytes(contentLength) > maxPayloadBytes) {
+  if (Number.isInteger(contentLength) && contentLength > 0 && contentLength > maxPayloadBytes) {
     console.error(`[atoms3r-bridge] skipping audio ref; fetched payload is too large (${contentLength} bytes)`);
     return;
   }
 
   const audio = Buffer.from(await response.arrayBuffer());
-  if (estimatedAudioPayloadBytes(audio.length) > maxPayloadBytes) {
+  if (audio.length === 0) {
+    console.error('[atoms3r-bridge] skipping audio ref; fetched audio is empty');
+    return;
+  }
+  if (audio.length > maxPayloadBytes) {
     console.error(`[atoms3r-bridge] skipping audio ref; fetched payload is too large (${audio.length} bytes)`);
     return;
   }
 
-  const forwarded = {
+  enqueueAudioPost(audio, {
     ...payload,
-    type: 'tts_audio',
-    mime_type: typeof payload.mime_type === 'string' ? payload.mime_type : 'audio/wav',
-    audio_base64: audio.toString('base64'),
-    byte_length: audio.length,
-    ts: Date.now()
-  };
-  delete forwarded.url;
-  delete forwarded.expires_at;
-
-  enqueuePost(forwarded, 'tts_audio_ref');
+    mime_type:
+      typeof payload.mime_type === 'string' && payload.mime_type.trim() !== ''
+        ? payload.mime_type
+        : (response.headers.get('content-type') ?? 'audio/wav')
+  });
 }
 
 function shouldForwardMouth(payload) {
@@ -317,6 +352,68 @@ async function postAudioWithDiscovery(audio, payload) {
   }
 }
 
+async function handleVolumeSet(payload) {
+  const parsed = parseAtomVolumeSet(payload, expectedDeviceId);
+  if (!parsed.ok) {
+    sendVolumeResult({
+      requestId: parsed.requestId,
+      ok: false,
+      error: parsed.error
+    });
+    return;
+  }
+
+  try {
+    const result = await postVolumeWithDiscovery(parsed.volume);
+    sendVolumeResult({
+      requestId: parsed.requestId,
+      ok: true,
+      speakerVolume: result.speaker_volume
+    });
+    const health = await checkAtomHealth({ quiet: true });
+    if (health) {
+      sendEndpointState(true, health, 'volume_changed');
+    }
+  } catch (error) {
+    console.error(`[atoms3r-bridge] Atom volume failed: ${error.message}`);
+    sendVolumeResult({
+      requestId: parsed.requestId,
+      ok: false,
+      error: 'atom_volume_failed'
+    });
+  }
+}
+
+function sendVolumeResult({
+  requestId,
+  ok,
+  speakerVolume = null,
+  error = null
+}) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !requestId) {
+    return false;
+  }
+  ws.send(JSON.stringify(buildAtomVolumeResult({
+    requestId,
+    deviceId: expectedDeviceId,
+    ok,
+    speakerVolume,
+    error
+  })));
+  return true;
+}
+
+async function postVolumeWithDiscovery(volume) {
+  try {
+    return await postVolume(volume);
+  } catch (error) {
+    if (!(await recoverAtomAfterPostFailure(error, 'atom_volume_set'))) {
+      throw error;
+    }
+    return postVolume(volume);
+  }
+}
+
 async function recoverAtomAfterPostFailure(error, sourceType) {
   if (!discoveryEnabled) {
     return false;
@@ -355,18 +452,7 @@ async function postPayload(body, sourceType, byteLength) {
 }
 
 async function postAudio(audio, payload) {
-  const headers = {
-    'content-type': typeof payload.mime_type === 'string' && payload.mime_type.trim() !== '' ? payload.mime_type : 'audio/wav'
-  };
-  if (atomAuthToken) {
-    headers['x-headroom-auth'] = atomAuthToken;
-  }
-  if (typeof payload.utterance_id === 'string') {
-    headers['x-utterance-id'] = payload.utterance_id;
-  }
-  if (Number.isInteger(payload.generation)) {
-    headers['x-generation'] = String(payload.generation);
-  }
+  const headers = buildAtomAudioPostHeaders(payload, atomAuthToken);
 
   const response = await fetch(atomAudioUrl, {
     method: 'POST',
@@ -380,10 +466,46 @@ async function postAudio(audio, payload) {
     error.status = response.status;
     throw error;
   }
-  console.log(`[atoms3r-bridge] forwarded tts_audio wav (${audio.length} bytes)`);
+  console.log(
+    `[atoms3r-bridge] forwarded tts_audio binary codec=${payload.audio_codec ?? 'pcm16_wav'} (${audio.length} bytes)`
+  );
 }
 
-async function checkAtomHealth() {
+async function postVolume(volume) {
+  const headers = {
+    'content-type': 'application/json'
+  };
+  if (atomAuthToken) {
+    headers['x-headroom-auth'] = atomAuthToken;
+  }
+  const response = await fetch(atomVolumeUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ volume }),
+    signal: AbortSignal.timeout(3000)
+  });
+  const text = await response.text().catch(() => '');
+  let result = null;
+  try {
+    result = JSON.parse(text);
+  } catch {}
+  if (
+    !response.ok
+    || result?.ok !== true
+    || result?.speaker_volume !== volume
+  ) {
+    const error = new Error(
+      `Atom volume POST failed status=${response.status} body=${text.slice(0, 120)}`
+    );
+    error.status = response.status;
+    throw error;
+  }
+  console.log(`[atoms3r-bridge] speaker volume=${volume} (temporary)`);
+  return result;
+}
+
+async function checkAtomHealth(options = {}) {
+  const quiet = options.quiet === true;
   const headers = {};
   if (atomAuthToken) {
     headers['x-headroom-auth'] = atomAuthToken;
@@ -394,35 +516,73 @@ async function checkAtomHealth() {
       signal: AbortSignal.timeout(3000)
     });
     if (!response.ok) {
-      console.error(`[atoms3r-bridge] Atom health status=${response.status}; continuing`);
-      return false;
+      if (!quiet) {
+        console.error(`[atoms3r-bridge] Atom health status=${response.status}; continuing`);
+      }
+      return null;
     }
     const health = await response.json().catch(() => null);
     if (!isAtomHealthPayload(health)) {
-      console.error('[atoms3r-bridge] Atom health response did not identify atoms3r-headroom');
-      return false;
+      if (!quiet) {
+        console.error('[atoms3r-bridge] Atom health response did not identify atoms3r-headroom');
+      }
+      return null;
     }
-    console.log(`[atoms3r-bridge] Atom health ok (${health.ip ?? redactUrl(atomBaseUrl)})`);
-    return true;
+    if (!quiet) {
+      console.log(`[atoms3r-bridge] Atom health ok (${health.ip ?? redactUrl(atomBaseUrl)})`);
+    }
+    return health;
   } catch (error) {
-    console.error(`[atoms3r-bridge] Atom health check failed: ${error.message}; continuing`);
-    return false;
+    if (!quiet) {
+      console.error(`[atoms3r-bridge] Atom health check failed: ${error.message}; continuing`);
+    }
+    return null;
   }
 }
 
 async function ensureAtomReachable(reason) {
-  if (await checkAtomHealth()) {
-    return true;
+  const currentHealth = await checkAtomHealth();
+  if (currentHealth) {
+    return currentHealth;
   }
   if (!discoveryEnabled) {
-    return false;
+    return null;
   }
   const discovered = await discoverAtom(reason);
   if (!discovered) {
-    return false;
+    return null;
   }
   setAtomBaseUrl(discovered, `discovery:${reason}`);
   return checkAtomHealth();
+}
+
+function sendEndpointState(connected, health, reason) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  ws.send(JSON.stringify(buildAtomEndpointState({
+    connected,
+    audioInput:
+      health?.ws_connected === true
+      && websocketServiceEndpointMatches(health?.face_ws_url, faceWsUrlInput),
+    health,
+    deviceId: expectedDeviceId,
+    reason
+  })));
+  return true;
+}
+
+async function publishAtomEndpointState(reason) {
+  if (healthHeartbeatInFlight) {
+    return;
+  }
+  healthHeartbeatInFlight = true;
+  try {
+    const health = await checkAtomHealth({ quiet: true });
+    sendEndpointState(Boolean(health), health, reason);
+  } finally {
+    healthHeartbeatInFlight = false;
+  }
 }
 
 async function discoverAtom(reason) {
@@ -566,6 +726,7 @@ function parseDiscoverySubnets(value) {
 function refreshAtomUrls() {
   atomPayloadUrl = new URL('/api/headroom/payload', atomBaseUrl).toString();
   atomAudioUrl = new URL('/api/headroom/audio', atomBaseUrl).toString();
+  atomVolumeUrl = new URL('/api/headroom/volume', atomBaseUrl).toString();
   atomHealthUrl = new URL('/health', atomBaseUrl).toString();
 }
 
@@ -617,10 +778,6 @@ function normalizeOptionalString(value) {
   }
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
-}
-
-function estimatedAudioPayloadBytes(audioBytes) {
-  return Math.ceil((audioBytes * 4) / 3) + 16384;
 }
 
 function normalizeBaseUrl(value) {

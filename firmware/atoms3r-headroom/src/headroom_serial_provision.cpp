@@ -105,6 +105,8 @@ void HeadroomSerialProvision::handleConfig(const String& json) {
   mergeBool(doc, "vad_on", next.continuousVadEnabled);
   mergeFloat(doc, "vad_rms", next.vadFirmwareRms);
   mergeInt(doc, "vad_tail", next.vadSpeechTailFrames);
+  mergeInt(doc, "vad_playback_cooldown_ms", next.vadPlaybackCooldownMs);
+  mergeInt(doc, "speaker_volume", next.speakerVolume);
   if (doc["vad_enc"].is<const char*>() || doc["vad_enc"].is<String>()) {
     next.vadEncoding =
         HeadroomSettings::normalizeVadEncoding(doc["vad_enc"].as<String>(), next.vadEncoding);
@@ -152,6 +154,8 @@ void HeadroomSerialProvision::handleQuery() {
   doc["vad_on"] = d.continuousVadEnabled;
   doc["vad_rms"] = d.vadFirmwareRms;
   doc["vad_tail"] = d.vadSpeechTailFrames;
+  doc["vad_playback_cooldown_ms"] = d.vadPlaybackCooldownMs;
+  doc["speaker_volume"] = d.speakerVolume;
   doc["vad_enc"] = d.vadEncoding;
   doc["max_b64_sec"] = d.maxBase64TtsSeconds;
   doc["max_http_b"] = d.maxHttpTtsBytes;

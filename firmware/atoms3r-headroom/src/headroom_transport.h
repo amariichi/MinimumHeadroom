@@ -34,6 +34,8 @@ private:
   void* beforeAudioPlaybackContext_ = nullptr;
 
   void onWsEvent(WStype_t type, uint8_t* payload, size_t length);
+  void sendEndpointState();
+  void sendVolumeResult(const String& requestId, bool ok, const String& error = "");
   void handleAudioPayload(JsonDocument& doc, const String& type);
   bool shouldApplyPayload(const String& agentId, const String& type, uint32_t nowMs);
   void handleEventPayload(const String& name);

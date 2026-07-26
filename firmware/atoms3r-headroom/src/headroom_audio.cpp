@@ -7,11 +7,14 @@
 #include <math.h>
 #include <string.h>
 
+#include "ima_adpcm.h"
+
 namespace {
 
-constexpr size_t kWavHeaderProbeBytes = 96;
 constexpr int kMinPlaybackSampleRate = 8000;
 constexpr int kMaxPlaybackSampleRate = 48000;
+constexpr size_t kMaxDecodedPcmBytes = 1200000;
+constexpr uint32_t kHttpReadStallTimeoutMs = 8000;
 constexpr uint32_t kMaxSafeRms = 18000;
 constexpr uint16_t kNearClipSample = 32600;
 constexpr uint8_t kNearClipPercentLimit = 15;
@@ -25,6 +28,18 @@ uint16_t readLe16(const uint8_t* data) {
   return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
 }
 
+void writeLe16(uint8_t* data, uint16_t value) {
+  data[0] = static_cast<uint8_t>(value & 0xff);
+  data[1] = static_cast<uint8_t>((value >> 8) & 0xff);
+}
+
+void writeLe32(uint8_t* data, uint32_t value) {
+  data[0] = static_cast<uint8_t>(value & 0xff);
+  data[1] = static_cast<uint8_t>((value >> 8) & 0xff);
+  data[2] = static_cast<uint8_t>((value >> 16) & 0xff);
+  data[3] = static_cast<uint8_t>((value >> 24) & 0xff);
+}
+
 bool startsWithHttp(const String& url) {
   return url.startsWith("http://") || url.startsWith("https://");
 }
@@ -36,6 +51,8 @@ void HeadroomAudio::begin(const HeadroomSettingsData& settings) {
   authToken_ = settings.authToken;
   maxBase64Seconds_ = max(1, min(15, settings.maxBase64TtsSeconds));
   maxHttpBytes_ = max(100000, settings.maxHttpTtsBytes);
+  speakerVolume_ = static_cast<uint8_t>(
+      HeadroomSettings::normalizeSpeakerVolume(settings.speakerVolume));
   beginSpeaker();
 }
 
@@ -105,6 +122,16 @@ void HeadroomAudio::restoreAfterRecording() {
 
 bool HeadroomAudio::busy() const {
   return M5.Speaker.isPlaying() || queuedWavCount_ > 0;
+}
+
+void HeadroomAudio::setSpeakerVolume(uint8_t volume) {
+  speakerVolume_ = static_cast<uint8_t>(
+      HeadroomSettings::normalizeSpeakerVolume(volume));
+  // During mic capture the shared ES8311 is in ADC mode. Remember the new
+  // value now and let restoreAfterRecording()->beginSpeaker() apply it.
+  if (!recording_) {
+    M5.Speaker.setVolume(speakerVolume_);
+  }
 }
 
 
@@ -200,26 +227,6 @@ HeadroomAudioResult HeadroomAudio::playBase64Wav(const char* audioBase64, size_t
     return HeadroomAudioResult::DecodeFailed;
   }
 
-  int sampleRate = 0;
-  size_t dataOffset = 0;
-  size_t dataBytes = 0;
-  uint16_t bits = 0;
-  uint16_t channels = 0;
-  if (!inspectWav(wav, decodedLength, &sampleRate, &dataOffset, &dataBytes, &bits, &channels)) {
-    free(wav);
-    return HeadroomAudioResult::Unsupported;
-  }
-  if (bits != 16 || channels != 1) {
-    Serial.printf("unsupported wav format bits=%u channels=%u\n", bits, channels);
-    free(wav);
-    return HeadroomAudioResult::Unsupported;
-  }
-  size_t maxDataBytes = static_cast<size_t>(maxBase64Seconds_) * static_cast<size_t>(sampleRate) * 2;
-  if (dataBytes > maxDataBytes) {
-    free(wav);
-    return HeadroomAudioResult::TooLarge;
-  }
-
   return playOwnedWav(wav, decodedLength, true);
 }
 
@@ -232,6 +239,20 @@ HeadroomAudioResult HeadroomAudio::playHttpWavRef(const String& url) {
     return HeadroomAudioResult::Unsupported;
   }
 
+  HeadroomAudioResult result = fetchAndPlayHttpWavRefOnce(fullUrl);
+  if (result != HeadroomAudioResult::HttpFailed) {
+    return result;
+  }
+
+  // A mobile-tethered Tailnet can briefly drop the first request while routes
+  // or radio state settle. Retry the idempotent GET once; audio_id dedupe at
+  // ingress/transport prevents a parallel delivery path from playing twice.
+  Serial.println("tts_audio_ref retrying after transient HTTP failure");
+  delay(80);
+  return fetchAndPlayHttpWavRefOnce(fullUrl);
+}
+
+HeadroomAudioResult HeadroomAudio::fetchAndPlayHttpWavRefOnce(const String& fullUrl) {
   WiFiClient client;
   HTTPClient http;
   if (!http.begin(client, fullUrl)) {
@@ -266,9 +287,14 @@ HeadroomAudioResult HeadroomAudio::playHttpWavRef(const String& url) {
 
   WiFiClient* stream = http.getStreamPtr();
   size_t offset = 0;
+  uint32_t lastProgressMs = millis();
   while (http.connected() && offset < static_cast<size_t>(contentLength)) {
     int available = stream->available();
     if (available <= 0) {
+      if (millis() - lastProgressMs >= kHttpReadStallTimeoutMs) {
+        Serial.println("tts_audio_ref read stalled");
+        break;
+      }
       delay(1);
       continue;
     }
@@ -278,6 +304,7 @@ HeadroomAudioResult HeadroomAudio::playHttpWavRef(const String& url) {
       break;
     }
     offset += static_cast<size_t>(readLen);
+    lastProgressMs = millis();
   }
   http.end();
 
@@ -285,16 +312,6 @@ HeadroomAudioResult HeadroomAudio::playHttpWavRef(const String& url) {
     free(wav);
     Serial.printf("tts_audio_ref incomplete read got=%u expected=%u\n", static_cast<unsigned>(offset), static_cast<unsigned>(contentLength));
     return HeadroomAudioResult::HttpFailed;
-  }
-
-  int sampleRate = 0;
-  size_t dataOffset = 0;
-  size_t dataBytes = 0;
-  uint16_t bits = 0;
-  uint16_t channels = 0;
-  if (!inspectWav(wav, offset, &sampleRate, &dataOffset, &dataBytes, &bits, &channels) || bits != 16 || channels != 1) {
-    free(wav);
-    return HeadroomAudioResult::Unsupported;
   }
 
   return playOwnedWav(wav, offset, true);
@@ -309,15 +326,6 @@ HeadroomAudioResult HeadroomAudio::playWavBytes(const uint8_t* wav, size_t lengt
   }
   if (length > static_cast<size_t>(maxHttpBytes_)) {
     return HeadroomAudioResult::TooLarge;
-  }
-
-  int sampleRate = 0;
-  size_t dataOffset = 0;
-  size_t dataBytes = 0;
-  uint16_t bits = 0;
-  uint16_t channels = 0;
-  if (!inspectWav(wav, length, &sampleRate, &dataOffset, &dataBytes, &bits, &channels) || bits != 16 || channels != 1) {
-    return HeadroomAudioResult::Unsupported;
   }
 
   uint8_t* owned = static_cast<uint8_t*>(ps_malloc(length));
@@ -414,6 +422,12 @@ bool HeadroomAudio::popQueuedWav(QueuedWav* out) {
 }
 
 HeadroomAudioResult HeadroomAudio::playOwnedWav(uint8_t* wav, size_t length, bool takeOwnership) {
+  if (takeOwnership) {
+    HeadroomAudioResult normalized = normalizeOwnedWav(&wav, &length);
+    if (normalized != HeadroomAudioResult::Ok) {
+      return normalized;
+    }
+  }
   releaseActive();
   if (M5.Speaker.isPlaying() || activeWav_) {
     if (!takeOwnership) {
@@ -437,12 +451,8 @@ HeadroomAudioResult HeadroomAudio::startOwnedWavNow(uint8_t* wav, size_t length,
     activeWavLength_ = 0;
   }
 
-  int sampleRate = 0;
-  size_t dataOffset = 0;
-  size_t dataBytes = 0;
-  uint16_t bits = 0;
-  uint16_t channels = 0;
-  if (!inspectWav(wav, length, &sampleRate, &dataOffset, &dataBytes, &bits, &channels) || bits != 16 || channels != 1) {
+  WavInfo info;
+  if (!inspectWav(wav, length, &info) || info.audioFormat != 1 || info.bitsPerSample != 16 || info.channels != 1) {
     if (takeOwnership) {
       free(wav);
     }
@@ -450,8 +460,8 @@ HeadroomAudioResult HeadroomAudio::startOwnedWavNow(uint8_t* wav, size_t length,
     return HeadroomAudioResult::Unsupported;
   }
 
-  int16_t* pcm = reinterpret_cast<int16_t*>(wav + dataOffset);
-  size_t sampleCount = dataBytes / sizeof(int16_t);
+  int16_t* pcm = reinterpret_cast<int16_t*>(wav + info.dataOffset);
+  size_t sampleCount = info.dataBytes / sizeof(int16_t);
   if (!pcmLooksSafe(pcm, sampleCount)) {
     Serial.println("wav pcm rejected by safety guard");
     if (takeOwnership) {
@@ -463,7 +473,7 @@ HeadroomAudioResult HeadroomAudio::startOwnedWavNow(uint8_t* wav, size_t length,
 
   // Feed verified PCM directly. This avoids the M5Unified WAV parser path,
   // which is brittle around malformed or partially-delivered WAV headers.
-  bool ok = M5.Speaker.playRaw(pcm, sampleCount, static_cast<uint32_t>(sampleRate), false, 1, -1, true);
+  bool ok = M5.Speaker.playRaw(pcm, sampleCount, info.sampleRate, false, 1, -1, true);
   if (!ok) {
     if (takeOwnership) {
       free(wav);
@@ -482,54 +492,202 @@ HeadroomAudioResult HeadroomAudio::startOwnedWavNow(uint8_t* wav, size_t length,
   // activeWav_; the ingress buffer outlives the chunk it submitted).
   mouthPcm_ = pcm;
   mouthSampleCount_ = sampleCount;
-  mouthSampleRate_ = sampleRate;
+  mouthSampleRate_ = static_cast<int>(info.sampleRate);
   mouthPlayStartMs_ = millis();
   return HeadroomAudioResult::Ok;
 }
 
-bool HeadroomAudio::inspectWav(const uint8_t* wav, size_t length, int* sampleRate, size_t* dataOffset, size_t* dataBytes,
-                               uint16_t* bitsPerSample, uint16_t* channels) {
-  if (!wav || length < 44 || memcmp(wav, "RIFF", 4) != 0 || memcmp(wav + 8, "WAVE", 4) != 0) {
+HeadroomAudioResult HeadroomAudio::normalizeOwnedWav(uint8_t** wav, size_t* length) {
+  if (!wav || !*wav || !length || *length == 0) {
+    return HeadroomAudioResult::Unsupported;
+  }
+
+  WavInfo info;
+  if (!inspectWav(*wav, *length, &info)) {
+    free(*wav);
+    *wav = nullptr;
+    *length = 0;
+    return HeadroomAudioResult::Unsupported;
+  }
+
+  if (info.audioFormat == 1) {
+    if (info.dataBytes > kMaxDecodedPcmBytes) {
+      free(*wav);
+      *wav = nullptr;
+      *length = 0;
+      return HeadroomAudioResult::TooLarge;
+    }
+    return HeadroomAudioResult::Ok;
+  }
+
+  if (info.audioFormat != 0x0011) {
+    free(*wav);
+    *wav = nullptr;
+    *length = 0;
+    return HeadroomAudioResult::Unsupported;
+  }
+
+  const size_t decodedBytes = static_cast<size_t>(info.factSampleCount) * sizeof(int16_t);
+  if (decodedBytes == 0 || decodedBytes > kMaxDecodedPcmBytes) {
+    free(*wav);
+    *wav = nullptr;
+    *length = 0;
+    return HeadroomAudioResult::TooLarge;
+  }
+
+  const size_t pcmWavLength = 44 + decodedBytes;
+  uint8_t* pcmWav = static_cast<uint8_t*>(ps_malloc(pcmWavLength));
+  if (!pcmWav) {
+    pcmWav = static_cast<uint8_t*>(malloc(pcmWavLength));
+  }
+  if (!pcmWav) {
+    free(*wav);
+    *wav = nullptr;
+    *length = 0;
+    return HeadroomAudioResult::DecodeFailed;
+  }
+
+  memcpy(pcmWav, "RIFF", 4);
+  writeLe32(pcmWav + 4, static_cast<uint32_t>(pcmWavLength - 8));
+  memcpy(pcmWav + 8, "WAVEfmt ", 8);
+  writeLe32(pcmWav + 16, 16);
+  writeLe16(pcmWav + 20, 1);
+  writeLe16(pcmWav + 22, 1);
+  writeLe32(pcmWav + 24, info.sampleRate);
+  writeLe32(pcmWav + 28, info.sampleRate * 2);
+  writeLe16(pcmWav + 32, 2);
+  writeLe16(pcmWav + 34, 16);
+  memcpy(pcmWav + 36, "data", 4);
+  writeLe32(pcmWav + 40, static_cast<uint32_t>(decodedBytes));
+
+  int16_t* output = reinterpret_cast<int16_t*>(pcmWav + 44);
+  size_t outputSamples = 0;
+  const size_t blockCount = info.dataBytes / info.blockAlign;
+  for (size_t blockIndex = 0; blockIndex < blockCount; ++blockIndex) {
+    const size_t remaining = static_cast<size_t>(info.factSampleCount) - outputSamples;
+    const size_t wanted = min(static_cast<size_t>(info.samplesPerBlock), remaining);
+    const uint8_t* block = *wav + info.dataOffset + (blockIndex * info.blockAlign);
+    const size_t decoded = ima_adpcm_decode(block, info.blockAlign, output + outputSamples, wanted);
+    if (decoded != wanted) {
+      free(pcmWav);
+      free(*wav);
+      *wav = nullptr;
+      *length = 0;
+      return HeadroomAudioResult::DecodeFailed;
+    }
+    outputSamples += decoded;
+  }
+
+  if (outputSamples != info.factSampleCount) {
+    free(pcmWav);
+    free(*wav);
+    *wav = nullptr;
+    *length = 0;
+    return HeadroomAudioResult::DecodeFailed;
+  }
+
+  Serial.printf("decoded IMA ADPCM wav compressed=%u pcm=%u rate=%u\n",
+                static_cast<unsigned>(*length), static_cast<unsigned>(pcmWavLength),
+                static_cast<unsigned>(info.sampleRate));
+  free(*wav);
+  *wav = pcmWav;
+  *length = pcmWavLength;
+  return HeadroomAudioResult::Ok;
+}
+
+bool HeadroomAudio::inspectWav(const uint8_t* wav, size_t length, WavInfo* info) {
+  if (!wav || !info || length < 12 || memcmp(wav, "RIFF", 4) != 0 || memcmp(wav + 8, "WAVE", 4) != 0) {
     return false;
   }
 
+  const size_t riffEnd = static_cast<size_t>(readLe32(wav + 4)) + 8;
+  if (riffEnd < 12 || riffEnd > length) {
+    return false;
+  }
+
+  WavInfo parsed;
   bool sawFmt = false;
   bool sawData = false;
   size_t offset = 12;
-  while (offset + 8 <= min(length, kWavHeaderProbeBytes)) {
+  while (offset + 8 <= riffEnd) {
     const uint8_t* chunk = wav + offset;
-    uint32_t chunkSize = readLe32(chunk + 4);
-    size_t chunkStart = offset + 8;
-    if (chunkStart + chunkSize > length) {
+    const uint32_t chunkSize = readLe32(chunk + 4);
+    const size_t chunkStart = offset + 8;
+    if (chunkSize > riffEnd - chunkStart) {
       return false;
     }
 
-    if (memcmp(chunk, "fmt ", 4) == 0 && chunkSize >= 16) {
-      uint16_t audioFormat = readLe16(wav + chunkStart);
-      *channels = readLe16(wav + chunkStart + 2);
-      *sampleRate = static_cast<int>(readLe32(wav + chunkStart + 4));
-      uint32_t byteRate = readLe32(wav + chunkStart + 8);
-      uint16_t blockAlign = readLe16(wav + chunkStart + 12);
-      *bitsPerSample = readLe16(wav + chunkStart + 14);
-      uint16_t expectedBlockAlign = (*channels * *bitsPerSample) / 8;
-      uint32_t expectedByteRate = static_cast<uint32_t>(*sampleRate) * expectedBlockAlign;
-      sawFmt = audioFormat == 1 && (*channels == 1 || *channels == 2) && (*bitsPerSample == 8 || *bitsPerSample == 16) &&
-               *sampleRate >= kMinPlaybackSampleRate && *sampleRate <= kMaxPlaybackSampleRate && expectedBlockAlign > 0 &&
-               blockAlign == expectedBlockAlign && byteRate == expectedByteRate;
-    } else if (memcmp(chunk, "data", 4) == 0) {
-      if (!sawFmt || chunkSize == 0 || chunkSize % ((*channels * *bitsPerSample) / 8) != 0) {
+    if (memcmp(chunk, "fmt ", 4) == 0) {
+      if (sawFmt || chunkSize < 16) {
         return false;
       }
-      *dataOffset = chunkStart;
-      *dataBytes = chunkSize;
+      parsed.audioFormat = readLe16(wav + chunkStart);
+      parsed.channels = readLe16(wav + chunkStart + 2);
+      parsed.sampleRate = readLe32(wav + chunkStart + 4);
+      parsed.byteRate = readLe32(wav + chunkStart + 8);
+      parsed.blockAlign = readLe16(wav + chunkStart + 12);
+      parsed.bitsPerSample = readLe16(wav + chunkStart + 14);
+      if (parsed.sampleRate < kMinPlaybackSampleRate || parsed.sampleRate > kMaxPlaybackSampleRate) {
+        return false;
+      }
+
+      if (parsed.audioFormat == 1) {
+        const uint16_t expectedBlockAlign =
+            static_cast<uint16_t>((parsed.channels * parsed.bitsPerSample) / 8);
+        const uint32_t expectedByteRate = parsed.sampleRate * expectedBlockAlign;
+        if (parsed.channels != 1 || parsed.bitsPerSample != 16 || expectedBlockAlign != 2 ||
+            parsed.blockAlign != expectedBlockAlign || parsed.byteRate != expectedByteRate) {
+          return false;
+        }
+      } else if (parsed.audioFormat == 0x0011) {
+        if (chunkSize < 20 || parsed.channels != 1 || parsed.bitsPerSample != 4 ||
+            parsed.blockAlign < 5 || parsed.byteRate == 0) {
+          return false;
+        }
+        const uint16_t extraSize = readLe16(wav + chunkStart + 16);
+        parsed.samplesPerBlock = readLe16(wav + chunkStart + 18);
+        const size_t expectedSamplesPerBlock =
+            (static_cast<size_t>(parsed.blockAlign) - 4) * 2 + 1;
+        if (extraSize < 2 || parsed.samplesPerBlock != expectedSamplesPerBlock) {
+          return false;
+        }
+      } else {
+        return false;
+      }
+      sawFmt = true;
+    } else if (memcmp(chunk, "fact", 4) == 0 && chunkSize >= 4) {
+      parsed.factSampleCount = readLe32(wav + chunkStart);
+    } else if (memcmp(chunk, "data", 4) == 0) {
+      if (!sawFmt || sawData || chunkSize == 0 || parsed.blockAlign == 0 ||
+          chunkSize % parsed.blockAlign != 0) {
+        return false;
+      }
+      parsed.dataOffset = chunkStart;
+      parsed.dataBytes = chunkSize;
       sawData = true;
-      break;
     }
 
-    offset = chunkStart + chunkSize + (chunkSize % 2);
+    const size_t next = chunkStart + chunkSize + (chunkSize & 1);
+    if (next <= offset || next > riffEnd) {
+      return false;
+    }
+    offset = next;
   }
 
-  return sawFmt && sawData && *sampleRate > 0 && *dataBytes > 0;
+  if (!sawFmt || !sawData) {
+    return false;
+  }
+  if (parsed.audioFormat == 0x0011) {
+    const size_t blockCount = parsed.dataBytes / parsed.blockAlign;
+    const size_t maximumSamples = blockCount * parsed.samplesPerBlock;
+    const size_t minimumSamples = (blockCount - 1) * parsed.samplesPerBlock + 1;
+    if (parsed.factSampleCount < minimumSamples || parsed.factSampleCount > maximumSamples) {
+      return false;
+    }
+  }
+
+  *info = parsed;
+  return true;
 }
 
 bool HeadroomAudio::pcmLooksSafe(const int16_t* samples, size_t sampleCount) {
@@ -556,6 +714,29 @@ bool HeadroomAudio::pcmLooksSafe(const int16_t* samples, size_t sampleCount) {
     return false;
   }
   return true;
+}
+
+bool HeadroomAudio::isDuplicateAudio(const String& audioId, int generation) const {
+  if (audioId.length() == 0) {
+    return false;
+  }
+  for (size_t index = 0; index < kRecentAudioCapacity; ++index) {
+    if (recentAudio_[index].id == audioId &&
+        (generation < 0 || recentAudio_[index].generation < 0 ||
+         recentAudio_[index].generation == generation)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void HeadroomAudio::rememberAudio(const String& audioId, int generation) {
+  if (audioId.length() == 0) {
+    return;
+  }
+  recentAudio_[nextRecentAudio_].id = audioId;
+  recentAudio_[nextRecentAudio_].generation = generation;
+  nextRecentAudio_ = (nextRecentAudio_ + 1) % kRecentAudioCapacity;
 }
 
 String HeadroomAudio::absoluteUrl(const String& url) const {

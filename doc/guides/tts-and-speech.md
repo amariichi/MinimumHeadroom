@@ -1,6 +1,6 @@
 # TTS and Speech Guide
 
-This guide collects the detailed notes for Kokoro and Qwen3 speech output, speech gating, long-utterance behavior, and the text normalization rules applied before synthesis. The top-level [README](../../README.md) stays shorter on purpose; use this file when tuning or operating TTS behavior.
+This guide collects the detailed notes for Kokoro, Supertonic, and Qwen3 speech output, speech gating, long-utterance behavior, and the text normalization rules applied before synthesis. The top-level [README](../../README.md) stays shorter on purpose; use this file when tuning or operating TTS behavior.
 
 [English](#english) | [日本語](#japanese)
 
@@ -9,7 +9,7 @@ This guide collects the detailed notes for Kokoro and Qwen3 speech output, speec
 
 ### Default backend
 
-The default TTS path is Kokoro ONNX plus Misaki. In the current runtime, Kokoro remains the stable default and Qwen3 is the optional advanced backend.
+The default operator TTS path is Kokoro ONNX plus Misaki. Supertonic and Qwen3 are optional Operator profiles and are also used by the separate interpreter; neither changes the Operator default.
 
 Kokoro model files must be placed in `assets/kokoro/`:
 
@@ -18,13 +18,79 @@ Kokoro model files must be placed in `assets/kokoro/`:
 
 These large model files are intentionally ignored by git.
 
+### Optional Supertonic setup
+
+Supertonic 3 is a CPU TTS option for the Operator and the TTS used by the
+interpreter's `gemma4-supertonic` and `nemotron-gemma4-supertonic` presets.
+The deprecated `light-cloud` alias resolves to the latter. The Operator and
+interpreter reuse one environment and asset cache. Preview or install it explicitly:
+
+    ./scripts/setup.sh --with-supertonic
+    ./scripts/setup-supertonic.sh --dry-run
+    ./scripts/setup-supertonic.sh
+    TTS_ENGINE=supertonic ./scripts/run-tts-worker.sh --smoke
+
+Select it only at Operator startup or restart:
+
+    ./scripts/run-operator-once.sh --profile supertonic
+    ./scripts/run-operator-once.sh --profile supertonic-realtime
+    ./scripts/restart-operator-stack-in-place.sh --profile supertonic
+
+The dedicated environment pins `supertonic==1.3.1`; runtime uses
+`TTS(auto_download=False)` and therefore never downloads at startup. The
+package-compatible model revision is
+`724fb5abbf5502583fb520898d45929e62f02c0b`. Defaults are voice `M1`, eight
+diffusion steps, speed `1.05`, and 44.1 kHz output. `MH_SUPERTONIC_VOICE`
+accepts `M1`–`M5` or `F1`–`F5`, `MH_SUPERTONIC_STEPS` accepts 5–12, and
+`MH_SUPERTONIC_SPEED` accepts 0.7–2.0.
+It runs through ONNX Runtime on CPU and does not reserve model VRAM.
+
+`MH_SUPERTONIC_LANGUAGE` defaults to `auto`. An explicit `language` on
+`face_say` always wins. Without one, automatic script detection selects
+Japanese for kana/Han, Korean for Hangul, Arabic for Arabic script, Greek for
+Greek script, Hindi for Devanagari, and Russian for Cyrillic; other text
+defaults to English. Latin-script
+languages such as Spanish and French are ambiguous in short status messages,
+so pass `language="es"` / `language="fr"` or set
+`MH_SUPERTONIC_LANGUAGE=es` / `fr` as the deployment fallback. Explicitly
+unsupported languages are rejected rather than silently spoken with English.
+
+ONNX Runtime defaults to 10 intra-op threads and one inter-op thread in this
+stack. Override them with `MH_SUPERTONIC_INTRA_OP_THREADS` and
+`MH_SUPERTONIC_INTER_OP_THREADS` (1–64) only after measuring the host.
+Supertonic synthesis and WAV encoding intentionally run on the Python
+event-loop/main thread. On this host, moving the ONNX call through
+`asyncio.to_thread` could stall after synthesis; Kokoro and Qwen retain their
+existing background-thread policy.
+
+Declared languages are Arabic, Bulgarian, Croatian, Czech, Danish, Dutch,
+English, Estonian, Finnish, French, German, Greek, Hindi, Hungarian,
+Indonesian, Italian, Japanese, Korean, Latvian, Lithuanian, Polish,
+Portuguese, Romanian, Russian, Slovak, Slovenian, Spanish, Swedish, Turkish,
+Ukrainian, and Vietnamese. An unsupported language is rejected instead of
+falling back to an unrelated voice profile.
+
+Interpreter pair-change notices always pass an explicit language hint for both
+utterances. Coverage tests enumerate this complete 31-language set rather than
+maintaining a shorter announcement-only list, and
+`config/models/interpreter-speech.json` is checked against both the JavaScript
+runtime gate and this Python engine.
+
+The upstream project announced that the public repository would be archived.
+This stack therefore pins the published package and compatible assets rather
+than depending on future upstream changes.
+
 ### Optional Qwen3 setup
 
-To install the optional Qwen3 environment:
+To preview and install the optional Qwen3 environment:
 
+    ./scripts/setup-qwen3-tts.sh --dry-run
     ./scripts/setup-qwen3-tts.sh
 
-This creates `./.venv-qwen-tts` and keeps the default Kokoro path lightweight.
+This creates `./.venv-qwen-tts`, pins `qwen-tts==0.1.1`, `torch==2.10.0`,
+and `transformers==4.57.3`, then explicitly prefetches model revision
+`85e237c12c027371202489a0ec509ded67b5e4b5`. Normal runtime sets Hugging Face
+offline mode and requests local files only.
 
 To smoke-test or run with Qwen3:
 
@@ -43,6 +109,7 @@ Current runtime defaults:
 - `MH_QWEN_TTS_LANGUAGE=English`
 - `MH_QWEN_JA_ASCII_MODE=preserve`
 - `MH_QWEN_TTS_STYLE=neutral`
+- `MH_QWEN_TTS_GENERATION_MODE=faithful`
 - `MH_QWEN_TTS_GAIN=1.50`
 - `MH_QWEN_TTS_SPEED=1.0`
 
@@ -53,6 +120,16 @@ Current runtime defaults:
 ### Qwen3 speech shaping
 
 Qwen3 does not use Kokoro’s ASCII-versus-non-ASCII language split. It reads the full utterance through one configured speaker and one configured language profile.
+
+`faithful` is the project default for Qwen3 generation. It disables random
+sampling in both the main talker and sub-talker codec stages. This makes the
+same input deterministic and removes a source of intermittent extra, omitted,
+or changed words. It cannot prove that a speech model will pronounce every
+name correctly. Set `MH_QWEN_TTS_GENERATION_MODE=natural` to restore the pinned
+upstream sampling defaults (`do_sample=true`, temperature `0.9`) when prosodic
+variation matters more than repeatability. The 0.6B CustomVoice model ignores
+free-form `instruct` text, so an instruction such as “read exactly” is not used
+as the fidelity control.
 
 Current behavior:
 
@@ -129,10 +206,15 @@ Only Kokoro uses the simple language split:
 
 Qwen3 does not use this split.
 
+For interpreter output, Qwen3 is declared for Chinese, English, Japanese,
+Korean, German, French, Russian, Portuguese, Spanish, and Italian. Other
+translation targets remain text-only; they are not silently mapped to English.
+
 ### Related files
 
 - `tts-worker/src/tts_worker/qwen3_engine.py`
 - `tts-worker/src/tts_worker/qwen3_text.py`
+- `tts-worker/src/tts_worker/supertonic_engine.py`
 - `face-app/dist/tts_controller.js`
 - `config.yaml`
 
@@ -141,8 +223,8 @@ Qwen3 does not use this split.
 
 ### 既定のバックエンド
 
-既定の TTS は Kokoro ONNX + Misaki です。現在は Kokoro が安定した標準経路で、Qwen3 は
-上級者向けの任意のバックエンドです。
+operatorの既定TTSはKokoro ONNX + Misakiです。SupertonicとQwen3は任意のoperator profileであり、
+独立した通訳スタックでも使いますが、operatorの既定値は変更しません。
 
 Kokoro のモデルファイルは `assets/kokoro/` に置きます。
 
@@ -151,13 +233,71 @@ Kokoro のモデルファイルは `assets/kokoro/` に置きます。
 
 これらの大きなモデルファイルは、意図的に Git の管理対象から除外しています。
 
+### 任意のSupertonicセットアップ
+
+Supertonic 3はoperatorで選択できるCPU TTSで、通訳の`gemma4-supertonic`と
+`nemotron-gemma4-supertonic`でも使います。非推奨の`light-cloud`は後者のaliasです。
+operatorと通訳は同じ環境・asset cacheを再利用します。
+
+    ./scripts/setup.sh --with-supertonic
+    ./scripts/setup-supertonic.sh --dry-run
+    ./scripts/setup-supertonic.sh
+    TTS_ENGINE=supertonic ./scripts/run-tts-worker.sh --smoke
+
+operatorでは起動時または安全なin-place再起動時だけ選択します。
+
+    ./scripts/run-operator-once.sh --profile supertonic
+    ./scripts/run-operator-once.sh --profile supertonic-realtime
+    ./scripts/restart-operator-stack-in-place.sh --profile supertonic
+
+専用環境は `supertonic==1.3.1`、package互換model revision
+`724fb5abbf5502583fb520898d45929e62f02c0b` を固定します。runtimeは
+`TTS(auto_download=False)` なので起動時downloadを行いません。既定値はvoice `M1`、
+8 steps、speed `1.05`、44.1 kHzです。
+`MH_SUPERTONIC_VOICE`は`M1`〜`M5`または`F1`〜`F5`、`MH_SUPERTONIC_STEPS`は
+5〜12、`MH_SUPERTONIC_SPEED`は0.7〜2.0を受け付けます。範囲外の値を指定した場合、
+ワーカーは起動時にエラーで停止します。
+ONNX RuntimeによるCPU動作で、model用GPU VRAMは予約しません。
+
+`MH_SUPERTONIC_LANGUAGE`の既定値は`auto`です。`face_say`に明示した`language`が常に優先されます。
+省略時は、かな・漢字を日本語、Hangulを韓国語、Arabic scriptをアラビア語、Greek scriptを
+ギリシャ語、Devanagariをヒンディー語、Cyrillicをロシア語として決定し、それ以外は英語です。
+短いLatin script文だけではスペイン語・フランス語・英語などを確実に区別できないため、
+`language="es"`のように明示するか、deployment既定を`MH_SUPERTONIC_LANGUAGE=es`のように
+設定します。明示された非対応言語を英語へ黙ってfallbackしません。
+
+ONNX Runtimeの既定thread数はintra-op 10、inter-op 1です。hostで測定した場合だけ
+`MH_SUPERTONIC_INTRA_OP_THREADS`と`MH_SUPERTONIC_INTER_OP_THREADS`（1–64）で
+変更します。SupertonicのsynthesisとWAV encodeは意図的にPython event-loop/main
+threadで実行します。このhostでは`asyncio.to_thread`経由のONNX呼び出しが合成後に
+停止し得たためです。Kokoro/Qwenは既存のbackground-thread policyを維持します。
+
+明示対応はアラビア語、ブルガリア語、クロアチア語、チェコ語、デンマーク語、オランダ語、
+英語、エストニア語、フィンランド語、フランス語、ドイツ語、ギリシャ語、ヒンディー語、
+ハンガリー語、インドネシア語、イタリア語、日本語、韓国語、ラトビア語、リトアニア語、
+ポーランド語、ポルトガル語、ルーマニア語、ロシア語、スロバキア語、スロベニア語、
+スペイン語、スウェーデン語、トルコ語、ウクライナ語、ベトナム語です。非対応言語を
+別言語profileへ黙ってfallbackしません。
+
+通訳の言語pair切替案内は、二つの発話それぞれに明示的なlanguage hintを渡します。
+案内専用の短いlistは作らず、この31言語全件を網羅testで列挙し、
+`config/models/interpreter-speech.json`、JavaScriptのruntime gate、Python engineの
+一致も検査します。
+
+upstreamはpublic repositoryのarchive予定を告知したため、将来更新を仮定せず、公開済みの
+packageと互換assetを固定して使います。
+
 ### 任意の Qwen3 セットアップ
 
-Qwen3 の環境を導入するには、次のコマンドを実行します。
+Qwen3 の環境をpreview・導入するには、次のコマンドを実行します。
 
+    ./scripts/setup-qwen3-tts.sh --dry-run
     ./scripts/setup-qwen3-tts.sh
 
-このスクリプトは `./.venv-qwen-tts` を作り、既定の Kokoro 経路を軽いまま保ちます。
+このスクリプトは `./.venv-qwen-tts` を作り、`qwen-tts==0.1.1`、`torch==2.10.0`、
+`transformers==4.57.3` とmodel revision
+`85e237c12c027371202489a0ec509ded67b5e4b5` を固定・事前取得します。通常runtimeは
+Hugging Face offline modeとlocal-only loadを使います。
 
 Qwen3 の動作確認と起動には、次のコマンドを使います。
 
@@ -176,6 +316,7 @@ Qwen3 の動作確認と起動には、次のコマンドを使います。
 - `MH_QWEN_TTS_LANGUAGE=English`
 - `MH_QWEN_JA_ASCII_MODE=preserve`
 - `MH_QWEN_TTS_STYLE=neutral`
+- `MH_QWEN_TTS_GENERATION_MODE=faithful`
 - `MH_QWEN_TTS_GAIN=1.50`
 - `MH_QWEN_TTS_SPEED=1.0`
 
@@ -189,6 +330,14 @@ Qwen3 の動作確認と起動には、次のコマンドを使います。
 
 Qwen3 は、Kokoro のような ASCII / 非 ASCII の単純な分岐を使いません。1つの話者と1つの
 言語プロファイルで、全文を読み上げます。
+
+Qwen3生成の既定は`faithful`です。main talkerとsub-talkerのcodec生成で乱数samplingを
+両方無効にし、同じ入力を決定的にします。これにより、実行ごとに語を足す、落とす、
+置き換える原因の一つを除きます。ただし音声modelが全固有名詞を正しく発音することまで
+保証するものではありません。抑揚の変化を再現性より優先する場合だけ
+`MH_QWEN_TTS_GENERATION_MODE=natural`を指定すると、固定したupstream既定
+（`do_sample=true`、temperature `0.9`）へ戻せます。0.6B CustomVoice modelは自由文の
+`instruct`を無視するため、「原文どおり読む」という指示文ではなく生成policyで制御します。
 
 現在の動作は次のとおりです。
 
@@ -269,9 +418,14 @@ Qwen3 は、Kokoro のような ASCII / 非 ASCII の単純な分岐を使いま
 
 Qwen3 はこの分岐を使いません。
 
+通訳用Qwen3は中国語、英語、日本語、韓国語、ドイツ語、フランス語、ロシア語、
+ポルトガル語、スペイン語、イタリア語を明示対応とします。それ以外の翻訳先はtext-onlyで、
+英語などへ黙って置換しません。
+
 ### 関連ファイル
 
 - `tts-worker/src/tts_worker/qwen3_engine.py`
 - `tts-worker/src/tts_worker/qwen3_text.py`
+- `tts-worker/src/tts_worker/supertonic_engine.py`
 - `face-app/dist/tts_controller.js`
 - `config.yaml`

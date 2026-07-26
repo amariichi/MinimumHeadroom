@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,7 +22,13 @@ def main() -> None:
 
     import uvicorn
 
-    uvicorn.run("silero_vad_worker.app:create_app", factory=True, host=args.host, port=args.port)
+    uvicorn.run(
+        "silero_vad_worker.app:create_app",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        access_log=os.getenv("MH_SILERO_ACCESS_LOG", "0") == "1",
+    )
 
 
 if __name__ == "__main__":

@@ -99,7 +99,8 @@ void HeadroomTransport::begin(const HeadroomSettingsData& settings, HeadroomFace
 
   ParsedWsUrl url = parseWsUrl(settings.faceWsUrl);
   String path = appendQueryToken(url.path, settings.authToken);
-  Serial.printf("ws connecting host=%s port=%u path=%s\n", url.host.c_str(), url.port, path.c_str());
+  Serial.printf("ws connecting host=%s port=%u path=%s auth_configured=%s\n", url.host.c_str(), url.port,
+                url.path.c_str(), settings.authToken.length() > 0 ? "yes" : "no");
 
   ws_.onEvent([this](WStype_t type, uint8_t* payload, size_t length) { onWsEvent(type, payload, length); });
   String originHeader = F("Origin: ");
@@ -235,6 +236,7 @@ void HeadroomTransport::onWsEvent(WStype_t type, uint8_t* payload, size_t length
         faceState_->connected = true;
       }
       Serial.println("ws connected");
+      sendEndpointState();
       setExpression(HeadroomExpression::Neutral);
       break;
     case WStype_DISCONNECTED:
@@ -256,6 +258,52 @@ void HeadroomTransport::onWsEvent(WStype_t type, uint8_t* payload, size_t length
   }
 }
 
+void HeadroomTransport::sendEndpointState() {
+  if (!connected_) {
+    return;
+  }
+  JsonDocument doc;
+  doc["v"] = 1;
+  doc["type"] = "atom_endpoint_state";
+  doc["connected"] = true;
+  doc["device_id"] = deviceId_.length() > 0 ? deviceId_ : "atom-headroom";
+  doc["audio_input"] = true;
+  doc["audio_output"] = true;
+  if (audio_) {
+    doc["speaker_volume"] = audio_->speakerVolume();
+    doc["volume_control"] = true;
+  }
+  JsonArray codecs = doc["playback_codecs"].to<JsonArray>();
+  codecs.add("pcm16_wav");
+  codecs.add("ima_adpcm_wav");
+  doc["ts"] = millis();
+
+  String payload;
+  serializeJson(doc, payload);
+  ws_.sendTXT(payload);
+}
+
+void HeadroomTransport::sendVolumeResult(const String& requestId, bool ok, const String& error) {
+  if (!connected_ || requestId.length() == 0) {
+    return;
+  }
+  JsonDocument doc;
+  doc["v"] = 1;
+  doc["type"] = "atom_volume_result";
+  doc["request_id"] = requestId;
+  doc["device_id"] = deviceId_.length() > 0 ? deviceId_ : "atom-headroom";
+  doc["ok"] = ok;
+  doc["speaker_volume"] = audio_ ? audio_->speakerVolume() : 0;
+  doc["persistent"] = false;
+  if (error.length() > 0) {
+    doc["error"] = error;
+  }
+  doc["ts"] = millis();
+  String payload;
+  serializeJson(doc, payload);
+  ws_.sendTXT(payload);
+}
+
 bool HeadroomTransport::handleJsonPayload(const uint8_t* payload, size_t length) {
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, payload, length);
@@ -272,6 +320,25 @@ bool HeadroomTransport::handleJsonPayload(const uint8_t* payload, size_t length)
 
   if (type == "event") {
     handleEventPayload(stringField(doc, "name"));
+  } else if (type == "atom_volume_set") {
+    String requestId = stringField(doc, "request_id");
+    if (!audio_ || requestId.length() == 0 || !doc["volume"].is<int>()) {
+      sendVolumeResult(requestId, false, "invalid_atom_volume");
+      return true;
+    }
+    int volume = doc["volume"].as<int>();
+    if (volume < 0 || volume > kHeadroomMaxSpeakerVolume) {
+      sendVolumeResult(requestId, false, "invalid_atom_volume");
+      return true;
+    }
+    String requestedDeviceId = stringField(doc, "device_id");
+    if (requestedDeviceId.length() > 0 && requestedDeviceId != deviceId_) {
+      sendVolumeResult(requestId, false, "atom_device_mismatch");
+      return true;
+    }
+    audio_->setSpeakerVolume(static_cast<uint8_t>(volume));
+    sendVolumeResult(requestId, true);
+    sendEndpointState();
   } else if (type == "tts_state") {
     handleTtsStatePayload(doc);
   } else if (type == "tts_mouth") {
@@ -294,6 +361,13 @@ void HeadroomTransport::handleAudioPayload(JsonDocument& doc, const String& type
     return;
   }
 
+  String audioId = stringField(doc, "audio_id");
+  int generation = doc["generation"].is<int>() ? doc["generation"].as<int>() : -1;
+  if (audio_->isDuplicateAudio(audioId, generation)) {
+    Serial.printf("duplicate audio ignored id=%s generation=%d\n", audioId.c_str(), generation);
+    return;
+  }
+
   if (beforeAudioPlaybackCallback_) {
     beforeAudioPlaybackCallback_(beforeAudioPlaybackContext_);
   }
@@ -310,6 +384,7 @@ void HeadroomTransport::handleAudioPayload(JsonDocument& doc, const String& type
   }
 
   if (result == HeadroomAudioResult::Ok) {
+    audio_->rememberAudio(audioId, generation);
     setExpression(HeadroomExpression::Speaking);
     return;
   }

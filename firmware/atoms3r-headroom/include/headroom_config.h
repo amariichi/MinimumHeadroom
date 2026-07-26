@@ -38,7 +38,7 @@
 // mobile-tethered bandwidth from ~160 MB/h to ~40 MB/h. Use ADPCM with
 // the Silero backend outdoors.
 #ifndef HEADROOM_VAD_ENCODING
-#define HEADROOM_VAD_ENCODING "pcm16"
+#define HEADROOM_VAD_ENCODING "ima_adpcm"
 #endif
 
 // Number of trailing low-energy frames captureAndSend keeps forwarding after
@@ -50,6 +50,26 @@
 // silence (vad_firmware_rms > 0) without clipping the end of a word. NVS.
 #ifndef HEADROOM_VAD_SPEECH_TAIL_FRAMES
 #define HEADROOM_VAD_SPEECH_TAIL_FRAMES 8
+#endif
+
+// Delay after actual speaker playback ends before continuous VAD reopens the
+// microphone side of the shared codec. Guarded for local configuration files
+// created before this per-device setting existed. Runtime persistence clamps
+// values to 200..5000 ms.
+#ifndef HEADROOM_VAD_PLAYBACK_COOLDOWN_MS
+#define HEADROOM_VAD_PLAYBACK_COOLDOWN_MS 1200
+#endif
+
+// Safe speaker volume (0..200). Preserve the hardware-tuned
+// levels that predate persistence: 112 for the faced Atom Echo Base and 200
+// for the M12 Echo Base. A local config may define HEADROOM_SPEAKER_VOLUME to
+// override either build.
+#ifndef HEADROOM_SPEAKER_VOLUME
+#ifdef HEADROOM_M12
+#define HEADROOM_SPEAKER_VOLUME 200
+#else
+#define HEADROOM_SPEAKER_VOLUME 112
+#endif
 #endif
 
 // Wi-Fi slots 2/3 are optional. Guard them so a pre-existing

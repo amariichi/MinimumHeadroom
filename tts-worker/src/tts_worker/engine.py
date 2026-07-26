@@ -20,8 +20,14 @@ class TtsEngine(Protocol):
   def metadata(self) -> EngineMetadata:
     ...
 
-  def prepare_text(self, text: str) -> str:
+  def prepare_text(self, text: str, *, language_override: str | None = None) -> str:
     ...
 
-  def synthesize_text(self, text: str, *, voice_override: str | None = None) -> Tuple[np.ndarray, int]:
+  def synthesize_text(
+    self,
+    text: str,
+    *,
+    voice_override: str | None = None,
+    language_override: str | None = None,
+  ) -> Tuple[np.ndarray, int]:
     ...

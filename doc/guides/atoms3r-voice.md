@@ -34,9 +34,10 @@ PLATFORMIO_UPLOAD_FLAGS=--no-stub \
   --upload-port /dev/ttyACM0
 ```
 
-NVS settings (Wi-Fi, URLs, VAD config) survive a reflash. After any flash or
-reboot, re-confirm `vad_on` (see troubleshooting) since a stray screen tap can
-disable it.
+NVS settings (Wi-Fi, URLs, VAD config, and saved speaker volume) survive a reflash. The fresh-device
+default is now `vad_encoding=ima_adpcm`, but an existing NVS value such as
+`pcm16` is intentionally not migrated. After any flash or reboot, inspect
+`RMHCFG?` and re-confirm both `vad_on` and `vad_encoding` (see troubleshooting).
 
 ### Building a release image (maintainers)
 
@@ -101,7 +102,9 @@ working default:
 | PC mDNS host | e.g. `my-pc.local` — auto-tracks the PC's IP on the home LAN; blank disables it | optional |
 | **Continuous hands-free VAD** (checkbox) | **Check it for hands-free** (the device streams when it hears speech); unchecked = PTT only (long-press to talk). Easy to miss. | optional |
 | Firmware VAD RMS threshold | On-device energy gate, matched to the backend: **RMS (default) → ~0.025**; **Silero → ~0.005** (kept low so the PC's Silero worker still sees marginal frames) | default |
-| VAD audio encoding | `pcm16` (default) or `ima_adpcm` (4:1, for mobile / Silero) | default |
+| VAD audio encoding | `ima_adpcm` (fresh-device default, about 4:1) or `pcm16` (compatibility) | default |
+| Post-playback VAD cooldown | Delay after physical playback ends before the shared codec returns to the mic; 1200 ms is conservative, 200 ms is the supported minimum | 1200 ms |
+| Speaker volume | Safe range 0–200. Faced Atom: 112 indoor default; 160 is an outdoor starting point. M12 default: 200 | default |
 | Device ID / agent IDs / ASR / TTS / rotation / pose | Sensible defaults — leave as-is unless you need to change them | default |
 
 The VAD **backend** (RMS vs Silero) is a PC-side choice: **RMS is the default**;
@@ -121,17 +124,78 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
   --mdns-host <pc-hostname>.local \
   --device-id atom-headroom-1 --asr-lang ja \
   --vad-on --vad-rms 0.005 --vad-tail 8 --vad-encoding ima_adpcm \
+  --speaker-volume 112 \
   --reboot
 ```
 
 VAD-related flags: `--vad-on` / `--vad-off`, `--vad-rms <0..1>`,
-`--vad-tail <0..240>`, `--vad-encoding pcm16|ima_adpcm`, `--asr-lang ja|en`.
+`--vad-tail <0..240>`, `--vad-encoding pcm16|ima_adpcm`,
+`--vad-playback-cooldown-ms <200..5000>`, `--speaker-volume <0..200>`,
+`--asr-lang ja|en`.
+For a known half-duplex Atom that settles cleanly, shorten only that device:
+
+```bash
+node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
+  --vad-playback-cooldown-ms 200 --reboot
+```
+
 `--mdns-host <pc-hostname>.local` makes the device resolve the PC's current IP at
 boot and rewrite the host in `--ws-url`/`--http-base`, so a DHCP change needs no
 re-provisioning; it falls back to the static URLs when mDNS can't resolve (e.g.
 off-LAN — keep those pointed at a stable address such as a Tailscale IP).
 `--mdns-host ""` disables it. Read current state by sending `RMHCFG?` over the
 serial port (115200, raw).
+
+The host opens the USB CDC device once and sends harmless `RMHCFG?` probes until
+the Atom returns `RMHCFG STATE`. Only then does it send the NVS-changing
+`RMHCFG <json>` line, exactly once. This avoids the startup race seen when the
+port exists before the firmware serial loop is ready, without risking repeated
+NVS writes or reboots. On some hosts a firmware reboot removes `/dev/ttyACM0`
+until the cable is reconnected; Wi-Fi operation can already have recovered
+while the USB node is absent.
+
+### Speaker output volume
+
+Volume is the Atom's M5Unified hardware master level, not a gain applied to the
+TTS waveform. It therefore behaves consistently across Kokoro, Supertonic, and
+other TTS providers and does not add digital clipping. The supported safe range
+is 0–200.
+
+- Faced Atom saved default: **112** (the current indoor level).
+- `outdoor`: **160**, a starting point rather than a guarantee. M5Unified's
+  mixing curve is non-linear; 160 is about +6.2 dB relative to 112 in that
+  curve.
+- M12 saved default: **200**.
+- Values above 200 are rejected by the UI, API, CLI, and firmware because the
+  tested Atom/Echo Base produces strong radio-like noise in that range.
+
+Change only the live level, without rebooting or changing NVS:
+
+```bash
+node scripts/atoms3r-volume.mjs --preset outdoor
+node scripts/atoms3r-volume.mjs --preset indoor
+node scripts/atoms3r-volume.mjs --volume 145
+node scripts/atoms3r-volume.mjs --preset mute
+```
+
+The command uses `ATOM_HEADROOM_URL` or automatic `/health` discovery and the
+same Atom/face auth-token environment used by the bridge. The live value appears
+as `speaker_volume` in `/health`; reboot restores the saved baseline. To change
+that baseline instead:
+
+```bash
+node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
+  --speaker-volume 112 --reboot
+```
+
+The runtime endpoint and `speaker_volume` health field require the updated
+firmware. The CLI detects older firmware and stops with an explicit flash-first
+message. When compatible firmware is connected, the Interpreter phone UI shows
+one compact speaker/value control in the route strip. Tap it to open the 0–200
+slider, ±8 controls, and Mute/Indoor/Outdoor presets. Changes travel through the
+authenticated same-origin Interpreter API and remain temporary until reboot.
+There is deliberately no broad voice intent, so translated speech about
+“volume” cannot be mistaken for a device command.
 
 ### How the VAD pipeline works
 
@@ -147,6 +211,68 @@ serial port (115200, raw).
    receive-gap term is what lets the firmware tail stay short — see below.
 3. The finalized PCM16 goes to the **ASR worker** (parakeet) and the transcript
    is dispatched as an `operator_response`, exactly like the browser-mic path.
+
+### Using Atom with the separate interpreter
+
+The interpreter reuses the same frame decoder and VAD segmenter, but gives the
+final WAV to the provider-neutral interpreter pipeline instead of Parakeet's
+operator-response path. The provider then detects the source language
+automatically. The firmware's saved `ja`/`en` ASR hint is not used to decide the
+interpreter language. An older firmware can still run the interpreter through
+the PCM compatibility path; the new firmware is required only for compressed
+PC-to-Atom playback and capability advertising.
+
+Physical PTT works in this mode too. The firmware deliberately keeps its
+historical two-stage `/api/operator/asr` plus `operator_response` protocol; the
+interpreter server recognizes that exchange, runs the preset's selected ASR
+once with automatic language detection, and feeds the prepared result into the
+normal interpreter turn. The saved firmware ASR hint is ignored for inference.
+No firmware reflash is needed when physical PTT already works against the
+operator service.
+
+Atom can maintain one Face WebSocket destination at a time. The operator and
+interpreter both default to the same exclusive port 8765, so an Atom already
+configured for the operator needs no endpoint rewrite when the interpreter
+takes over. Stop the active stack before starting the other one. Use the same
+authentication token for both services, or let the interpreter fall back to
+`MH_FACE_AUTH_TOKEN`, so the saved Atom credential remains valid.
+
+The interpreter's HTTP bridge checks Atom `/health`, including `ws_connected`
+and the configured WebSocket port/path, before advertising microphone
+availability. Merely finding a reachable Atom that is connected to a different
+custom endpoint does not disable phone PTT. If a deployment explicitly chooses
+a non-default port, re-provisioning is required only for that custom endpoint.
+
+An Atom connected to the interpreter owns both input and output. The phone is
+display/control only. During actual Atom playback, firmware switches the shared
+ES8311 codec away from mic capture. It starts the configured post-playback VAD
+cooldown from actual playback completion (`audio_->busy()` becoming false),
+not from a predicted audio duration. The fresh-device default is a conservative
+1,200 ms; `--vad-playback-cooldown-ms` can tune a particular device down to
+200 ms. The application does not add a timer-based phone/Atom mute.
+
+### Atom playback codec and mobile-browser compatibility
+
+Interpreter TTS destined for a capable Atom is converted from mono PCM16 WAV to
+standard Microsoft IMA ADPCM WAV on the PC. The Atom advertises
+`pcm16_wav`/`ima_adpcm_wav` in its WebSocket endpoint state and `/health`.
+`MH_ATOM_TTS_CODEC=auto` (the default) uses ADPCM only when every selected Atom
+advertises support; an older or unknown endpoint receives PCM. Use `pcm16` or
+`ima_adpcm` only as an explicit troubleshooting override.
+
+The audio store publishes one `tts_audio_ref` for an Atom turn. The HTTP bridge
+fetches those compressed bytes and forwards the binary body without expanding
+it to Base64 JSON. `audio_id` plus generation deduplication prevents the direct
+WebSocket and HTTP bridge paths from playing the same chunk twice. A transient
+direct HTTP fetch is retried once.
+
+This codec choice is **Atom-only**. Phone interpreter playback uses a separate
+same-origin binary reference containing mono MP3 at a nominal 128 kbit/s,
+generated with the same FFmpeg/libmp3lame policy as the working Arcade Music
+Player mobile path. It plays through one persistent unlocked HTML audio
+element. It does not use WebM/Opus, because iPhone/iPad browsers can reject live
+Opus playback even after a positive capability check. If MP3 conversion or
+reference storage fails, that utterance alone falls back to direct PCM16.
 
 ### Backends: RMS vs Silero
 
@@ -184,6 +310,8 @@ the stack with `scripts/restart-operator-stack-in-place.sh`:
 | `vad_rms` (`--vad-rms`) | firmware energy gate; keep **below** the PC threshold | ~0.005 |
 | `vad_tail` (`--vad-tail`) | trailing frames that carry the word's decay | 8 (~0.5 s) |
 | `vad_encoding` (`--vad-encoding`) | `pcm16` or `ima_adpcm` (4:1) | ima_adpcm for mobile |
+| `vad_playback_cooldown_ms` (`--vad-playback-cooldown-ms`) | delay from actual playback end to mic reopen | 1200 safe default; 200 tuned minimum |
+| `speaker_volume` (`--speaker-volume`) | saved safe speaker volume, 0–200 | faced 112 indoor; 160 outdoor start; M12 200 |
 
 ### Key relationships
 
@@ -201,15 +329,25 @@ the stack with `scripts/restart-operator-stack-in-place.sh`:
 
 ### Bandwidth
 
-Raw PCM16 is ~160 MB/h while streaming; IMA-ADPCM (4:1) is ~40–50 MB/h. With the
-idle gate (`vad_rms > 0`) the stream stops between utterances, so a mostly-idle
-device sends ≈0. Use **ADPCM + Silero** outdoors on a mobile-tethered link.
+Atom-to-PC continuous VAD is about 160 MB/h for Base64-wrapped PCM16 and about
+40–50 MB/h for independent-block IMA ADPCM while speech frames are flowing.
+With the idle gate (`vad_rms > 0`) it sends nothing between utterances.
+
+PC-to-Atom Supertonic playback at 44.1 kHz is about 882 kB for ten seconds of
+PCM16 versus about 223 kB as standard IMA ADPCM WAV. It is sent only while TTS
+speaks, and the bridge forwards binary rather than Base64. Use ADPCM in both
+directions on a mobile-tethered link. PC-to-browser interpreter speech is about
+160 kB per ten seconds as binary MP3. Its old Base64 PCM path would be about
+640 kB at 24 kHz or 1.176 MB at 44.1 kHz for the same duration.
 
 ### PTT (push-to-talk)
 
 **Long-press the screen button** to talk — PTT bypasses the VAD threshold
 entirely and is reliable in any environment, a good fallback when hands-free
-tuning is marginal. Screen-button gestures:
+tuning is marginal. Wait for the short cue before speaking, then release to
+submit. In the separate interpreter it joins the same translation pipeline as
+a VAD-finalized turn and leaves the VAD setting unchanged. Screen-button
+gestures:
 
 - single tap = VAD off when VAD is on (an escape hatch; persisted). No-op when VAD is already off.
 - double tap = VAD on/off toggle — the only on-device way to ENABLE VAD without re-provisioning
@@ -280,8 +418,9 @@ PLATFORMIO_UPLOAD_FLAGS=--no-stub \
   --upload-port /dev/ttyACM0
 ```
 
-NVS 設定（Wi-Fi・URL・VAD 設定）は再書き込みでも保持されます。書き込み／再起動の
-あとは `vad_on` を再確認してください（画面の不意のタップで無効になることがある）。
+NVS 設定（Wi-Fi・URL・VAD 設定・保存speaker volume）は再書き込みでも保持されます。新規端末の既定値は
+`vad_encoding=ima_adpcm` ですが、既存 NVS の `pcm16` は勝手に移行しません。書き込み／
+再起動後は `RMHCFG?` で `vad_on` と `vad_encoding` の両方を確認してください。
 
 ### リリース用イメージのビルド（メンテナ向け）
 
@@ -346,7 +485,9 @@ python3 -m http.server 8099        # 空いているポートなら何でも可
 | PC mDNS host | 例 `my-pc.local` — 自宅 LAN で PC の IP を自動追従。空で無効 | 任意 |
 | **Continuous hands-free VAD**（チェック） | **ハンズフリーにするならチェック**（発話を検出して自動送信）。外すと PTT（長押し）専用。見落とし注意。 | 任意 |
 | Firmware VAD RMS threshold | 端末側エネルギーゲート。バックエンドに合わせる：**RMS（既定）→ ~0.025**／**Silero → ~0.005**（低くして PC の Silero に微弱フレームを渡す） | 既定 |
-| VAD audio encoding | `pcm16`（既定）／`ima_adpcm`（4:1、モバイル・Silero 向け） | 既定 |
+| VAD audio encoding | `ima_adpcm`（新規端末の既定、約4:1）／`pcm16`（互換用） | 既定 |
+| Post-playback VAD cooldown | 実再生終了後、共有codecをmicへ戻すまでの待ち時間。1200 msは安全側、対応下限は200 ms | 1200 ms |
+| Speaker volume | 安全範囲0〜200。顔Atomは屋内既定112、屋外の出発点160。M12既定200 | 既定 |
 | Device ID / agent ID / ASR / TTS / 回転 / pose | 妥当な既定値。必要がなければそのまま | 既定 |
 
 VAD **バックエンド**（RMS / Silero）は PC 側で選択し、**既定は RMS** です。Silero を使う
@@ -367,16 +508,70 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
   --mdns-host <pc-hostname>.local \
   --device-id atom-headroom-1 --asr-lang ja \
   --vad-on --vad-rms 0.005 --vad-tail 8 --vad-encoding ima_adpcm \
+  --speaker-volume 112 \
   --reboot
 ```
 
 VAD 関連のフラグは、`--vad-on` / `--vad-off`、`--vad-rms <0..1>`、`--vad-tail <0..240>`、
-`--vad-encoding pcm16|ima_adpcm`、`--asr-lang ja|en`。`--mdns-host <PCのホスト名>.local`
+`--vad-encoding pcm16|ima_adpcm`、`--vad-playback-cooldown-ms <200..5000>`、
+`--speaker-volume <0..200>`、`--asr-lang ja|en` です。コーデックの切り替えが安定することが
+分かっている半二重の Atom に限り、その端末だけ `--vad-playback-cooldown-ms` を短く設定できます。
+
+```bash
+node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
+  --vad-playback-cooldown-ms 200 --reboot
+```
+
+`--mdns-host <PCのホスト名>.local`
 を渡すと、デバイスは起動時に PC の現在の IP を解決し、`--ws-url` と `--http-base` のホストを
 書き換えます。そのため、DHCP で IP が変わっても再設定は不要です。屋外などで mDNS を解決
 できない場合は静的 URL を使うため、そちらには Tailscale IP などの安定したアドレスを設定して
 ください。`--mdns-host ""` で無効にできます。現在値を確認するには、115200 baud の
 未加工シリアル接続で `RMHCFG?` を送信します。
+
+hostはUSB CDC deviceを一度だけopenし、副作用のない`RMHCFG?`をAtomから
+`RMHCFG STATE`が返るまで再送します。firmwareのserial loopがreadyになってから、NVSを
+変更する`RMHCFG <json>`を一度だけ送るため、USB nodeの列挙とfirmware readyの競合を
+吸収しつつ、NVS書き込みやrebootの重複を防ぎます。環境によってはfirmware reboot後、
+Wi-Fi動作が復帰していてもphysical reconnectまで`/dev/ttyACM0`が消えることがあります。
+
+### スピーカー出力音量
+
+音量はTTS波形を増幅するのではなく、Atom上のM5Unified hardware master levelで変更します。
+そのためKokoro、SupertonicなどのTTS providerに共通して効き、digital clippingを追加
+しません。安全範囲は0〜200です。
+
+- 顔Atomの保存既定値: **112**（現在の屋内音量）。
+- `outdoor`: **160**。M5Unifiedの非線形mixing curveでは112比で約+6.2 dB相当ですが、
+  屋外での出発点であり保証値ではありません。
+- M12の保存既定値: **200**。
+- 実機のAtom/Echo Baseでは200超で状態の悪いトランシーバーのような強いノイズが出るため、
+  UI、API、CLI、firmwareのすべてで200超を拒否します。
+
+再起動せず、NVSを変更せずに現在だけ変更する例:
+
+```bash
+node scripts/atoms3r-volume.mjs --preset outdoor
+node scripts/atoms3r-volume.mjs --preset indoor
+node scripts/atoms3r-volume.mjs --volume 145
+node scripts/atoms3r-volume.mjs --preset mute
+```
+
+このcommandは`ATOM_HEADROOM_URL`または`/health`自動探索と、bridgeと同じAtom/face認証
+環境を使います。現在値は`/health`の`speaker_volume`に現れ、rebootすると保存baselineへ
+戻ります。baseline自体を変更する場合:
+
+```bash
+node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
+  --speaker-volume 112 --reboot
+```
+
+runtime endpointと`speaker_volume` health fieldには更新済みfirmwareが必要です。旧firmware
+ではCLIがflash-first messageを出して停止します。Interpreterのスマホ画面では、対応firmware
+接続時だけroute stripにspeaker iconと現在値を表示し、tap時だけ0〜200 slider、±8、
+Mute/Indoor/Outdoorを開きます。操作は認証済みsame-origin Interpreter APIから接続中Atomへ
+渡し、NVSを変更しません。翻訳本文に含まれる「音量」をdevice commandと誤認しないよう、
+広い音声intentは追加していません。
 
 ### VAD パイプラインの仕組み
 
@@ -392,6 +587,54 @@ VAD 関連のフラグは、`--vad-on` / `--vad-off`、`--vad-rms <0..1>`、`--v
    （後述）。
 3. 確定した PCM16 音声を **ASR ワーカー**（parakeet）へ渡し、文字起こし結果を
    `operator_response` として配送します。ここから先はブラウザマイク経路と同じ流れです。
+
+### 独立した通訳スタックでAtomを使う
+
+通訳は同じframe decoderとVAD区切りを再利用しますが、完成WAVをoperator用Parakeetではなく
+provider-neutralな通訳pipelineへ渡します。source languageは通訳providerが自動判定します。
+firmwareに保存された `ja` / `en` hintは通訳方向の判定には使いません。旧firmwareでもPCM
+互換経路で通訳できますが、PC→Atomの圧縮再生と能力通知には新firmwareが必要です。
+
+物理PTTもこのmodeで使えます。firmwareは互換性のため従来の二段階
+`/api/operator/asr` + `operator_response` protocolを維持し、通訳serverがその通信を認識
+します。起動presetで選択中のASRを自動言語判定で一度だけ実行し、準備済み結果を通常の
+通訳turnへ渡します。firmwareに保存されたASR hintは推論に使いません。operator接続時に
+物理PTTが動いているfirmwareなら、この対応のための再書き込みは不要です。
+
+Atomが保持するFace WebSocket接続先は一度に一つです。operatorとinterpreterは同じ
+排他port 8765を既定にするため、operatorの8765へ設定済みのAtomはinterpreterへ
+切り替える際も接続先を書き換える必要がありません。現在のstackを停止してからもう一方を
+起動します。両serviceで同じ認証tokenを使うか、interpreterを`MH_FACE_AUTH_TOKEN`へ
+fallbackさせれば、Atomに保存済みのcredentialもそのまま使えます。
+
+通訳側HTTP bridgeはAtom `/health` の`ws_connected`と設定済みWebSocketのport/pathも
+確認してからmic利用可能を通知します。明示的に別のcustom endpointへ接続したAtomがHTTPで
+見つかっただけではスマホPTTを無効にしません。既定外portを選んだdeploymentだけは、
+そのcustom endpointへ再provisionする必要があります。
+
+通訳へ接続中のAtomは入力と出力の両方を担当し、スマホは表示・操作だけです。Atom再生中は
+firmwareが共有ES8311 codecをmic captureから切り替えます。設定済みpost-playback cooldownは
+予測時間ではなく、`audio_->busy()` がfalseになった実再生終了時点から始まります。新規端末の
+安全側既定値は1,200 msで、`--vad-playback-cooldown-ms` により端末ごとに200 msまで短縮
+できます。application側にスマホ/Atomを跨ぐtimer-based muteは追加していません。
+
+### Atom再生codecとスマホbrowserの互換性
+
+対応するAtom向けの通訳TTSは、PC上でmono PCM16 WAVから標準Microsoft IMA ADPCM WAVへ
+変換します。AtomはWebSocketのendpoint stateと`/health`で
+`pcm16_wav` / `ima_adpcm_wav`対応を通知します。既定の
+`MH_ATOM_TTS_CODEC=auto`は、選択された全Atomが対応するときだけADPCMを使い、旧firmwareや
+能力不明時はPCMへ戻します。`pcm16` / `ima_adpcm`の強制指定は切り分け用です。
+
+Atomの1 turnにつき音声storeが送るのは1つの`tts_audio_ref`です。HTTP bridgeは圧縮済み
+byte列を取得し、Base64 JSONへ膨らませずbinary bodyのまま転送します。`audio_id`とgeneration
+でdirect WebSocket経路との二重再生を防ぎ、一時的なdirect HTTP失敗時だけ1回再試行します。
+
+このcodec選択は**Atom専用**です。スマホの通訳再生は別の同一origin binary referenceを
+使い、Arcade Music Playerの正常動作経路と同じFFmpeg/libmp3lame方針で生成したmono MP3
+128 kbit/sを、unlock済みの永続HTML audio elementで再生します。iPhone/iPadでは対応判定が
+成功してもlive WebM/Opusが拒否されることがあるため、Opusは使いません。MP3変換または
+reference保存に失敗した発話だけdirect PCM16へfallbackします。
 
 ### バックエンド: RMS と Silero
 
@@ -431,6 +674,8 @@ RMS の方が素早く反応します。
 | `vad_rms`（`--vad-rms`） | ファーム側エネルギーゲート。PC 閾値より**下**に | ~0.005 |
 | `vad_tail`（`--vad-tail`） | 語尾の余韻を運ぶ末尾フレーム数 | 8（~0.5 秒） |
 | `vad_encoding`（`--vad-encoding`） | `pcm16` か `ima_adpcm`（4:1） | モバイルは ima_adpcm |
+| `vad_playback_cooldown_ms`（`--vad-playback-cooldown-ms`） | 実再生終了からmic再開まで | 安全側既定1200、調整下限200 ms |
+| `speaker_volume`（`--speaker-volume`） | 保存する安全なspeaker volume、0〜200 | 顔112屋内／160屋外出発点、M12 200 |
 
 ### 重要な関係
 
@@ -447,15 +692,21 @@ RMS の方が素早く反応します。
 
 ### 帯域
 
-ストリーミング中の転送量は、生の PCM16 で約160 MB/h、IMA-ADPCM（4:1）で約40〜50 MB/h
-です。アイドルゲート（`vad_rms > 0`）により発話の合間は送信を止めるため、ほぼ無言なら
-転送量もほぼゼロです。屋外やモバイル回線では **ADPCM ＋ Silero** を推奨します。
+Atom→PCの連続VADは発話frame送信中、Base64化したPCM16で約160 MB/h、独立block型
+IMA-ADPCMで約40〜50 MB/hです。アイドルゲート（`vad_rms > 0`）により発話間は送信しません。
+
+PC→AtomのSupertonic再生（44.1 kHz）は、10秒ならPCM16が約882 kB、標準IMA ADPCM WAVが
+約223 kBです。送信はTTS発話中だけで、bridgeはBase64ではなくbinary転送します。モバイル
+テザリングではAtomとの双方向にADPCMを使います。PC→browserの通訳音声はbinary MP3で
+10秒あたり約160 kBです。従来のBase64 PCMなら同じ10秒で24 kHzが約640 kB、44.1 kHzが
+約1.176 MBでした。
 
 ### PTT（プッシュ・トゥ・トーク）
 
 **画面ボタンを長押し**して話します。PTT は VAD 閾値を使わないため、周囲の音に左右されにくい
-確実な入力方法です。ハンズフリーの調整が難しい場合に使ってください。画面ボタンには次の
-操作があります。
+確実な入力方法です。ハンズフリーの調整が難しい場合に使ってください。短い合図音を待って
+話し、離すと送信します。独立通訳ではVADで確定した発話と同じ翻訳経路へ合流し、VAD設定は
+変えません。画面ボタンには次の操作があります。
 
 - 単タップ: VAD がオンのときにオフへ切り替え、設定を保存します。緊急停止に使えます。
   VAD がオフのときは何もしません。

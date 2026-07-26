@@ -1,0 +1,24 @@
+[project]
+name = "minimum-headroom-interpreter-asr-worker"
+version = "0.1.0"
+description = "Offline Nemotron 3.5 ASR worker for the Minimum Headroom interpreter"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.116.1",
+  "librosa==0.11.0",
+  "numpy==2.4.6",
+  "pydantic==2.11.7",
+  "torch==2.10.0",
+  "transformers==5.13.1",
+  "uvicorn==0.35.0",
+]
+
+[project.scripts]
+interpreter-asr-worker = "interpreter_asr_worker.__main__:main"
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/interpreter_asr_worker"]

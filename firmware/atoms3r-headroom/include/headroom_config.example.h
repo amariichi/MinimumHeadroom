@@ -31,12 +31,20 @@
 // room. Set to ~0.005 if the PC bridge uses Silero so Silero can see
 // marginal-energy frames.
 #define HEADROOM_VAD_FIRMWARE_RMS 0.025f
-// "pcm16" (raw 16-bit) or "ima_adpcm" (4:1 lossy for mobile use).
-#define HEADROOM_VAD_ENCODING "pcm16"
+// "ima_adpcm" (fresh default, 4:1 lossy) or "pcm16" (compatibility).
+#define HEADROOM_VAD_ENCODING "ima_adpcm"
 // Trailing silence frames sent after speech (0..240; 8 ≈ 0.5 s). Just carries
 // the speech decay for ASR — the PC bridge's receive-gap timer finalizes the
 // utterance, so the tail no longer needs to exceed MH_ATOM_VAD_END_SILENCE_MS.
 #define HEADROOM_VAD_SPEECH_TAIL_FRAMES 8
+// Delay after speaker playback has physically ended before continuous VAD
+// reopens the shared half-duplex codec for microphone capture. 1200 ms is the
+// conservative fresh-device default; known hardware can be tuned down to
+// 200 ms through serial provisioning or the setup portal.
+#define HEADROOM_VAD_PLAYBACK_COOLDOWN_MS 1200
+// Optional safe speaker volume override (0..200). If omitted, the faced
+// Atom keeps 112 and the M12 keeps 200.
+// #define HEADROOM_SPEAKER_VOLUME 112
 #define HEADROOM_MAX_BASE64_TTS_SECONDS 15
 #define HEADROOM_MAX_HTTP_TTS_BYTES 1200000
 

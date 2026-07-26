@@ -27,6 +27,7 @@ A face and operator companion app for coding agents.
 ## At a Glance
 
 - **Control your PC coding agent from your phone** — approve, type, or speak commands via mobile browser.
+- **Separate adaptive interpreter stack** — one mobile hold-to-talk control learns the conversation pair, follows spoken language-change requests, and starts only the selected ASR/translation/TTS providers. See the [Interpreter Stack Guide](doc/guides/interpreter-stack.md#english).
 - **Works with Claude Code, Codex CLI, and Antigravity CLI** — any agent that runs in a terminal.
 - **tmux operator bridge** relays input/output between the browser UI and the agent pane.
 - **3D face + TTS + MCP signaling** give your agent a voice and expressions that reflect its state.
@@ -40,12 +41,13 @@ A face and operator companion app for coding agents.
 ## Features
 
 - **Operator input** — terminal direct prompt, browser PTT (JA/EN ASR), text fallback, desktop `Space`/`Shift+Space` hold-to-talk safety, key controls (`Esc`, `↑`, `Select`, `↓`)
+- **Interpreter stack** — an independent English-labelled mobile page with one WAV PTT, automatic source-language detection, a server-owned two-language session, spoken target overrides, Atom VAD turns, and four local startup presets
 - **Terminal mirror** — read-only tmux tail snapshots at 500ms change-only intervals; lines render at native width with horizontal scroll, and on touch devices you can pinch-to-zoom (anchored under your fingers) and double-tap to reset
 - **Multi-agent** (experimental) — spawn/focus/delete helpers from desktop tiles or mobile list, permission presets, mission assignment and delivery, owner inbox. A background stuck-detector scans each helper's tmux pane and posts auto `blocked` reports to the owner inbox when a known CLI modal (approval prompt, model picker, usage-limit notice, survey) is visible, so the operator notices stalled helpers without polling. See [Multi-Agent Guide](doc/guides/multi-agent.md).
 - **M12 vision** — AtomS3R-M12 camera + diffusiongemma (vLLM) captioner, change-gated SQLite memory with tiered summaries, `GET /situation` digest injection, corrections, keyword watches, and Echo Base spoken alerts. See [M12 Vision Guide](doc/guides/m12-vision.md#english).
 - **MCP signaling** — `face.event` / `face.say` / `face.ping`, generic `media.play` / `media.stop` / `media.status` ([integration guide](doc/guides/generic-browser-media.md#english)), plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`)
 - **3D face** — eyebrow/eye/mouth/head animation, state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`), drag control, panel toggles
-- **TTS** — Kokoro ONNX + Misaki default, optional Qwen3-TTS Japanese backend, freshness-first speech policy. See [TTS and Speech Guide](doc/guides/tts-and-speech.md).
+- **TTS** — Kokoro ONNX + Misaki default, optional CPU Supertonic 3 and GPU Qwen3-TTS backends with per-utterance language selection, freshness-first speech policy. See [TTS and Speech Guide](doc/guides/tts-and-speech.md).
 - **ASR** — Parakeet batch, optional Voxtral realtime. See [Operator Stack and ASR Guide](doc/guides/operator-stack.md).
 - **Looking Glass** WebXR support path
 
@@ -307,7 +309,12 @@ docker network ls -q | xargs -I{} docker network inspect {} --format '{{.Name}} 
 
 If Docker has been reconfigured to a different pool (for example `10.200.0.0/16` via `daemon.json`), or if your LAN itself sits in `172.16/12` (some corporate networks do — check `ip -brief addr`), narrow the rule to the specific Docker network subnet (for example `172.20.0.0/16`) and pin that subnet in the compose / `docker network create` so it does not drift on recreation. With a typical home LAN (`192.168/16` or `10/8`) and stock Docker, the `172.16/12` rule keeps LAN and Tailnet (`100.64/10`) blocked.
 
-The token must be present in the shell that starts face-app, the operator bridge, and any agent CLI whose MCP server forwards to face-app. If you keep it in `~/.config/minimum-headroom.env` sourced from `.bashrc`, also source it from `~/.profile` (or a launcher wrapper) so non-interactive and GUI-launched agents inherit it. Recovery from a 401 MCP WebSocket: `set -a; . ~/.config/minimum-headroom.env; set +a` in the launching shell, then restart the agent.
+The token must be present in face-app, the operator bridge, and any agent CLI
+whose MCP server forwards to face-app. `run-operator-once.sh` and
+`run-interpreter-once.sh` read `~/.config/minimum-headroom.env` automatically
+and export its defaults to their panes, so those normal paths do not require
+`set -a`. Independently launched GUI or low-level processes must still inherit
+the token, for example from `~/.profile` or an explicit launcher wrapper.
 
 ### Path A: Face + MCP (minimal)
 
@@ -327,25 +334,35 @@ Then, in another terminal:
 Use this path when you want the simple face UI and signaling, without the full operator panel workflow. `run-face-app.sh` hides the operator panel by default.
 
 - If your coding agent already starts this repository's MCP server from its own MCP client config, do not also run `./scripts/run-mcp-server.sh`.
-- By default, `face-app` starts `tts-worker` for you unless `FACE_TTS_ENABLED=0` is set. The default backend is Kokoro; if the `face-app` process is launched with `TTS_ENGINE=qwen3`, the spawned worker uses the optional Qwen3 path instead. For Kokoro, the default voice follows `MH_LANG` (`af_heart` for English, `jf_alpha` otherwise); set `MH_KOKORO_VOICE` to override it.
+- By default, `face-app` starts `tts-worker` for you unless `FACE_TTS_ENABLED=0` is set. The default backend is Kokoro; launch `face-app` with `TTS_ENGINE=supertonic` or `TTS_ENGINE=qwen3` only after installing that optional backend. For Kokoro, the default voice follows `MH_LANG` (`af_heart` for English, `jf_alpha` otherwise); set `MH_KOKORO_VOICE` to override it.
 
 ### Path B: Full Mobile Operator Stack (recommended)
 
-After `./scripts/setup.sh`, recommended one-shot startup:
+The core setup installs Kokoro only. Add Supertonic or Qwen3-TTS explicitly:
+
+```bash
+./scripts/setup.sh
+./scripts/setup.sh --with-supertonic
+./scripts/setup.sh --with-qwen3-tts
+```
+
+Then use the recommended one-shot startup:
 
 ```bash
 ./scripts/run-operator-once.sh --profile realtime
 ```
 
-Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring. Start with `--profile default` or `--profile realtime` unless you specifically want Qwen3 TTS.
+Use this when you want the full tmux-backed operator workflow, browser PTT, terminal mirror, hidden mobile recovery, and the safest default bridge wiring. Start with `--profile default` or `--profile realtime` unless you specifically want Supertonic or Qwen3 TTS.
 
-- `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. `qwen3` / `qwen3-realtime` profiles work by passing `TTS_ENGINE=qwen3` into that spawned worker path. For Kokoro profiles, set `MH_LANG=en` or `MH_LANG=ja` for the deployment default, or set `MH_KOKORO_VOICE` when you need an explicit shared voice for English and Japanese.
+- `run-operator-once.sh` / `run-operator-stack.sh` launch `face-app`, and `face-app` starts `tts-worker` by default unless `FACE_TTS_ENABLED=0` is set. The `supertonic*` and `qwen3*` profiles pass the selected `TTS_ENGINE` into that spawned worker path. Ordinary `face_say` requests to that Operator then use the selected worker; the engine is chosen per stack start or restart, not per utterance. For Kokoro profiles, set `MH_LANG=en` or `MH_LANG=ja` for the deployment default, or set `MH_KOKORO_VOICE` when you need an explicit shared voice for English and Japanese.
 - `run-operator-once.sh` exports `MH_FACE_AGENT_ID=__operator__` / `MH_FACE_AGENT_LABEL=Operator` for the operator pane, and the integrated operator stack binds its optional MCP server to the same identity. Helper panes get their assigned helper id at spawn time; Docker-based helper commands receive it through `docker exec -e`.
 - The MCP face tools auto-fill `agent_id` from `MH_FACE_AGENT_ID` when their MCP server process has that binding, and reject mismatched explicit ids with remediation guidance. If your MCP client runs a separate unbound server, pass `agent_id` explicitly on every `face_ping`, `face_event`, and `face_say` call, using `MH_FACE_AGENT_ID` as the source of truth.
 - `--agent-cmd` controls only the primary operator pane. `MH_AGENT_DEFAULT_CMD` is the helper-agent launch template used by `face-app` when you add helpers later. If that helper template starts with `docker exec`, Minimum Headroom inserts the per-helper `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` with `docker exec -e`; otherwise it prefixes the helper command with `env ...`. See [Operator Stack Guide](doc/guides/operator-stack.md#docker-and-helper-agent-commands) for Docker examples.
 - Profile shorthand:
   - `--profile default`: Kokoro TTS + batch ASR only
   - `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
+  - `--profile supertonic`: Supertonic 3 CPU TTS + batch ASR only
+  - `--profile supertonic-realtime`: Supertonic 3 CPU TTS + Voxtral realtime ASR + Parakeet fallback
   - `--profile qwen3`: Qwen3 TTS + batch ASR only
   - `--profile qwen3-realtime`: Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback
 - When you use this app to work on another repository, put a project-local `AGENTS.md` in that target repository too. Start from `doc/examples/AGENTS.sample.md`, then customize the repo-specific build/test/run rules there.
@@ -374,6 +391,9 @@ cd /path/to/target-repo
 # keep the current shell instead of attaching to tmux
 ./scripts/run-operator-once.sh --profile realtime --no-attach
 
+# choose CPU Supertonic only when that optional environment is installed
+./scripts/run-operator-once.sh --profile supertonic
+
 # choose Qwen3 TTS only when you want that path explicitly
 ./scripts/run-operator-once.sh --profile qwen3-realtime
 
@@ -384,6 +404,58 @@ cd /path/to/target-repo
 ```
 
 See [Audio target and UI mode](doc/guides/operator-stack.md#audio-target-and-ui-mode) for when to pick `browser`, `local`, or `both`.
+
+### Path C: Separate Interpreter Stack
+
+The interpreter remains a separate runtime stack and page, not an Operator
+profile. Preview one of the four local provider combinations, install only
+that combination, then start its dedicated two-pane tmux window. The left pane
+is Bash and the right pane shows interpreter backend logs:
+
+```bash
+./scripts/setup-interpreter-stack.sh --preset gemma4-supertonic --dry-run
+./scripts/setup-interpreter-stack.sh --preset gemma4-supertonic
+./scripts/interpreter-doctor.sh --preset gemma4-supertonic
+./scripts/run-interpreter-once.sh --preset gemma4-supertonic
+```
+
+The launcher automatically reads per-user defaults from
+`~/.config/minimum-headroom.env` (or `MH_ENV_FILE`) without requiring
+`set -a`; explicit command options and environment values win.
+After either current two-pane launcher starts, tap the `Operator` title or the
+Interpreter provider label to open the authenticated `Switch mode` dialog.
+It can change an Operator backend profile, an Interpreter preset, or hand the
+same right pane and port 8765 between the two applications. The left
+shell/Codex pane remains running, and an unsuccessful target gets one bounded
+rollback attempt. See the guide for setup and recovery limits.
+The switch owns only the shared right-pane stack. A local model started in the
+left pane, another tmux session, a service, or Docker—including the M12
+diffusiongemma backend—keeps running; checking free VRAM or stopping that known
+external process remains the user's responsibility.
+If you stop an external model before switching, returning to Operator does not
+restart it; start it again manually when needed.
+Use `gemma4-supertonic` or `gemma4-qwen3` for Gemma audio recognition. Use
+`nemotron-gemma4-supertonic` or `nemotron-gemma4-qwen3` when you want a
+separate ASR with recognition, language-coverage, latency, and failure
+characteristics that differ from Gemma, and accept loading both models.
+Neither ASR is declared universally more accurate; compare them with your
+speakers and noise conditions. Gemma handles intent and translation in every
+preset; the interpreter no longer requires `agy`.
+In the current one-sentence host measurement, `gemma4-supertonic` made encoded
+speech ready in about 2.1 seconds and was the lightest path; the Qwen paths
+needed about 4.3–4.5 seconds but can speak Chinese. A separate synthetic
+Mandarin check favored Nemotron ASR, so `nemotron-gemma4-qwen3` is the first
+path to try for bidirectional Mandarin—not a universal accuracy claim.
+On a Nemotron unusable-transcript 422, the hybrid presets try the same WAV once
+with their already-loaded Gemma audio provider; other provider failures are not
+silently retried.
+`light-cloud` remains only as a deprecated alias for
+`nemotron-gemma4-supertonic`. See the
+[Interpreter Stack Guide](doc/guides/interpreter-stack.md#english) before model
+downloads or a non-loopback phone bind. It includes the measured comparison,
+face Atom/mobile controls, and third-party model-license inventory. Phone TTS uses the same
+FFmpeg/libmp3lame 128-kbit/s MP3 policy as the working generic Music Player
+path; the doctor reports a larger PCM fallback when that encoder is absent.
 
 <a id="en-generic-browser-media"></a>
 ### Generic browser media channel
@@ -509,7 +581,9 @@ If your MCP client rejects tool names with dots (for example `face.event` or `me
 - [Generic Browser Media Integration](doc/guides/generic-browser-media.md#english) — prepare a third-party MP3 producer/controller, including optional catalog and local-file safety, HTTP/MCP contracts, mobile playback, security, and optional TTS focus
 - [AtomS3R Devices](doc/guides/atom-devices.md#english) — the two physical Atom devices (face vs M12 camera), which docs belong to which, and the `--asr-lang` gotcha
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#english) — launcher choice, tmux bridge, operator UI, keyboard shortcuts, hidden mobile recovery, batch/realtime ASR, Tailscale remote operation
-- [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro and Qwen3 setup, speech gate, long-speech behavior, pre-synthesis text normalization
+- [Interpreter Stack Guide](doc/guides/interpreter-stack.md#english) — the four local presets, measured comparison, setup/doctor/start/stop, language-pair rules, phone/Atom routing, and third-party model-license inventory
+- [Gemma 4 and llama.cpp Guide](doc/guides/gemma4-llama-cpp.md#english) — pinned official GGUFs, the converted MTP assistant, llama.cpp compatibility, and reproducible conversion
+- [TTS and Speech Guide](doc/guides/tts-and-speech.md#english) — Kokoro, Supertonic, and Qwen3 setup, supported languages, speech gate, long-speech behavior, and pre-synthesis text normalization
 - [M12 Vision Guide](doc/guides/m12-vision.md#english) — M12 perception flow, hierarchical memory and forgetting, corrections, keyword watches, and spoken alerts
 - [Multi-Agent Guide](doc/guides/multi-agent.md#english) — spawning helpers, permission presets, mission assignment, owner inbox, worktree isolation, security hardening
 - [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#english) — **the face AtomS3R:** hands-free VAD pipeline, flashing + USB provisioning, RMS vs Silero backends, ADPCM, every tuning knob (endSilence / threshold / tail / maxUtterance), PTT, troubleshooting
@@ -601,7 +675,7 @@ npm run asr-worker:smoke
 
 - Runtime/local files (models, local MCP config, caches, venv) are excluded via `.gitignore`.
 - Three.js assets are served locally instead of from the unpkg CDN (PR #65), so the face UI does not depend on third-party CDN availability.
-- Noise-like TTS output can be diagnosed with opt-in capture-only logging (PR #66): enable the env-gated path to capture WAV + JSON under `~/.cache/minimum-headroom/tts-captures`.
+- Noise-like TTS output can be diagnosed with opt-in capture-only logging (PR #66). It is off by default; when enabled it writes a speech-containing WAV plus metrics JSON under `~/.cache/minimum-headroom/tts-captures`. Text and request identifiers require separate opt-in flags. Treat captures as sensitive and remove them after diagnosis.
 
 ## Acknowledgements
 

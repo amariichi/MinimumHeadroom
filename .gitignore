@@ -11,6 +11,10 @@ __pycache__/
 .venv-platformio/
 .venv-vllm/
 .venv-qwen-tts/
+.venv-nemotron-asr/
+.venv-supertonic/
+.venv-gemma4-convert/
+.venv-gemma4-setup/
 tts-worker/.venv/
 asr-worker/.venv/
 
@@ -20,6 +24,7 @@ asr-worker/.venv/
 .playwright-cli/
 .cache/huggingface/
 .cache/vllm/
+.local/state/interpreter/
 .env
 .env.*
 .agent/

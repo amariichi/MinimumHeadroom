@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -125,11 +126,34 @@ class CaptureWriteTests(unittest.TestCase):
       self.assertTrue(sidecar.exists())
       data = json.loads(sidecar.read_text(encoding='utf-8'))
       self.assertEqual(data['reason'], 'broadband_noise')
+      self.assertNotIn('text', data)
+      self.assertNotIn('prepared_text', data)
+      self.assertNotIn('context', data)
+      self.assertNotIn('abc123de', wav_path.name)
+      self.assertIn('rms', data['metrics'])
+      self.assertEqual(cap.captured, 1)
+
+  def test_text_and_request_context_require_separate_opt_in(self) -> None:
+    with tempfile.TemporaryDirectory() as d:
+      cap = self._capture(
+        Path(d),
+        include_text=True,
+        include_context=True,
+      )
+      out = cap.maybe_capture(
+        text='ノイズまみれ',
+        prepared_text='のいずまみれ',
+        audio=_broadband_noise(),
+        sample_rate=SAMPLE_RATE,
+        context={'utterance_id': 'abc123def456', 'session_id': 's1'},
+      )
+      self.assertIsNotNone(out)
+      wav_path = Path(out)
+      data = json.loads(wav_path.with_suffix('.json').read_text(encoding='utf-8'))
       self.assertEqual(data['text'], 'ノイズまみれ')
       self.assertEqual(data['prepared_text'], 'のいずまみれ')
       self.assertEqual(data['context']['utterance_id'], 'abc123def456')
-      self.assertIn('rms', data['metrics'])
-      self.assertEqual(cap.captured, 1)
+      self.assertIn('abc123de', wav_path.name)
 
   def test_respects_max_captures_budget(self) -> None:
     with tempfile.TemporaryDirectory() as d:
@@ -149,6 +173,13 @@ class FromEnvTests(unittest.TestCase):
     finally:
       if saved is not None:
         os.environ['MH_TTS_CAPTURE_ANOMALY'] = saved
+
+  def test_capture_metadata_defaults_are_private(self) -> None:
+    with patch.dict(os.environ, {'MH_TTS_CAPTURE_ANOMALY': '1'}, clear=True):
+      capture = AnomalyCapture.from_env()
+    self.assertTrue(capture.enabled)
+    self.assertFalse(capture.include_text)
+    self.assertFalse(capture.include_context)
 
 
 if __name__ == '__main__':

@@ -66,6 +66,9 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   } else if (normalized.vadSpeechTailFrames > 240) {
     normalized.vadSpeechTailFrames = 240;
   }
+  normalized.vadPlaybackCooldownMs =
+      normalizeVadPlaybackCooldownMs(normalized.vadPlaybackCooldownMs);
+  normalized.speakerVolume = normalizeSpeakerVolume(normalized.speakerVolume);
 
   Preferences prefs;
   if (!prefs.begin(kNamespace, false)) {
@@ -90,6 +93,8 @@ bool HeadroomSettings::save(const HeadroomSettingsData& next) {
   prefs.putFloat("vad_rms", normalized.vadFirmwareRms);
   prefs.putString("vad_enc", normalized.vadEncoding);
   prefs.putInt("vad_tail", normalized.vadSpeechTailFrames);
+  prefs.putInt("vad_play_cd", normalized.vadPlaybackCooldownMs);
+  prefs.putInt("speaker_vol", normalized.speakerVolume);
   prefs.putInt("max_b64_sec", normalized.maxBase64TtsSeconds);
   prefs.putInt("max_http_b", normalized.maxHttpTtsBytes);
   prefs.putInt("rotation", normalized.faceRotationDegrees);
@@ -202,6 +207,26 @@ String HeadroomSettings::normalizeAsrLanguage(const String& value, const String&
   return normalizedFallback.startsWith("en") ? "en" : "ja";
 }
 
+int HeadroomSettings::normalizeVadPlaybackCooldownMs(int value) {
+  if (value < 200) {
+    return 200;
+  }
+  if (value > 5000) {
+    return 5000;
+  }
+  return value;
+}
+
+int HeadroomSettings::normalizeSpeakerVolume(int value) {
+  if (value < 0) {
+    return 0;
+  }
+  if (value > kHeadroomMaxSpeakerVolume) {
+    return kHeadroomMaxSpeakerVolume;
+  }
+  return value;
+}
+
 const char* HeadroomSettings::placementPoseName(HeadroomPlacementPose pose) {
   switch (pose) {
     case HeadroomPlacementPose::SideUp:
@@ -231,6 +256,9 @@ void HeadroomSettings::loadCompileDefaults() {
   data_.vadFirmwareRms = HEADROOM_VAD_FIRMWARE_RMS;
   data_.vadEncoding = normalizeVadEncoding(HEADROOM_VAD_ENCODING);
   data_.vadSpeechTailFrames = HEADROOM_VAD_SPEECH_TAIL_FRAMES;
+  data_.vadPlaybackCooldownMs =
+      normalizeVadPlaybackCooldownMs(HEADROOM_VAD_PLAYBACK_COOLDOWN_MS);
+  data_.speakerVolume = normalizeSpeakerVolume(HEADROOM_SPEAKER_VOLUME);
   data_.maxBase64TtsSeconds = HEADROOM_MAX_BASE64_TTS_SECONDS;
   data_.maxHttpTtsBytes = HEADROOM_MAX_HTTP_TTS_BYTES;
   data_.faceRotationDegrees = normalizeRotation(HEADROOM_FACE_ROTATION_DEGREES);
@@ -285,6 +313,10 @@ void HeadroomSettings::loadNvsOverrides() {
     const int rawTail = readInt(prefs, "vad_tail", data_.vadSpeechTailFrames);
     data_.vadSpeechTailFrames = rawTail < 0 ? 0 : (rawTail > 240 ? 240 : rawTail);
   }
+  data_.vadPlaybackCooldownMs = normalizeVadPlaybackCooldownMs(
+      readInt(prefs, "vad_play_cd", data_.vadPlaybackCooldownMs));
+  data_.speakerVolume = normalizeSpeakerVolume(
+      readInt(prefs, "speaker_vol", data_.speakerVolume));
   data_.maxBase64TtsSeconds = readInt(prefs, "max_b64_sec", data_.maxBase64TtsSeconds);
   data_.maxHttpTtsBytes = readInt(prefs, "max_http_b", data_.maxHttpTtsBytes);
   data_.faceRotationDegrees = normalizeRotation(readInt(prefs, "rotation", data_.faceRotationDegrees));

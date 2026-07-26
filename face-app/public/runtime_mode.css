@@ -1,0 +1,159 @@
+.runtime-mode-trigger {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.operator-title.runtime-mode-trigger {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.operator-title.runtime-mode-trigger::after,
+.runtime-provider-trigger::after {
+  content: "⌄";
+  margin-left: 0.42rem;
+  opacity: 0.68;
+}
+
+.runtime-provider-trigger {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.runtime-mode-trigger:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 0.2rem;
+}
+
+.runtime-mode-dialog {
+  width: min(calc(100% - 1rem), 30rem);
+  max-width: none;
+  max-height: calc(100svh - 1rem);
+  margin: auto auto calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  padding: 1rem;
+  overflow-y: auto;
+  border: 1px solid var(--line, rgba(118, 226, 255, 0.28));
+  border-radius: 1rem;
+  background: #18201c;
+  color: var(--ink, #f1f5ef);
+  box-shadow: 0 -1rem 4rem rgb(0 0 0 / 0.48);
+}
+
+.runtime-mode-dialog::backdrop {
+  background: rgb(4 7 5 / 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.runtime-mode-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.runtime-mode-kicker {
+  margin: 0;
+  color: var(--accent, #b9f36b);
+  font: 650 0.68rem/1.2 "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.runtime-mode-dialog h2 {
+  margin: 0.22rem 0 0;
+  color: inherit;
+  font-size: 1.25rem;
+  font-weight: 620;
+  letter-spacing: -0.025em;
+}
+
+.runtime-mode-close,
+.runtime-mode-actions button {
+  min-height: 2.75rem;
+  border: 1px solid var(--line, rgba(118, 226, 255, 0.28));
+  border-radius: 0.75rem;
+  background: var(--panel-strong, #1d2521);
+  color: inherit;
+  cursor: pointer;
+}
+
+.runtime-mode-close {
+  width: 2.75rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.runtime-mode-fields {
+  margin-top: 1.25rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.runtime-mode-fields label {
+  display: grid;
+  gap: 0.42rem;
+  color: var(--muted, #8f9b94);
+  font: 650 0.72rem/1.2 "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.runtime-mode-fields select {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line, rgba(118, 226, 255, 0.28));
+  border-radius: 0.7rem;
+  background: #111712;
+  color: var(--ink, #f1f5ef);
+  font: 500 1rem/1.2 "Avenir Next", "Segoe UI", system-ui, sans-serif;
+}
+
+.runtime-mode-status {
+  min-height: 2.1rem;
+  margin: 0.75rem 0 0;
+  color: var(--muted, #8f9b94);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.runtime-mode-status.is-error {
+  color: var(--danger, #ff8c7c);
+}
+
+.runtime-mode-actions {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.runtime-mode-actions .runtime-mode-submit {
+  border-color: var(--accent, #b9f36b);
+  background: var(--accent, #b9f36b);
+  color: var(--accent-ink, #10150f);
+  font-weight: 700;
+}
+
+.runtime-mode-actions button:disabled,
+.runtime-mode-fields select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

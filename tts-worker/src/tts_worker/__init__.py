@@ -8,4 +8,5 @@ __all__ = [
   'protocol',
   'qwen3_engine',
   'qwen3_text',
+  'supertonic_engine',
 ]

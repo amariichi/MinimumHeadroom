@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.25.1';
+const SERVER_VERSION = '1.26.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_AUTH_TOKEN = (() => {
@@ -113,6 +113,9 @@ const BASE_TOOL_DEFINITIONS = [
         agent_id: { type: ['string', 'null'] },
         agent_label: { type: ['string', 'null'] },
         text: { type: 'string', minLength: 1 },
+        language: { type: ['string', 'null'], minLength: 1 },
+        speaker: { type: ['string', 'null'], minLength: 1 },
+        audio_endpoint: { type: ['string', 'null'], enum: ['atom', 'browser', null] },
         priority: { type: 'integer', minimum: 0, maximum: 3 },
         policy: { type: 'string', enum: ['replace', 'interrupt'] },
         ttl_ms: { type: 'integer', minimum: 1 },
@@ -976,6 +979,12 @@ function normalizeSayPayload(rawArguments) {
   const sessionId = resolveSessionId(args);
   const identity = resolveFaceIdentity(args);
   const text = requireString(args, 'text');
+  const language = optionalString(args, 'language', null);
+  const speaker = optionalString(args, 'speaker', null);
+  const audioEndpoint = optionalString(args, 'audio_endpoint', null);
+  if (audioEndpoint !== null && audioEndpoint !== 'atom' && audioEndpoint !== 'browser') {
+    throw new Error('audio_endpoint must be "atom", "browser", or null');
+  }
   const priority = clamp(optionalInteger(args, 'priority', 0), 0, 3);
   const ttlMs = optionalInteger(args, 'ttl_ms', DEFAULT_SAY_TTL_MS);
   if (ttlMs <= 0) {
@@ -1013,6 +1022,9 @@ function normalizeSayPayload(rawArguments) {
     ts: Date.now(),
     utterance_id: utteranceId,
     text,
+    ...(language ? { language } : {}),
+    ...(speaker ? { speaker } : {}),
+    ...(audioEndpoint ? { audio_endpoint: audioEndpoint } : {}),
     priority,
     policy,
     ttl_ms: ttlMs,

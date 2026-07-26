@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { startFaceWebSocketServer } from '../../face-app/dist/ws_server.js';
+import { createRuntimeModeApi } from '../../face-app/dist/runtime_mode_api.js';
 
 function waitForOpen(socket, timeoutMs = 1000) {
   return new Promise((resolve, reject) => {
@@ -77,6 +78,64 @@ test('ws server requires bearer token for HTTP routes when auth is configured', 
   });
   assert.equal(allowed.status, 200);
   assert.deepEqual(await allowed.json(), { ok: true });
+});
+
+test('runtime mode controls inherit bearer and origin protection from the shared server', async (t) => {
+  const runtimeApi = createRuntimeModeApi({
+    mode: 'operator',
+    selection: 'default',
+    controller: {
+      async snapshot() {
+        return {
+          available: true,
+          transition: { state: 'ready' }
+        };
+      },
+      async requestSwitch(input) {
+        return {
+          transitionId: 'secured-transition',
+          targetMode: input.mode,
+          targetSelection: input.selection
+        };
+      }
+    }
+  });
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    authToken: 'runtime-token',
+    allowedOrigins: ['https://allowed.example.test'],
+    requireOriginCheck: true,
+    relayPayloads: false,
+    onHttpRequest: runtimeApi.handleHttpRequest,
+    log: { info: () => {}, error: () => {} }
+  });
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const deniedToken = await fetch(`${server.httpUrl}api/runtime/mode`, {
+    headers: { origin: 'https://allowed.example.test' }
+  });
+  assert.equal(deniedToken.status, 401);
+
+  const deniedOrigin = await fetch(`${server.httpUrl}api/runtime/mode`, {
+    headers: {
+      authorization: 'Bearer runtime-token',
+      origin: 'https://other.example.test'
+    }
+  });
+  assert.equal(deniedOrigin.status, 403);
+
+  const allowed = await fetch(`${server.httpUrl}api/runtime/mode`, {
+    headers: {
+      authorization: 'Bearer runtime-token',
+      origin: 'https://allowed.example.test'
+    }
+  });
+  assert.equal(allowed.status, 200);
+  assert.equal((await allowed.json()).mode, 'operator');
 });
 
 test('ws server keeps static ui bootstrap public when auth is configured', async (t) => {

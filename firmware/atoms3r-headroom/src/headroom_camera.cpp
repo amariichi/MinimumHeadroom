@@ -210,9 +210,10 @@ void HeadroomCamera::handleAudioTest() {
   // M12 audio bring-up diagnostic: report whether M5 thinks a speaker is
   // configured (Echo Base ES8311 detected) and play a test tone so the fault
   // (no-detect vs configured-but-silent) can be localized over HTTP. Params:
-  // freq (Hz), ms (duration), vol (0..255). Unauthenticated.
+  // freq (Hz), ms (duration), vol (0..200). Unauthenticated.
   bool enabledBefore = M5.Speaker.isEnabled();
-  uint8_t vol = server_->hasArg("vol") ? static_cast<uint8_t>(server_->arg("vol").toInt()) : 200;
+  int requestedVolume = server_->hasArg("vol") ? server_->arg("vol").toInt() : 200;
+  uint8_t vol = static_cast<uint8_t>(constrain(requestedVolume, 0, 200));
   int freq = server_->hasArg("freq") ? server_->arg("freq").toInt() : 880;
   int ms = server_->hasArg("ms") ? server_->arg("ms").toInt() : 400;
   // Re-init the speaker in case it was left in mic/ADC mode, then play.

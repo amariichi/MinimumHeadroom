@@ -13,6 +13,8 @@ Design constraints:
 - It must never break TTS: every public entry point swallows its own errors.
 - Off by default (writes nothing) so the public build is unsurprising; a
   single env flag turns it on for a debugging session.
+- Transcript text and request identifiers require separate opt-in flags even
+  when waveform capture itself is enabled.
 """
 
 from __future__ import annotations
@@ -159,6 +161,8 @@ class AnomalyCapture:
     zcr_threshold: float,
     clip_fraction: float,
     max_captures: int,
+    include_text: bool = False,
+    include_context: bool = False,
   ) -> None:
     self.enabled = bool(enabled)
     self.directory = Path(directory)
@@ -166,6 +170,8 @@ class AnomalyCapture:
     self.zcr_threshold = float(zcr_threshold)
     self.clip_fraction = float(clip_fraction)
     self.max_captures = int(max_captures)
+    self.include_text = bool(include_text)
+    self.include_context = bool(include_context)
     self.captured = 0
 
   @classmethod
@@ -179,6 +185,8 @@ class AnomalyCapture:
       zcr_threshold=_env_float('MH_TTS_CAPTURE_ZCR_THRESHOLD', 0.35),
       clip_fraction=_env_float('MH_TTS_CAPTURE_CLIP_FRACTION', 0.2),
       max_captures=_env_int('MH_TTS_CAPTURE_MAX', 20),
+      include_text=_env_flag('MH_TTS_CAPTURE_INCLUDE_TEXT', False),
+      include_context=_env_flag('MH_TTS_CAPTURE_INCLUDE_CONTEXT', False),
     )
 
   def maybe_capture(
@@ -218,7 +226,7 @@ class AnomalyCapture:
       now = time.time()
       stamp = time.strftime('%Y%m%d-%H%M%S', time.localtime(now)) + f'-{int((now % 1) * 1000):03d}'
       utterance_id = ''
-      if context:
+      if self.include_context and context:
         utterance_id = str(context.get('utterance_id') or '')
       suffix = ('-' + utterance_id.replace('/', '_')[:8]) if utterance_id else ''
       base = f'{CAPTURE_FILENAME_PREFIX}-{stamp}{suffix}'
@@ -235,8 +243,6 @@ class AnomalyCapture:
       sidecar = {
         'reason': reason,
         'captured_at': stamp,
-        'text': text,
-        'prepared_text': prepared_text,
         'metrics': metrics,
         'thresholds': {
           'rms_floor': self.rms_floor,
@@ -244,8 +250,12 @@ class AnomalyCapture:
           'clip_fraction': self.clip_fraction,
         },
         'wav_file': wav_path.name,
-        'context': context or {},
       }
+      if self.include_text:
+        sidecar['text'] = text
+        sidecar['prepared_text'] = prepared_text
+      if self.include_context:
+        sidecar['context'] = context or {}
       json_path.write_text(json.dumps(sidecar, ensure_ascii=False, indent=2), encoding='utf-8')
 
       self.captured += 1

@@ -39,27 +39,34 @@ public:
   // No DAC playback may happen in this window or the codec latches into a
   // corrupted state that only a hardware power cycle clears.
   bool recording() const;
+  void setSpeakerVolume(uint8_t volume);
+  uint8_t speakerVolume() const { return speakerVolume_; }
 
   HeadroomAudioResult playBase64Wav(const char* audioBase64, size_t base64Length, int sampleRateHint);
   HeadroomAudioResult playHttpWavRef(const String& url);
   HeadroomAudioResult playWavBytes(const uint8_t* wav, size_t length);
+  bool isDuplicateAudio(const String& audioId, int generation) const;
+  void rememberAudio(const String& audioId, int generation);
 
 private:
+  struct WavInfo {
+    uint16_t audioFormat = 0;
+    uint16_t channels = 0;
+    uint16_t bitsPerSample = 0;
+    uint16_t blockAlign = 0;
+    uint16_t samplesPerBlock = 0;
+    uint32_t sampleRate = 0;
+    uint32_t byteRate = 0;
+    uint32_t factSampleCount = 0;
+    size_t dataOffset = 0;
+    size_t dataBytes = 0;
+  };
+
   String httpBase_;
   String authToken_;
   int maxBase64Seconds_ = 10;
   int maxHttpBytes_ = 1200000;
-#ifdef HEADROOM_M12
-  // The M12's Echo Base. M5.Speaker's volume curve is non-linear (low values
-  // drop off steeply), so keep the device volume in its usable upper region and
-  // let the audio sender set the final level via the WAV amplitude (linear). A
-  // comfortable level is this volume with sender amplitude ~0.22. Playback is
-  // clean once the ES8311 startup transient is absorbed by a short lead-in
-  // silence (see the M12 audio sender).
-  uint8_t speakerVolume_ = 200;
-#else
   uint8_t speakerVolume_ = 112;
-#endif
   uint8_t* activeWav_ = nullptr;
   size_t activeWavLength_ = 0;
   static constexpr size_t kQueuedWavCapacity = 1;  // Bound AtomS3R RAM: one active WAV plus one pending chunk.
@@ -70,6 +77,13 @@ private:
   QueuedWav queuedWavs_[kQueuedWavCapacity];
   size_t queuedWavCount_ = 0;
   bool recording_ = false;
+  static constexpr size_t kRecentAudioCapacity = 4;
+  struct RecentAudio {
+    String id;
+    int generation = -1;
+  };
+  RecentAudio recentAudio_[kRecentAudioCapacity];
+  size_t nextRecentAudio_ = 0;
 
   // Window over the in-flight PCM, captured at playRaw() time, used by
   // currentMouthOpen() to derive the envelope from real device playback.
@@ -90,8 +104,9 @@ private:
   bool popQueuedWav(QueuedWav* out);
   HeadroomAudioResult startOwnedWavNow(uint8_t* wav, size_t length, bool takeOwnership);
   HeadroomAudioResult playOwnedWav(uint8_t* wav, size_t length, bool takeOwnership);
-  bool inspectWav(const uint8_t* wav, size_t length, int* sampleRate, size_t* dataOffset, size_t* dataBytes, uint16_t* bitsPerSample,
-                  uint16_t* channels);
+  HeadroomAudioResult fetchAndPlayHttpWavRefOnce(const String& fullUrl);
+  HeadroomAudioResult normalizeOwnedWav(uint8_t** wav, size_t* length);
+  bool inspectWav(const uint8_t* wav, size_t length, WavInfo* info);
   bool pcmLooksSafe(const int16_t* samples, size_t sampleCount);
   String absoluteUrl(const String& url) const;
 };

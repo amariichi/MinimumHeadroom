@@ -78,7 +78,7 @@ public:
 
   // Transient suspensions. Both stop the mic if capturing, transition to the
   // matching Suspended state, bump generation_, and arm cooldown.
-  void suspendForPlayback(uint32_t cooldownMs = kVadPlaybackCooldownMs);
+  void suspendForPlayback();
   void suspendForPtt(uint32_t cooldownMs = kVadPttCooldownMs);
 
   // Teardown-only alias for explicit stop (transport disconnect,
@@ -110,6 +110,7 @@ private:
   String encoding_ = "pcm16";
   float speechRms_ = 0.025f;
   uint32_t speechTailFrames_ = kDefaultSpeechTailFrames;
+  uint32_t playbackCooldownMs_ = kVadPlaybackCooldownMs;
   HeadroomContinuousVadState state_ = HeadroomContinuousVadState::Disabled;
   uint32_t generation_ = 0;
   uint32_t suspendUntilMs_ = 0;

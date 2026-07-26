@@ -32,15 +32,18 @@ void HeadroomContinuousVad::begin(const HeadroomSettingsData& settings, Headroom
   speechTailFrames_ = settings.vadSpeechTailFrames < 0
                           ? 0u
                           : static_cast<uint32_t>(settings.vadSpeechTailFrames);
+  playbackCooldownMs_ = static_cast<uint32_t>(
+      HeadroomSettings::normalizeVadPlaybackCooldownMs(settings.vadPlaybackCooldownMs));
   state_ = settings.continuousVadEnabled ? HeadroomContinuousVadState::Idle : HeadroomContinuousVadState::Disabled;
   // Transport's before-playback callback feeds the state machine, not stop()
   // directly. This keeps the cooldown hysteresis honest across both the WS
   // and HTTP playback paths.
   transport_->setBeforeAudioPlaybackCallback(&HeadroomContinuousVad::playbackCallback, this);
-  Serial.printf("continuous VAD ready enabled=%s state=%s asr_lang=%s gen=%u speech_rms=%.4f tail=%u encoding=%s\n",
+  Serial.printf("continuous VAD ready enabled=%s state=%s asr_lang=%s gen=%u speech_rms=%.4f tail=%u encoding=%s playback_cooldown_ms=%u\n",
                 enabled() ? "yes" : "no", stateName(), asrLanguage_.c_str(),
                 static_cast<unsigned>(generation_), speechRms_,
-                static_cast<unsigned>(speechTailFrames_), encoding_.c_str());
+                static_cast<unsigned>(speechTailFrames_), encoding_.c_str(),
+                static_cast<unsigned>(playbackCooldownMs_));
 }
 
 void HeadroomContinuousVad::update() {
@@ -57,11 +60,11 @@ void HeadroomContinuousVad::update() {
   }
   if (audio_->busy()) {
     // Treat ongoing playback as an in-flight suspension regardless of who
-    // started it. Use the default playback cooldown so the post-playback
+    // started it. Use the configured playback cooldown so the post-playback
     // tail still gets the cooldown gate.
     if (state_ == HeadroomContinuousVadState::Capturing ||
         state_ == HeadroomContinuousVadState::Idle) {
-      enterCooldownIfCapturing(kVadPlaybackCooldownMs, HeadroomContinuousVadState::SuspendedForPlayback, now);
+      enterCooldownIfCapturing(playbackCooldownMs_, HeadroomContinuousVadState::SuspendedForPlayback, now);
     }
     return;
   }
@@ -86,7 +89,7 @@ void HeadroomContinuousVad::update() {
       // immediately startMic() at TTS end, where audio_->stopForRecording()
       // calls M5.Speaker.end() into a still-settling amp -> audible click.
       uint32_t cooldownMs = (state_ == HeadroomContinuousVadState::SuspendedForPlayback)
-                              ? kVadPlaybackCooldownMs
+                              ? playbackCooldownMs_
                               : kVadPttCooldownMs;
       suspendUntilMs_ = now + cooldownMs;
       cooldownEnteredMs_ = now;
@@ -139,11 +142,11 @@ void HeadroomContinuousVad::setEnabled(bool enabled) {
   }
 }
 
-void HeadroomContinuousVad::suspendForPlayback(uint32_t cooldownMs) {
+void HeadroomContinuousVad::suspendForPlayback() {
   if (state_ == HeadroomContinuousVadState::Disabled) {
     return;
   }
-  enterCooldownIfCapturing(cooldownMs, HeadroomContinuousVadState::SuspendedForPlayback, nowMillis());
+  enterCooldownIfCapturing(playbackCooldownMs_, HeadroomContinuousVadState::SuspendedForPlayback, nowMillis());
 }
 
 void HeadroomContinuousVad::suspendForPtt(uint32_t cooldownMs) {

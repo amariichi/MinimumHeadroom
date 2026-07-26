@@ -2,6 +2,17 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  encodePcm16WavToImaAdpcmWav,
+  IMA_ADPCM_WAV_CODEC,
+  PCM16_WAV_CODEC
+} from './ima_adpcm_wav.js';
+import {
+  encodePcm16WavToMp3,
+  MP3_AUDIO_CODEC,
+  MP3_MIME_TYPE,
+  MP3_NOMINAL_BITRATE
+} from './mp3_encoder.js';
 import { createSayGate } from './say_gate.js';
 
 const DEFAULT_WORKER_COMMAND = {
@@ -139,6 +150,10 @@ function normalizeAudioTarget(value) {
   return 'local';
 }
 
+function normalizeAudioEndpoint(value) {
+  return value === 'atom' || value === 'browser' ? value : null;
+}
+
 function normalizeTtlMs(value, fallbackMs = 60_000) {
   if (!Number.isInteger(value)) {
     return Math.max(1, fallbackMs);
@@ -180,6 +195,14 @@ function normalizeRevision(value, fallback) {
 }
 
 function normalizeSpeakerOverride(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function normalizeLanguageOverride(value) {
   if (typeof value !== 'string') {
     return null;
   }
@@ -323,6 +346,16 @@ export function createTtsController(options = {}) {
   const audioStore = options.audioStore ?? null;
   const audioTarget = normalizeAudioTarget(options.audioTarget);
   const browserAudioEnabled = audioTarget === 'browser' || audioTarget === 'both';
+  const atomAudioCodecResolver = typeof options.atomAudioCodecResolver === 'function'
+    ? options.atomAudioCodecResolver
+    : () => PCM16_WAV_CODEC;
+  const browserAudioEncoder = typeof options.browserAudioEncoder === 'function'
+    ? options.browserAudioEncoder
+    : encodePcm16WavToMp3;
+  const browserAudioEncoderOptions =
+    options.browserAudioEncoderOptions && typeof options.browserAudioEncoderOptions === 'object'
+      ? { ...options.browserAudioEncoderOptions }
+      : {};
   const defaultTtlMs = Number.isInteger(options.defaultTtlMs) ? Math.max(1, options.defaultTtlMs) : 60_000;
   const autoInterruptAfterMs =
     Number.isInteger(options.autoInterruptAfterMs) && options.autoInterruptAfterMs >= 0
@@ -355,6 +388,9 @@ export function createTtsController(options = {}) {
   // A newer accepted say flushes this and replaces it.
   let queue = [];
   let lastActivityKey = null;
+  let browserAudioEncodeTail = Promise.resolve();
+  const canceledBrowserAudioGenerations = new Set();
+  const browserAudioAbortControllers = new Map();
 
   function notifyActivity() {
     const activity = {
@@ -448,11 +484,16 @@ export function createTtsController(options = {}) {
 
     const fallbackMessageId = `${sessionId}:${currentGeneration}`;
     const revision = normalizeRevision(payload?.revision, createdAt);
-    const speaker = selectQwenSpeakerForText(rawText, {
+    const explicitSpeaker = normalizeSpeakerOverride(payload?.speaker);
+    const speaker = explicitSpeaker ?? selectQwenSpeakerForText(rawText, {
       engine: workerEngine,
       defaultVoice: workerVoice,
       boundarySpeaker: qwenBoundarySpeaker
     });
+    const language = normalizeLanguageOverride(payload?.language);
+    const audioEndpoint = normalizeAudioEndpoint(
+      payload?.audio_endpoint ?? payload?.audioEndpoint
+    );
     return {
       generation: currentGeneration,
       sessionId,
@@ -463,10 +504,14 @@ export function createTtsController(options = {}) {
       revision,
       text: rawText,
       speaker,
+      explicitSpeaker: explicitSpeaker !== null,
+      language,
+      audioEndpoint,
       priority,
       policy,
       ttlMs,
       createdAt,
+      appendToQueue: payload?.append_to_queue === true,
       deferUntilIdle: payload?.defer_until_idle === true,
       dedupeKey: typeof payload?.dedupe_key === 'string' ? payload.dedupe_key : null
     };
@@ -476,11 +521,13 @@ export function createTtsController(options = {}) {
     if (count <= 1) {
       return parent;
     }
-    const speaker = selectQwenSpeakerForText(text, {
-      engine: workerEngine,
-      defaultVoice: workerVoice,
-      boundarySpeaker: qwenBoundarySpeaker
-    });
+    const speaker = parent.explicitSpeaker
+      ? parent.speaker
+      : selectQwenSpeakerForText(text, {
+          engine: workerEngine,
+          defaultVoice: workerVoice,
+          boundarySpeaker: qwenBoundarySpeaker
+        });
     const suffix = `#${index + 1}/${count}`;
     return {
       ...parent,
@@ -543,6 +590,7 @@ export function createTtsController(options = {}) {
       utterance_id: entry.utteranceId,
       text: entry.text,
       speaker: entry.speaker,
+      ...(entry.language ? { language: entry.language } : {}),
       priority: entry.priority,
       policy: entry.policy,
       ts: entry.createdAt,
@@ -619,6 +667,9 @@ export function createTtsController(options = {}) {
     if (!active || autoInterruptAfterMs === null) {
       return false;
     }
+    if (entry.appendToQueue) {
+      return false;
+    }
     if (entry.policy !== 'replace') {
       return false;
     }
@@ -634,11 +685,140 @@ export function createTtsController(options = {}) {
     return acceptedAt - anchor >= autoInterruptAfterMs;
   }
 
+  function cancelBrowserAudioGeneration(audioGeneration) {
+    if (!Number.isInteger(audioGeneration)) {
+      return;
+    }
+    canceledBrowserAudioGenerations.add(audioGeneration);
+    const controller = browserAudioAbortControllers.get(audioGeneration);
+    if (controller) {
+      controller.abort();
+      browserAudioAbortControllers.delete(audioGeneration);
+    }
+    if (canceledBrowserAudioGenerations.size > 128) {
+      canceledBrowserAudioGenerations.delete(
+        canceledBrowserAudioGenerations.values().next().value
+      );
+    }
+  }
+
+  function broadcastDirectPcm(entry, message, mimeType, sampleRate) {
+    broadcast({
+      v: 1,
+      type: 'tts_audio',
+      session_id: entry.sessionId,
+      ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+      ...(entry.agentLabel ? { agent_label: entry.agentLabel } : {}),
+      utterance_id: entry.utteranceId,
+      generation: entry.generation,
+      message_id: entry.messageId,
+      revision: entry.revision,
+      ...(entry.audioEndpoint ? { audio_endpoint: entry.audioEndpoint } : {}),
+      mime_type: mimeType,
+      audio_base64: message.audio_base64,
+      audio_codec: PCM16_WAV_CODEC,
+      sample_rate: sampleRate,
+      ts: now()
+    });
+  }
+
+  function queueBrowserMp3(entry, message, mimeType, sampleRate) {
+    const run = async () => {
+      if (
+        stopped
+        || canceledBrowserAudioGenerations.has(entry.generation)
+        || !browserAudioEnabled
+      ) {
+        return;
+      }
+      if (
+        !audioStore
+        || typeof audioStore.putAudio !== 'function'
+        || typeof audioStore.toReferencePayload !== 'function'
+      ) {
+        log.warn('[face-app] browser TTS MP3 store unavailable; using PCM16');
+        broadcastDirectPcm(entry, message, mimeType, sampleRate);
+        return;
+      }
+
+      const abortController = new AbortController();
+      browserAudioAbortControllers.set(entry.generation, abortController);
+      try {
+        const encoded = await browserAudioEncoder(
+          Buffer.from(message.audio_base64, 'base64'),
+          {
+            ...browserAudioEncoderOptions,
+            signal: abortController.signal
+          }
+        );
+        if (
+          stopped
+          || canceledBrowserAudioGenerations.has(entry.generation)
+          || abortController.signal.aborted
+        ) {
+          return;
+        }
+        if (
+          !encoded
+          || !Buffer.isBuffer(encoded.buffer)
+          || encoded.buffer.length === 0
+          || encoded.codec !== MP3_AUDIO_CODEC
+          || encoded.mimeType !== MP3_MIME_TYPE
+          || encoded.bitrate !== MP3_NOMINAL_BITRATE
+        ) {
+          throw new Error('browser MP3 encoder returned an invalid result');
+        }
+
+        const stored = audioStore.putAudio({
+          audioBase64: message.audio_base64,
+          audioBuffer: encoded.buffer,
+          mimeType: encoded.mimeType,
+          audioCodec: encoded.codec,
+          bitrate: encoded.bitrate,
+          sampleRate,
+          sessionId: entry.sessionId,
+          agentId: entry.agentId,
+          agentLabel: entry.agentLabel,
+          utteranceId: entry.utteranceId,
+          generation: entry.generation,
+          messageId: entry.messageId,
+          revision: entry.revision,
+          audioEndpoint: entry.audioEndpoint
+        });
+        const refPayload = audioStore.toReferencePayload(stored);
+        if (!refPayload) {
+          throw new Error('browser MP3 audio store did not create a reference');
+        }
+        broadcast(refPayload);
+      } catch (error) {
+        if (
+          stopped
+          || canceledBrowserAudioGenerations.has(entry.generation)
+          || abortController.signal.aborted
+        ) {
+          return;
+        }
+        log.warn(`[face-app] browser TTS MP3 encode failed; using PCM16 (${error.message})`);
+        broadcastDirectPcm(entry, message, mimeType, sampleRate);
+      } finally {
+        if (browserAudioAbortControllers.get(entry.generation) === abortController) {
+          browserAudioAbortControllers.delete(entry.generation);
+        }
+      }
+    };
+
+    const queued = browserAudioEncodeTail.then(run, run);
+    browserAudioEncodeTail = queued.catch((error) => {
+      log.warn(`[face-app] browser TTS MP3 queue failed (${error.message})`);
+    });
+  }
+
   function interruptActive(reason, byGeneration = null) {
     if (!active) {
       return;
     }
 
+    cancelBrowserAudioGeneration(active.generation);
     sendWorker({
       id: `interrupt-${active.generation}-${now()}`,
       op: 'interrupt',
@@ -715,42 +895,84 @@ export function createTtsController(options = {}) {
 
       const mimeType = typeof message.mime_type === 'string' ? message.mime_type : 'audio/wav';
       const sampleRate = Number.isInteger(message.sample_rate) ? message.sample_rate : null;
+      const audioEntry = { ...active };
+      const atomEndpoint = active.audioEndpoint === 'atom';
+      const browserEndpoint = active.audioEndpoint === 'browser';
+      log.info(
+        `[face-app] tts audio received generation=${active.generation} endpoint=${active.audioEndpoint ?? '-'} base64_chars=${message.audio_base64.length}`
+      );
 
-      if (audioStore && typeof audioStore.putAudio === 'function' && typeof audioStore.toReferencePayload === 'function') {
-        const entry = audioStore.putAudio({
-          audioBase64: message.audio_base64,
-          mimeType,
-          sampleRate,
-          sessionId: active.sessionId,
-          agentId: active.agentId,
-          agentLabel: active.agentLabel,
-          utteranceId: active.utteranceId,
-          generation: active.generation,
-          messageId: active.messageId,
-          revision: active.revision
-        });
-        const refPayload = audioStore.toReferencePayload(entry);
-        if (refPayload) {
-          broadcast(refPayload);
+      if (browserEndpoint) {
+        if (browserAudioEnabled) {
+          queueBrowserMp3(audioEntry, message, mimeType, sampleRate);
+        }
+        return;
+      }
+
+      let audioBuffer = null;
+      let audioCodec = PCM16_WAV_CODEC;
+
+      if (atomEndpoint) {
+        let requestedCodec = PCM16_WAV_CODEC;
+        try {
+          requestedCodec = atomAudioCodecResolver({
+            sessionId: active.sessionId,
+            utteranceId: active.utteranceId,
+            generation: active.generation,
+            sampleRate
+          });
+        } catch (error) {
+          log.warn(`[face-app] Atom TTS codec resolver failed; using PCM16 (${error.message})`);
+        }
+        if (requestedCodec === IMA_ADPCM_WAV_CODEC) {
+          try {
+            const encoded = encodePcm16WavToImaAdpcmWav(
+              Buffer.from(message.audio_base64, 'base64')
+            );
+            audioBuffer = encoded.buffer;
+            audioCodec = encoded.codec;
+          } catch (error) {
+            log.warn(`[face-app] Atom TTS ADPCM encode failed; using PCM16 (${error.message})`);
+          }
         }
       }
 
-      if (browserAudioEnabled) {
-        broadcast({
-          v: 1,
-          type: 'tts_audio',
-          session_id: active.sessionId,
-          ...(active.agentId ? { agent_id: active.agentId } : {}),
-          ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
-          utterance_id: active.utteranceId,
-          generation: active.generation,
-          message_id: active.messageId,
-          revision: active.revision,
-          mime_type: mimeType,
-          audio_base64: message.audio_base64,
-          sample_rate: sampleRate,
-          ts: now()
+      const shouldStoreReference = atomEndpoint || !browserEndpoint;
+      if (
+        shouldStoreReference
+        && audioStore
+        && typeof audioStore.putAudio === 'function'
+        && typeof audioStore.toReferencePayload === 'function'
+      ) {
+        const entry = audioStore.putAudio({
+          audioBase64: message.audio_base64,
+          ...(audioBuffer ? { audioBuffer } : {}),
+          mimeType,
+          audioCodec,
+          sampleRate,
+          sessionId: audioEntry.sessionId,
+          agentId: audioEntry.agentId,
+          agentLabel: audioEntry.agentLabel,
+          utteranceId: audioEntry.utteranceId,
+          generation: audioEntry.generation,
+          messageId: audioEntry.messageId,
+          revision: audioEntry.revision,
+          audioEndpoint: audioEntry.audioEndpoint
         });
+        const refPayload = audioStore.toReferencePayload(entry);
+        if (refPayload) {
+          const sent = broadcast(refPayload);
+          log.info(
+            `[face-app] tts audio reference broadcast generation=${audioEntry.generation} endpoint=${audioEntry.audioEndpoint ?? '-'} codec=${audioCodec} bytes=${entry.byteLength} accepted=${sent !== false}`
+          );
+          if (atomEndpoint) {
+            return;
+          }
+        }
+      }
+
+      if (browserAudioEnabled || atomEndpoint) {
+        broadcastDirectPcm(audioEntry, message, mimeType, sampleRate);
       }
       return;
     }
@@ -764,6 +986,16 @@ export function createTtsController(options = {}) {
 
     if (active && messageGeneration !== null && messageGeneration !== active.generation) {
       return;
+    }
+    if (
+      messageGeneration !== null
+      && (
+        phase === 'dropped'
+        || phase === 'error'
+        || (phase === 'play_stop' && message.reason === 'interrupted')
+      )
+    ) {
+      cancelBrowserAudioGeneration(messageGeneration);
     }
 
     const sessionId = active?.sessionId ?? message.session_id ?? '-';
@@ -779,6 +1011,11 @@ export function createTtsController(options = {}) {
       message_id: messageId,
       revision
     });
+    if (phase === 'error') {
+      log.error(
+        `[face-app] tts synthesis error generation=${messageGeneration ?? '-'} reason=${message.reason ?? 'unknown'}`
+      );
+    }
 
     if (phase === 'play_start' && active && (messageGeneration === null || messageGeneration === active.generation)) {
       activePlayStartedAt = Number.isFinite(message.ts) ? Math.floor(message.ts) : now();
@@ -946,13 +1183,18 @@ export function createTtsController(options = {}) {
     }
 
     if (active) {
-      // A newer utterance supersedes the previous one's queued remainder.
-      clearQueue();
+      // Normal say traffic keeps the established "latest pending replace"
+      // contract. Interpreter-owned multi-utterance answers can explicitly
+      // append short language announcements and their translation to the
+      // existing FIFO without exposing a new public face_say policy.
+      if (!entry.appendToQueue) {
+        clearQueue();
+      }
       enqueueEntries(children);
       emitState(head.sessionId, head.utteranceId, 'queued', {
         ...(head.agentId ? { agent_id: head.agentId } : {}),
         ...(head.agentLabel ? { agent_label: head.agentLabel } : {}),
-        reason: 'pending_replace',
+        reason: entry.appendToQueue ? 'pending_append' : 'pending_replace',
         generation: head.generation,
         message_id: head.messageId,
         revision: head.revision
@@ -1017,6 +1259,10 @@ export function createTtsController(options = {}) {
 
     stopped = true;
     clearQueue();
+    for (const controller of browserAudioAbortControllers.values()) {
+      controller.abort();
+    }
+    browserAudioAbortControllers.clear();
 
     if (active) {
       emitMouth(active.sessionId, active.utteranceId, 0, active.generation, active.messageId, active.revision, {

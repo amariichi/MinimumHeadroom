@@ -10,7 +10,43 @@ from .shared_text import (
 
 QWEN3_ASCII_MODES = {'preserve', 'fullwidth', 'kana_alias'}
 QWEN3_STYLES = {'neutral', 'soft', 'narration'}
-QWEN3_LANGUAGES = {'Japanese', 'English'}
+QWEN3_LANGUAGES = {
+  'Auto',
+  'Chinese',
+  'English',
+  'Japanese',
+  'Korean',
+  'German',
+  'French',
+  'Russian',
+  'Portuguese',
+  'Spanish',
+  'Italian',
+}
+QWEN3_LANGUAGE_ALIASES = {
+  'auto': 'Auto',
+  'und': 'Auto',
+  'zh': 'Chinese',
+  'chinese': 'Chinese',
+  'en': 'English',
+  'english': 'English',
+  'ja': 'Japanese',
+  'japanese': 'Japanese',
+  'ko': 'Korean',
+  'korean': 'Korean',
+  'de': 'German',
+  'german': 'German',
+  'fr': 'French',
+  'french': 'French',
+  'ru': 'Russian',
+  'russian': 'Russian',
+  'pt': 'Portuguese',
+  'portuguese': 'Portuguese',
+  'es': 'Spanish',
+  'spanish': 'Spanish',
+  'it': 'Italian',
+  'italian': 'Italian',
+}
 _ASCII_TOKEN_RE = re.compile(r'(?<![A-Za-z0-9])([A-Za-z0-9][A-Za-z0-9./:+_-]{1,7})(?![A-Za-z0-9])')
 _LEADING_WHITESPACE_RE = re.compile(r'^(\s*)')
 _MIXED_BOUNDARY_TOKEN_RE = r'([A-Za-z0-9][A-Za-z0-9./:+_-]{0,31})'
@@ -95,23 +131,26 @@ def normalize_style(raw: str | None) -> str:
 def normalize_language(raw: str | None) -> str:
   if raw is None:
     return 'Japanese'
-  normalized = raw.strip().lower()
-  if normalized in {'ja', 'japanese'}:
-    return 'Japanese'
-  if normalized in {'en', 'english'}:
-    return 'English'
-  raise ValueError(f'unsupported MH_QWEN_TTS_LANGUAGE: {raw} (expected Japanese|English)')
+  normalized = raw.strip().lower().replace('_', '-')
+  primary = normalized.split('-', 1)[0]
+  resolved = QWEN3_LANGUAGE_ALIASES.get(normalized) or QWEN3_LANGUAGE_ALIASES.get(primary)
+  if resolved:
+    return resolved
+  expected = '|'.join(sorted(QWEN3_LANGUAGES))
+  raise ValueError(f'unsupported MH_QWEN_TTS_LANGUAGE: {raw} (expected {expected})')
 
 
 def prepare_qwen3_text(text: str, *, ascii_mode: str, language: str) -> str:
   normalized_language = normalize_language(language)
   text = _apply_japanese_leadin_filler(text, language=normalized_language)
-  if normalized_language != 'Japanese':
+  if normalized_language == 'English':
     text = _stabilize_english_mixed_script_boundaries(text)
     text = _apply_exact_japanese_speech_aliases(text)
     text = _apply_exact_english_phrase_speech_aliases(text)
     text = _apply_semver_speech_aliases(text)
     return _apply_english_speech_aliases(text)
+  if normalized_language != 'Japanese':
+    return text
 
   # Qwen3 in Japanese mode drifts toward Mandarin pronunciation when a
   # sentence opens with halfwidth tokens before any kana/kanji appears.
@@ -160,14 +199,20 @@ def build_qwen3_instruction(style: str, *, language: str) -> str:
       'Avoid exaggerated emotion and keep the message easy to understand.'
     )
 
-  if normalized == 'soft':
+  if normalized_language == 'Japanese' and normalized == 'soft':
     return (
       '日本語で、やさしく穏やかな口調で、明瞭に読み上げてください。'
       '暗く沈んだ感じや眠そうな話し方は避け、落ち着いて安定したトーンを保ってください。'
     )
-  if normalized == 'narration':
+  if normalized_language == 'Japanese' and normalized == 'narration':
     return '日本語で、説明音声のように、明瞭で聞き取りやすく、一定のテンポで読み上げてください。'
-  return '日本語で、明瞭で安定した口調で、感情を誇張せず自然に読み上げてください。'
+  if normalized_language == 'Japanese':
+    return '日本語で、明瞭で安定した口調で、感情を誇張せず自然に読み上げてください。'
+  if normalized == 'soft':
+    return 'Use a gentle, calm, approachable voice with clear articulation in the text language.'
+  if normalized == 'narration':
+    return 'Use a clear explanatory narration with a steady pace in the text language.'
+  return 'Use a clear, stable, natural voice in the text language.'
 
 
 def _apply_japanese_leadin_filler(text: str, *, language: str) -> str:

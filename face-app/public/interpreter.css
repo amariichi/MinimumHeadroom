@@ -1,0 +1,677 @@
+:root {
+  color-scheme: dark;
+  --ink: #f1f5ef;
+  --muted: #8f9b94;
+  --dim: #5f6a64;
+  --panel: #171d1a;
+  --panel-strong: #1d2521;
+  --line: #303a34;
+  --accent: #b9f36b;
+  --accent-ink: #10150f;
+  --danger: #ff8c7c;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: #101412;
+  color: var(--ink);
+}
+
+body {
+  min-height: 100svh;
+  overflow-x: hidden;
+}
+
+button {
+  font: inherit;
+}
+
+.interpreter-shell {
+  width: min(100%, 46rem);
+  min-height: 100svh;
+  margin: 0 auto;
+  padding:
+    calc(1.25rem + var(--safe-top))
+    calc(1rem + var(--safe-right))
+    calc(1rem + var(--safe-bottom))
+    calc(1rem + var(--safe-left));
+  display: grid;
+  grid-template-rows: auto auto auto minmax(15rem, 1fr) auto;
+  gap: 0.875rem;
+}
+
+.instrument-header,
+.conversation-heading-row,
+.pair-readout,
+.turn-meta,
+.route-strip {
+  display: flex;
+  align-items: center;
+}
+
+.instrument-header {
+  justify-content: space-between;
+  min-height: 3.75rem;
+}
+
+.eyebrow,
+.section-label,
+.turn-meta,
+.language-role,
+.route-strip,
+.connection-block {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.eyebrow {
+  color: var(--accent);
+}
+
+h1 {
+  margin: 0.18rem 0 0;
+  font-size: clamp(1.7rem, 8vw, 2.45rem);
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+
+.connection-block {
+  gap: 0.45rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.connection-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.connection-dot.is-online {
+  background: var(--accent);
+}
+
+.connection-dot.is-error {
+  background: var(--danger);
+}
+
+.route-strip {
+  gap: 0.45rem;
+  min-height: 2.15rem;
+  padding: 0 0.75rem;
+  border-left: 2px solid var(--accent);
+  background: var(--panel);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.route-strip > span {
+  flex: 0 1 auto;
+}
+
+#provider-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.volume-trigger {
+  min-width: 3.65rem;
+  min-height: 2rem;
+  margin-left: auto;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--line));
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  background: #111712;
+  color: var(--accent);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.volume-trigger[hidden] {
+  display: none;
+}
+
+.volume-trigger svg {
+  width: 1rem;
+  height: 1rem;
+  overflow: visible;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.volume-trigger:active {
+  transform: translateY(1px);
+}
+
+.pair-panel,
+.conversation-panel {
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.pair-panel {
+  padding: 0.9rem 1rem 1rem;
+}
+
+.section-label {
+  color: var(--dim);
+}
+
+.pair-readout {
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-top: 0.72rem;
+}
+
+.pair-trigger {
+  position: relative;
+  width: 100%;
+  padding: 0 1.35rem 0 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pair-trigger:disabled {
+  cursor: default;
+}
+
+.pair-chevron {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.language-value {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.language-value-right {
+  text-align: right;
+}
+
+.language-role {
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+
+.language-value strong {
+  overflow: hidden;
+  font-size: clamp(1.25rem, 6vw, 1.8rem);
+  font-weight: 570;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-direction {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 1.45rem;
+}
+
+.conversation-panel {
+  min-height: 15rem;
+  padding: 0.95rem 1rem 1.1rem;
+  display: grid;
+  grid-template-rows: auto minmax(4.8rem, auto) 1px minmax(5.4rem, auto);
+  gap: 0.85rem;
+}
+
+.conversation-heading-row {
+  justify-content: space-between;
+}
+
+.text-button,
+.replay-button {
+  min-height: 2.75rem;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+  cursor: pointer;
+}
+
+.text-button {
+  padding: 0 0.25rem;
+  font-size: 0.78rem;
+}
+
+.turn-block {
+  min-width: 0;
+}
+
+.turn-meta {
+  justify-content: space-between;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+
+.turn-text {
+  margin: 0.55rem 0 0;
+  overflow-wrap: anywhere;
+  font-size: clamp(1.15rem, 5vw, 1.55rem);
+  line-height: 1.38;
+  letter-spacing: -0.018em;
+}
+
+.translation-block .turn-text {
+  color: var(--accent);
+}
+
+.turn-text.muted {
+  color: var(--dim);
+}
+
+.translation-rule {
+  width: 100%;
+  background: var(--line);
+}
+
+.control-dock {
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
+  padding-top: 0.15rem;
+}
+
+.status-line {
+  min-height: 1.3rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.status-line.is-error {
+  color: var(--danger);
+}
+
+.talk-button {
+  width: min(100%, 22rem);
+  min-height: 4.35rem;
+  padding: 0.7rem 1.25rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.talk-button-core {
+  width: 0.8rem;
+  height: 0.8rem;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+.talk-button.is-recording {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.talk-button:disabled {
+  border-color: var(--line);
+  background: var(--panel-strong);
+  color: var(--muted);
+  cursor: default;
+}
+
+.replay-button {
+  padding: 0 0.8rem;
+}
+
+.control-hint {
+  max-width: 25rem;
+  margin: 0;
+  color: var(--dim);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.pair-dialog {
+  width: min(calc(100% - 1rem), 30rem);
+  max-width: none;
+  max-height: calc(100svh - 1rem - var(--safe-top) - var(--safe-bottom));
+  margin: auto auto calc(0.5rem + var(--safe-bottom));
+  padding: 1rem;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: #18201c;
+  color: var(--ink);
+  box-shadow: 0 -1rem 4rem rgb(0 0 0 / 0.48);
+}
+
+.pair-dialog::backdrop {
+  background: rgb(4 7 5 / 0.72);
+}
+
+.pair-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pair-dialog h2 {
+  margin: 0.22rem 0 0;
+  font-size: 1.25rem;
+  font-weight: 620;
+  letter-spacing: -0.025em;
+}
+
+.pair-dialog-close,
+.pair-dialog-actions button {
+  min-height: 2.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--panel-strong);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.pair-dialog-close {
+  width: 2.75rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.pair-fields {
+  margin-top: 1.25rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.pair-fields label {
+  display: grid;
+  gap: 0.42rem;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.pair-fields select {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: #111712;
+  color: var(--ink);
+  font: 500 1rem/1.2 "Avenir Next", "Segoe UI", system-ui, sans-serif;
+}
+
+.pair-dialog-status {
+  min-height: 1.25rem;
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.pair-dialog-status.is-error {
+  color: var(--danger);
+}
+
+.pair-dialog-actions {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.pair-dialog-actions .pair-apply {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+.pair-dialog-actions button:disabled,
+.pair-fields select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.volume-dialog {
+  width: min(calc(100% - 1rem), 28rem);
+  max-width: none;
+  margin: auto auto calc(0.5rem + var(--safe-bottom));
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background:
+    linear-gradient(145deg, rgb(34 45 39 / 0.98), rgb(18 24 21 / 0.99));
+  color: var(--ink);
+  box-shadow: 0 -1rem 4rem rgb(0 0 0 / 0.48);
+}
+
+.volume-dialog::backdrop {
+  background: rgb(4 7 5 / 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.volume-dialog[open] {
+  animation: volume-sheet-in 150ms ease-out;
+}
+
+.volume-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.volume-dialog h2 {
+  margin: 0.22rem 0 0;
+  font-size: 1.25rem;
+  font-weight: 620;
+  letter-spacing: -0.025em;
+}
+
+.volume-close,
+.volume-step,
+.volume-presets button {
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.volume-close {
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.volume-readout {
+  min-height: 4.1rem;
+  margin-top: 0.35rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.volume-readout strong {
+  color: var(--accent);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 3rem;
+  font-weight: 620;
+  letter-spacing: -0.08em;
+  line-height: 1;
+}
+
+.volume-readout span {
+  color: var(--dim);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.volume-adjust-row {
+  display: grid;
+  grid-template-columns: 3.1rem minmax(0, 1fr) 3.1rem;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.volume-step {
+  min-height: 3.1rem;
+  border-radius: 0.75rem;
+  font-size: 1.4rem;
+}
+
+#volume-slider {
+  width: 100%;
+  min-height: 2.75rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.volume-presets {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.volume-presets button {
+  min-height: 2.9rem;
+  padding: 0.45rem 0.35rem;
+  border-radius: 0.7rem;
+  font-size: 0.78rem;
+}
+
+.volume-step:active,
+.volume-presets button:active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.volume-warning,
+.volume-status {
+  margin: 0.75rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.volume-warning {
+  color: var(--danger);
+}
+
+.volume-status {
+  min-height: 1rem;
+  color: var(--muted);
+}
+
+.volume-status.is-error {
+  color: var(--danger);
+}
+
+@keyframes volume-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.65rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+button:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+@media (min-width: 42rem) {
+  .interpreter-shell {
+    padding-top: calc(2rem + var(--safe-top));
+    gap: 1rem;
+  }
+
+  .pair-panel,
+  .conversation-panel {
+    padding-left: 1.35rem;
+    padding-right: 1.35rem;
+  }
+}
+
+@media (max-height: 700px) {
+  .interpreter-shell {
+    gap: 0.55rem;
+    padding-top: calc(0.7rem + var(--safe-top));
+  }
+
+  .conversation-panel {
+    min-height: 12rem;
+    gap: 0.55rem;
+  }
+
+  .talk-button {
+    min-height: 3.65rem;
+  }
+
+  .control-hint {
+    display: none;
+  }
+}

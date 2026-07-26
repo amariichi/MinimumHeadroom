@@ -207,17 +207,25 @@ String HeadroomSetupPortal::renderPage(const String& message) {
   html += F("<input name='vad_rms' type='number' min='0' max='1' step='0.001' value='");
   html += String(data.vadFirmwareRms, 4);
   html += F("'>");
-  html += F("<label>VAD speech tail frames (0-240; ~16 ≈ 1s; must exceed PC endSilence/64ms)</label>");
+  html += F("<label>VAD speech tail frames (0-240; 8 ≈ 0.5s; carries speech decay)</label>");
   html += F("<input name='vad_tail' type='number' min='0' max='240' step='1' value='");
   html += String(data.vadSpeechTailFrames);
   html += F("'>");
+  html += F("<label>Post-playback VAD cooldown (200-5000 ms; 1200 is conservative)</label>");
+  html += F("<input name='vad_playback_cooldown_ms' type='number' min='200' max='5000' step='1' value='");
+  html += String(data.vadPlaybackCooldownMs);
+  html += F("'>");
+  html += F("<label>Speaker volume (0-200; faced indoor 112, outdoor starting point 160)</label>");
+  html += F("<input name='speaker_volume' type='number' min='0' max='200' step='1' value='");
+  html += String(data.speakerVolume);
+  html += F("'>");
   html += F("<label>VAD audio encoding</label><select name='vad_enc'>");
-  html += F("<option value='pcm16'");
-  html += selectedIf(data.vadEncoding == "pcm16");
-  html += F(">pcm16 (raw 16-bit, ~160 MB/h)</option>");
   html += F("<option value='ima_adpcm'");
   html += selectedIf(data.vadEncoding == "ima_adpcm");
-  html += F(">ima_adpcm (4:1 lossy, ~40 MB/h)</option>");
+  html += F(">ima_adpcm (default, 4:1 lossy, ~40 MB/h)</option>");
+  html += F("<option value='pcm16'");
+  html += selectedIf(data.vadEncoding == "pcm16");
+  html += F(">pcm16 (compatibility, raw 16-bit, ~160 MB/h)</option>");
   html += F("</select>");
   html += F("<div class='row'><div><label>Max base64 TTS seconds</label><input name='max_b64_sec' type='number' min='1' max='15' value='");
   html += String(data.maxBase64TtsSeconds);
@@ -289,6 +297,10 @@ HeadroomSettingsData HeadroomSetupPortal::settingsFromRequest() {
   } else if (next.vadSpeechTailFrames > 240) {
     next.vadSpeechTailFrames = 240;
   }
+  next.vadPlaybackCooldownMs = HeadroomSettings::normalizeVadPlaybackCooldownMs(
+      requestInt(server_, "vad_playback_cooldown_ms", next.vadPlaybackCooldownMs));
+  next.speakerVolume = HeadroomSettings::normalizeSpeakerVolume(
+      requestInt(server_, "speaker_volume", next.speakerVolume));
   next.maxBase64TtsSeconds = requestInt(server_, "max_b64_sec", next.maxBase64TtsSeconds);
   next.maxHttpTtsBytes = requestInt(server_, "max_http_b", next.maxHttpTtsBytes);
   next.faceRotationDegrees = HeadroomSettings::normalizeRotation(requestInt(server_, "rotation", next.faceRotationDegrees));

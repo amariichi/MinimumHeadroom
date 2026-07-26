@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "supertonic-multilingual-v1",
+  "description": "Deterministic clean synthetic baseline for interpreter ASR, direction, and latency comparisons. It is not a human-speech or noisy-room accuracy corpus.",
+  "generator": {
+    "engine": "supertonic-3-onnx",
+    "revision": "724fb5abbf5502583fb520898d45929e62f02c0b",
+    "voice": "M1",
+    "steps": 8,
+    "speed": 1.05,
+    "intraOpThreads": 10,
+    "interOpThreads": 1,
+    "outputSampleRate": 16000
+  },
+  "requiredBaselineLanguages": [
+    "ja",
+    "en",
+    "es",
+    "fr",
+    "de",
+    "ko"
+  ],
+  "cases": [
+    {
+      "id": "ja-station",
+      "category": "baseline",
+      "language": "ja",
+      "text": "おはようございます。駅はどこですか？",
+      "expectedTranscript": "おはようございます。駅はどこですか？",
+      "expectedContentText": "おはようございます。駅はどこですか？",
+      "expectedSource": "ja",
+      "expectedPipelineTarget": "en",
+      "expectedTarget": "en",
+      "referenceTranslation": "Good morning. Where is the train station?"
+    },
+    {
+      "id": "en-station",
+      "category": "baseline",
+      "language": "en",
+      "text": "Good morning. Where is the train station?",
+      "expectedTranscript": "Good morning. Where is the train station?",
+      "expectedContentText": "Good morning. Where is the train station?",
+      "expectedSource": "en",
+      "expectedPipelineTarget": null,
+      "expectedTarget": "ja",
+      "referenceTranslation": "おはようございます。駅はどこですか？"
+    },
+    {
+      "id": "es-station",
+      "category": "baseline",
+      "language": "es",
+      "text": "Buenos días. ¿Dónde está la estación de tren?",
+      "expectedTranscript": "Buenos días. ¿Dónde está la estación de tren?",
+      "expectedContentText": "Buenos días. ¿Dónde está la estación de tren?",
+      "expectedSource": "es",
+      "expectedPipelineTarget": "en",
+      "expectedTarget": "en",
+      "referenceTranslation": "Good morning. Where is the train station?"
+    },
+    {
+      "id": "fr-station",
+      "category": "baseline",
+      "language": "fr",
+      "text": "Bonjour. Où se trouve la gare ?",
+      "expectedTranscript": "Bonjour. Où se trouve la gare ?",
+      "expectedContentText": "Bonjour. Où se trouve la gare ?",
+      "expectedSource": "fr",
+      "expectedPipelineTarget": "en",
+      "expectedTarget": "en",
+      "referenceTranslation": "Good morning. Where is the train station?"
+    },
+    {
+      "id": "de-station",
+      "category": "baseline",
+      "language": "de",
+      "text": "Guten Morgen. Wo ist der Bahnhof?",
+      "expectedTranscript": "Guten Morgen. Wo ist der Bahnhof?",
+      "expectedContentText": "Guten Morgen. Wo ist der Bahnhof?",
+      "expectedSource": "de",
+      "expectedPipelineTarget": "en",
+      "expectedTarget": "en",
+      "referenceTranslation": "Good morning. Where is the train station?"
+    },
+    {
+      "id": "ko-station",
+      "category": "baseline",
+      "language": "ko",
+      "text": "안녕하세요. 기차역은 어디에 있나요?",
+      "expectedTranscript": "안녕하세요. 기차역은 어디에 있나요?",
+      "expectedContentText": "안녕하세요. 기차역은 어디에 있나요?",
+      "expectedSource": "ko",
+      "expectedPipelineTarget": "en",
+      "expectedTarget": "en",
+      "referenceTranslation": "Good morning. Where is the train station?"
+    },
+    {
+      "id": "es-explicit-ja",
+      "category": "explicit-target",
+      "language": "es",
+      "text": "Traduce al japonés: Buenos días. ¿Dónde está la estación de tren?",
+      "expectedTranscript": "Traduce al japonés: Buenos días. ¿Dónde está la estación de tren?",
+      "expectedContentText": "Buenos días. ¿Dónde está la estación de tren?",
+      "expectedSource": "es",
+      "expectedPipelineTarget": "ja",
+      "expectedTarget": "ja",
+      "referenceTranslation": "おはようございます。駅はどこですか？"
+    },
+    {
+      "id": "ja-explicit-es",
+      "category": "explicit-target",
+      "language": "ja",
+      "text": "スペイン語にして。おはようございます。駅はどこですか？",
+      "expectedTranscript": "スペイン語にして。おはようございます。駅はどこですか？",
+      "expectedContentText": "おはようございます。駅はどこですか？",
+      "expectedSource": "ja",
+      "expectedPipelineTarget": "es",
+      "expectedTarget": "es",
+      "referenceTranslation": "Buenos días. ¿Dónde está la estación de tren?"
+    }
+  ]
+}

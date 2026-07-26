@@ -33,8 +33,9 @@ private:
   String asrLanguage_;
   bool continuousVadEnabled_ = false;
   float vadFirmwareRms_ = 0.025f;
-  String vadEncoding_ = "pcm16";
+  String vadEncoding_ = "ima_adpcm";
   int vadSpeechTailFrames_ = 16;
+  int vadPlaybackCooldownMs_ = 1200;
   bool active_ = false;
   size_t maxPayloadBytes_ = 720000;
   uint32_t lastPayloadMs_ = 0;
@@ -51,6 +52,7 @@ private:
   void handlePayload();
   void handleAudioRaw();
   void handleAudio();
+  void handleVolume();
   void handleOptions();
   void handleNotFound();
   bool isAuthorized();

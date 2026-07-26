@@ -4,13 +4,15 @@ Local TTS worker for `minimum-headroom`. The face-app process spawns this
 worker as a child and talks to it over stdin/stdout using a newline-delimited
 JSON protocol; you do not run it manually in normal use.
 
-Two engines are available:
+Three engines are available:
 
 - **Kokoro ONNX (default).** English-first voice via `kokoro-onnx` + `misaki`.
   Japanese is handled with `pyopenjtalk` + `fugashi` and the bundled English
   Kokoro voices.
-- **Qwen3-TTS (optional).** Japanese-focused backend for higher-quality JA
-  speech; requires the Qwen TTS runtime to be installed separately.
+- **Supertonic 3 (optional).** Multilingual CPU backend via ONNX Runtime;
+  requires the dedicated Supertonic environment and model assets.
+- **Qwen3-TTS (optional).** Multilingual GPU backend; requires the Qwen TTS
+  runtime and model to be installed separately.
 
 ## Setup
 
@@ -49,7 +51,7 @@ useful for debugging — feed it lines that match the `ParsedCommand` shape in
 
 Common environment variables (see `src/tts_worker/` for the full set):
 
-- `MH_TTS_ENGINE` — `kokoro` (default) or `qwen3`.
+- `TTS_ENGINE` — `kokoro` (default), `supertonic`, or `qwen3`.
 - `MH_TTS_CHUNK_MAX_CHARS` — soft cap for synthesis chunk size. Defaults are
   safe for desktop browsers; lower values reduce per-chunk latency on
   bandwidth-constrained clients such as AtomS3R.
@@ -61,11 +63,12 @@ Common environment variables (see `src/tts_worker/` for the full set):
 
 Off by default. When enabled, the worker inspects each freshly synthesized
 waveform and, if it looks noise-like (broadband hiss, heavy clipping, or
-NaN/inf samples), saves a forensic WAV plus a JSON sidecar (input text,
-prepared text, and the metrics) to a capture directory. This is **capture
-only** — it never changes what is played or sent to the browser, is wrapped so
-a capture failure can never break TTS, and is bounded by a per-process budget.
-Use it to catch rare, non-reproducible "noise-filled walkie-talkie" utterances.
+NaN/inf samples), saves a forensic WAV plus a metrics JSON sidecar to a
+capture directory. This is **capture only** — it never changes what is played
+or sent to the browser, is wrapped so a capture failure can never break TTS,
+and is bounded by a per-process budget. Use it to catch rare,
+non-reproducible "noise-filled walkie-talkie" utterances. The WAV contains
+speech and must be treated as sensitive.
 
 - `MH_TTS_CAPTURE_ANOMALY` — `1`/`true` to enable (default off).
 - `MH_TTS_CAPTURE_DIR` — output directory (default
@@ -79,6 +82,10 @@ Use it to catch rare, non-reproducible "noise-filled walkie-talkie" utterances.
   trips the clipping trigger (default `0.2`).
 - `MH_TTS_CAPTURE_MAX` — per-process cap on the number of captures written
   (default `20`).
+- `MH_TTS_CAPTURE_INCLUDE_TEXT` — include input and prepared text in JSON
+  (default off; requires a separate explicit opt-in).
+- `MH_TTS_CAPTURE_INCLUDE_CONTEXT` — include request/session identifiers in
+  JSON and the utterance prefix in the filename (default off).
 
 From the operator stack, the simplest way to turn it on is to prefix the
 launcher: `MH_TTS_CAPTURE_ANOMALY=1 ./scripts/run-operator-once.sh ...` (also

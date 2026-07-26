@@ -159,8 +159,9 @@ http://192.168.4.1/
 ```
 
 The setup page saves Wi-Fi, face app URLs, auth token, device id, display
-priority agent id, input target agent id, ASR language, continuous VAD mode, face rotation, placement
-pose, and upper-side orientation to ESP32 NVS/Preferences.
+priority agent id, input target agent id, ASR language, continuous VAD mode and
+tuning, speaker master volume, face rotation, placement pose, and upper-side
+orientation to ESP32 NVS/Preferences.
 
 ## Multiple Wi-Fi networks (up to 3)
 
@@ -188,8 +189,8 @@ The accelerometer-axis-to-panel mapping needs a one-time on-device
 calibration. The easiest way (no reboot, no button) is the serial query:
 
 ```bash
-node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 --dry-run   # (any RMHCFG? client works)
-# or send a raw `RMHCFG?\n` line; the STATE reply now includes:
+.venv-platformio/bin/pio device monitor --port /dev/ttyACM0 --baud 115200
+# type `RMHCFG?` and press Enter; the STATE reply includes:
 #   "imu_enabled":true,"imu_ax":..,"imu_ay":..,"imu_az":..
 ```
 
@@ -218,6 +219,12 @@ double-tapping while Wi-Fi is connected. When continuous VAD is already on, one
 short tap turns it off as a quick stop action; double-tap still toggles it;
 three taps still rotate the face after the tap window.
 
+After speaker playback physically ends, VAD waits before returning the shared
+half-duplex ES8311 codec to microphone capture. The fresh-device default is a
+conservative 1200 ms. The setup portal or
+`--vad-playback-cooldown-ms <200..5000>` can tune this per device; 200 ms is the
+supported minimum. The PTT release cooldown is separate and unchanged.
+
 (Internally the cue tone is fully drained before the
 shared ES8311 codec is switched to the mic, so the documented record/playback
 corruption hazard is not reintroduced.)
@@ -232,7 +239,7 @@ node scripts/atoms3r-provision.mjs \
   --wifi "HomeSSID:homepass" --wifi "CafeSSID:cafepass" \
   --http-base http://192.168.1.10:8765 \
   --ws-url ws://192.168.1.10:8765/ws \
-  --device-id atom-headroom-1 --reboot
+  --device-id atom-headroom-1 --speaker-volume 112 --reboot
 ```
 
 The auth token is resolved automatically from `--token`, else
@@ -243,11 +250,55 @@ the stack is up. The script needs no npm dependency (it uses `stty` + the
 device file). `--dry-run` prints the exact payload with secrets redacted and
 never opens the port; `--help` lists all flags.
 
+To reduce only the post-playback VAD delay on a known device:
+
+```bash
+node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
+  --vad-playback-cooldown-ms 200 --reboot
+```
+
+The script keeps one serial descriptor open, repeats only the harmless
+`RMHCFG?` ready probe, and sends the NVS-changing configuration line exactly
+once after `RMHCFG STATE` arrives. This avoids the USB-CDC startup race without
+repeating NVS writes or a reboot request. A software reboot can make
+`/dev/ttyACM0` disappear until physical reconnection even though the Atom has
+already resumed Wi-Fi operation.
+
 Under the hood the host and firmware exchange newline-terminated `RMHCFG`
 lines on the existing USB CDC serial. `RMHCFG <json>` writes settings to NVS
 (optional `"reboot":true`); `RMHCFG?` returns the current config with
 passwords/token redacted to lengths only. The firmware listens for these at
 any time in `loop()`, including while the setup portal is up.
+
+## Speaker output volume
+
+M5Unified exposes a wider native range, but this firmware caps speaker volume
+at 200 because the tested Atom/Echo Base produces strong radio-like noise above
+that level. The faced Atom keeps its established indoor default of 112; 160 is
+an outdoor starting point (approximately +6.2 dB on M5Unified's non-linear
+mixing curve). The M12 keeps its established default of 200.
+
+Change the current level immediately without changing NVS:
+
+```bash
+node scripts/atoms3r-volume.mjs --preset outdoor  # 160
+node scripts/atoms3r-volume.mjs --preset indoor   # 112
+node scripts/atoms3r-volume.mjs --volume 145
+node scripts/atoms3r-volume.mjs --preset mute     # 0
+```
+
+The authenticated `POST /api/headroom/volume` accepts `{"volume":0..200}` and
+changes RAM/runtime state only. `/health` reports `speaker_volume`; reboot
+restores the NVS baseline. Persist that baseline through the setup portal or:
+
+```bash
+node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
+  --speaker-volume 112 --reboot
+```
+
+The endpoint and health field require this updated firmware. The CLI detects an
+older image and asks for a firmware update instead of silently doing nothing.
+No permanent mobile-UI slider or broad speech command is installed.
 
 When Wi-Fi connects successfully, the firmware opens the configured WebSocket
 URL and mirrors these minimum-headroom payloads:
@@ -274,13 +325,26 @@ WebSocket is unavailable, it falls back to authenticated HTTP:
 <Face HTTP base>/api/operator/response
 ```
 
+These historical endpoint names are also the compatibility protocol for the
+separate interpreter server. That server correlates both stages, ignores the
+saved `lang` hint for inference, runs the ASR selected by its startup preset
+with automatic language detection, and feeds the prepared transcript into its
+normal translation/TTS turn. No firmware protocol change or reflash is required
+for an image whose PTT already works with the operator service.
+
 Recording and speaker playback are serialized because the Atomic Echo Base uses
 one ES8311 codec for both mic and speaker. Continuous VAD follows the same rule:
-the Atom streams 16 kHz PCM frames only while it is connected, VAD is enabled,
-PTT is idle, and TTS playback is not active. The PC-side bridge currently uses
-a deterministic RMS-energy VAD fallback to segment turns, then submits completed
-utterances through the same ASR worker and operator response path as PTT. Silero
-can replace that backend on the PC side later; it is not run on the AtomS3R.
+the Atom streams 16 kHz frames only while it is connected, VAD is enabled, PTT
+is idle, and TTS playback is not active. Fresh settings use independent-block
+IMA ADPCM; PCM16 remains available and an existing NVS choice is preserved.
+The PC-side bridge decodes either format and can segment turns with RMS or a
+Silero worker; Silero is never run on the AtomS3R.
+
+For playback, the firmware accepts mono PCM16 WAV and standard Microsoft IMA
+ADPCM WAV. It advertises both as `playback_codecs` over WebSocket and `/health`,
+decodes a compressed chunk before playback, and deduplicates `audio_id` plus
+generation across direct-WebSocket and HTTP-ingress delivery. Browser/iOS
+playback is outside this firmware and stays PCM; no Opus support is implied.
 
 The first continuous-mic implementation builds successfully, but the exact
 record/playback behavior still needs validation on real AtomS3R + Atomic Echo
@@ -294,7 +358,8 @@ http://<atom-ip>/health
 
 It reports the configured face HTTP/WS URLs, ASR language, auth presence,
 whether the Atom-originated WebSocket is connected, and
-`continuous_vad_enabled`. The auth token value is not returned.
+`continuous_vad_enabled`, `vad_encoding`, and `playback_codecs`. The auth token
+value is not returned.
 
 If `MH_FACE_AUTH_TOKEN` is enabled on the PC, set the same token in the setup
 page. The firmware appends it as `auth_token` on the WebSocket URL for the
@@ -450,7 +515,7 @@ Atom ボタンを押すと、neutral / thinking / speaking / listening / permiss
 http://192.168.4.1/
 ```
 
-セットアップページでは Wi-Fi、face app の URL、認証トークン、デバイス ID、表示優先エージェント ID、入力ターゲットエージェント ID、ASR 言語、連続 VAD モード、顔の回転、設置姿勢、上方向の向きを ESP32 の NVS/Preferences に保存します。
+セットアップページでは Wi-Fi、face app の URL、認証トークン、デバイス ID、表示優先エージェント ID、入力ターゲットエージェント ID、ASR 言語、連続 VAD と調整値、speaker master volume、顔の回転、設置姿勢、上方向の向きを ESP32 の NVS/Preferences に保存します。
 
 ## 複数の Wi-Fi ネットワーク (最大 3 つ)
 
@@ -466,8 +531,8 @@ http://192.168.4.1/
 加速度センサ軸 → パネル軸のマッピングはデバイスごとに 1 回キャリブレーションが必要です。最も簡単な方法 (再起動・ボタン操作不要) はシリアルクエリです。
 
 ```bash
-node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 --dry-run   # (RMHCFG? を話せるクライアントなら何でも可)
-# あるいは生の `RMHCFG?\n` を送ると、STATE 応答に次が含まれます:
+.venv-platformio/bin/pio device monitor --port /dev/ttyACM0 --baud 115200
+# `RMHCFG?` と入力してEnterを押すと、STATE 応答に次が含まれます:
 #   "imu_enabled":true,"imu_ax":..,"imu_ay":..,"imu_az":..
 ```
 
@@ -478,6 +543,11 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 --dry-run   # (RMHCFG? �
 PTT (プッシュ・トゥ・トーク) の体感は従来どおりですが、押した瞬間ではなく **約 0.5 秒の長押しでアーム** されるよう変更されました。ボタンを押し続けると、録音がアームされた瞬間に短い「ピッ」というキューが鳴り、それから話します。このビープが「話してください」の合図なので、短いアーム遅延で発話の頭が切れる心配はありません。タップは PTT アーム時間より短いため、タップでマイクが開くことはなく、誤って 1 回だけタップしても Failed の顔が一瞬出ることはありません。
 
 連続ハンズフリー VAD はセットアップポータル、または Wi-Fi 接続中のダブルタップで有効化できます。連続 VAD がすでに ON のときは、1 回の短いタップで素早く OFF にできます。ダブルタップは引き続き ON/OFF、3 回タップはタップ判定窓の後も顔の回転です。
+
+スピーカーの実再生終了後、共有半二重ES8311 codecをmic captureへ戻す前にVAD cooldownを
+置きます。新規端末の安全側既定値は1200 msです。セットアップポータル、または
+`--vad-playback-cooldown-ms <200..5000>` で端末ごとに調整でき、対応下限は200 msです。
+PTT解放後のcooldownは別設定で、変更しません。
 
 (内部的には、共有 ES8311 コーデックをマイクに切り替える前にキュー音を完全に出し切るので、既知の録音/再生破損の危険は再発しません。)
 
@@ -490,12 +560,55 @@ node scripts/atoms3r-provision.mjs \
   --wifi "HomeSSID:homepass" --wifi "CafeSSID:cafepass" \
   --http-base http://192.168.1.10:8765 \
   --ws-url ws://192.168.1.10:8765/ws \
-  --device-id atom-headroom-1 --reboot
+  --device-id atom-headroom-1 --speaker-volume 112 --reboot
 ```
 
 認証トークンは `--token`、無ければ環境変数 `MH_FACE_AUTH_TOKEN`、それも無ければ共有 env ファイル `${MH_SHARED_ENV_FILE:-$HOME/.config/minimum-headroom.env}` から自動解決されます。これは稼働中の operator stack と同じソースなので、stack が立っていれば追加設定なしで動きます。スクリプトに npm 依存はありません (`stty` とデバイスファイルだけを使います)。`--dry-run` は実際のペイロードを (秘密はリダクトして) 表示するだけでポートを開きません。全フラグは `--help` で確認できます。
 
+既知の端末だけpost-playback VAD待ちを短くする例:
+
+```bash
+node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
+  --vad-playback-cooldown-ms 200 --reboot
+```
+
+スクリプトは一つのserial descriptorを開いたまま、副作用のない`RMHCFG?` ready probeだけを
+再送します。`RMHCFG STATE`を受けてから、NVSを変更する設定行を一度だけ送るため、
+USB CDC起動競合を吸収しながらNVS書き込みやreboot requestの重複を防ぎます。software
+reboot後はAtomのWi-Fi動作が復帰していても、physical reconnectまで`/dev/ttyACM0`が
+消える環境があります。
+
 内部的にはホストとファームウェアが USB CDC シリアル上で改行区切りの `RMHCFG` 行を交換します。`RMHCFG <json>` は設定を NVS に書き込み (任意の `"reboot":true` で再起動)、`RMHCFG?` は現在の設定をパスワード/トークンを長さのみにリダクトして返します。ファームウェアは `loop()` 中いつでも (セットアップポータル表示中も) これを受け付けます。
+
+## スピーカー出力音量
+
+M5Unified自体のnative rangeはさらに広いですが、実機のAtom/Echo Baseは200超で
+状態の悪いトランシーバーのような強いノイズが出るため、firmwareの音量上限を200に
+固定します。顔Atomは従来の屋内既定112を維持し、160を屋外の出発点
+（M5Unifiedの非線形mixing curve上で約+6.2 dB相当）とします。M12は従来の既定200を
+維持します。
+
+NVSを変えず、現在値だけを即時変更する例:
+
+```bash
+node scripts/atoms3r-volume.mjs --preset outdoor  # 160
+node scripts/atoms3r-volume.mjs --preset indoor   # 112
+node scripts/atoms3r-volume.mjs --volume 145
+node scripts/atoms3r-volume.mjs --preset mute     # 0
+```
+
+認証必須の`POST /api/headroom/volume`は`{"volume":0..200}`を受け、RAM/runtimeだけを変更します。
+`/health`は`speaker_volume`を返し、rebootするとNVS baselineへ戻ります。baselineは
+setup portalまたは次のcommandで保存します。
+
+```bash
+node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
+  --speaker-volume 112 --reboot
+```
+
+endpointとhealth fieldにはこの更新済みfirmwareが必要です。CLIは旧imageを検出すると、
+何も起きないまま終わらずfirmware更新を案内します。スマホUIの常設sliderや広い音声commandは
+追加していません。
 
 Wi-Fi に接続できると、ファームウェアは設定された WebSocket URL を開き、以下の minimum-headroom ペイロードをミラーリングします。
 
@@ -515,7 +628,15 @@ ASR が空でないテキストを返した場合、Atom は `source: "atom"`、
 <Face HTTP base>/api/operator/response
 ```
 
-Atomic Echo Base はマイクとスピーカーで 1 つの ES8311 コーデックを共有しているため、録音とスピーカー再生は直列化されます。連続 VAD も同じ制約に従い、Atom は接続済み・VAD 有効・PTT 待機中・TTS 再生なしの間だけ 16 kHz PCM フレームをストリームします。PC 側ブリッジは現時点では決定的な RMS エネルギー VAD フォールバックで発話区間を切り、完了した発話を PTT と同じ ASR worker と operator response 経路へ送ります。Silero は後で PC 側 backend として差し替える想定で、AtomS3R 上では動かしません。
+この従来endpoint名は、独立した通訳serverでも互換protocolとして使います。通訳serverは
+二段階を対応付け、保存済み`lang` hintを推論には使わず、起動presetで選択中のASRを
+自動言語判定で実行して、その準備済みtranscriptを通常の翻訳/TTS turnへ渡します。
+operator接続時にPTTが動いているimageなら、この対応のためのfirmware protocol変更や
+再書き込みは不要です。
+
+Atomic Echo Base はマイクとスピーカーで 1 つの ES8311 コーデックを共有しているため、録音とスピーカー再生は直列化されます。連続 VAD も同じ制約に従い、Atom は接続済み・VAD 有効・PTT 待機中・TTS 再生なしの間だけ 16 kHz frameを送ります。新規設定は独立block型IMA ADPCMを使い、PCM16も選択可能で、既存NVSの選択は保持します。PC側bridgeは両形式をdecodeし、RMSまたはSilero workerで発話区間を切ります。SileroをAtomS3R上で実行することはありません。
+
+再生はmono PCM16 WAVと標準Microsoft IMA ADPCM WAVに対応します。WebSocketと`/health`の`playback_codecs`で両方を通知し、圧縮chunk全体を再生前にdecodeします。direct WebSocketとHTTP ingressの両方から届いても、`audio_id`とgenerationで二重再生を防ぎます。browser/iOS再生はこのfirmwareの範囲外でPCMのままであり、Opus対応を意味しません。
 
 最初の連続マイク実装はビルド済みですが、録音/再生の実機挙動は AtomS3R + Atomic Echo Base での確認がまだ必要です。
 
@@ -525,7 +646,7 @@ Atomic Echo Base はマイクとスピーカーで 1 つの ES8311 コーデッ�
 http://<atom-ip>/health
 ```
 
-設定された face HTTP/WS URL、ASR 言語、認証の有無、Atom 発の WebSocket が接続済みか、`continuous_vad_enabled` を返します。認証トークン自体の値は返しません。
+設定された face HTTP/WS URL、ASR 言語、認証の有無、Atom 発の WebSocket が接続済みか、`continuous_vad_enabled`、`vad_encoding`、`playback_codecs`を返します。認証トークン自体の値は返しません。
 
 PC 側で `MH_FACE_AUTH_TOKEN` を有効にしている場合は、セットアップページにも同じトークンを設定してください。ファームウェアは同一 LAN を想定した初期実装として、これを WebSocket URL の `auth_token` クエリとして付与します。
 
