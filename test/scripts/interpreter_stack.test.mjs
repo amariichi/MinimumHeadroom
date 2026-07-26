@@ -221,11 +221,14 @@ test('interpreter stack refuses an occupied port before starting a model', () =>
   const fakeBin = mkdtempSync(path.join(tmpdir(), 'mh-interpreter-ss-'));
   try {
     const fakeSs = path.join(fakeBin, 'ss');
+    const fakeRg = path.join(fakeBin, 'rg');
     writeFileSync(
       fakeSs,
       '#!/usr/bin/env bash\nprintf "LISTEN 0 128 127.0.0.1:8765 0.0.0.0:*\\n"\n'
     );
+    writeFileSync(fakeRg, '#!/usr/bin/env bash\nexit 127\n');
     chmodSync(fakeSs, 0o755);
+    chmodSync(fakeRg, 0o755);
     const result = runScript(['--preset', 'light-cloud'], {
       INTERPRETER_HOST: '127.0.0.1',
       INTERPRETER_PORT: '8765',
@@ -290,6 +293,7 @@ test('one-shot interpreter launcher creates a visible shell and stack workspace'
       {
         PATH: `${fakeBin}:${process.env.PATH}`,
         HOME: testHome,
+        XDG_CONFIG_HOME: configDir,
         MH_ENV_FILE: '',
         MH_TEST_TMUX_LOG: tmuxLog,
         TMUX: ''

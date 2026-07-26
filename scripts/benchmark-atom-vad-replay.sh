@@ -107,7 +107,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if ((NEEDS_SILERO == 1)); then
-  if ss -ltnH 2>/dev/null | awk '{print $4}' | rg -q "[:.]${SILERO_PORT}$"; then
+  if ss -ltnH 2>/dev/null | awk -v port="$SILERO_PORT" '
+    $4 ~ ("[:.]" port "$") { listening = 1 }
+    END { exit(listening ? 0 : 1) }
+  '; then
     echo "[benchmark-atom-vad-replay] port ${SILERO_PORT} is already listening" >&2
     exit 2
   fi

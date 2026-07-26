@@ -224,7 +224,10 @@ command -v ss >/dev/null 2>&1 || {
 
 port_is_listening() {
   local port="$1"
-  ss -ltnH 2>/dev/null | awk '{print $4}' | rg -q "[:.]${port}$"
+  ss -ltnH 2>/dev/null | awk -v port="$port" '
+    $4 ~ ("[:.]" port "$") { listening = 1 }
+    END { exit(listening ? 0 : 1) }
+  '
 }
 
 declare -a REQUIRED_PORTS=("$INTERPRETER_PORT" "$SILERO_PORT" "$GEMMA_PORT")
@@ -270,7 +273,8 @@ cleanup() {
   if [[ -n "$STACK_PID" && -r "/proc/${STACK_PID}/stat" ]]; then
     current_ticks="$(awk '{print $22}' "/proc/${STACK_PID}/stat" 2>/dev/null || true)"
     if [[ "$current_ticks" == "$STACK_START_TICKS" ]] \
-      && tr '\0' ' ' <"/proc/${STACK_PID}/cmdline" | rg -q 'run-interpreter-stack\.sh'; then
+      && tr '\0' ' ' <"/proc/${STACK_PID}/cmdline" \
+        | grep -E 'run-interpreter-stack\.sh' >/dev/null; then
       kill "$STACK_PID" >/dev/null 2>&1 || true
       for _ in {1..50}; do
         if ! kill -0 "$STACK_PID" 2>/dev/null; then

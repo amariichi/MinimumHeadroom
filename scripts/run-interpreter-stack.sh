@@ -205,7 +205,10 @@ port_is_listening() {
   if ! command -v ss >/dev/null 2>&1; then
     return 1
   fi
-  ss -ltnH 2>/dev/null | awk '{print $4}' | rg -q "[:.]${port}$"
+  ss -ltnH 2>/dev/null | awk -v port="$port" '
+    $4 ~ ("[:.]" port "$") { listening = 1 }
+    END { exit(listening ? 0 : 1) }
+  '
 }
 
 declare -a REQUIRED_PORTS=("$INTERPRETER_PORT" "$SILERO_PORT" "$GEMMA_PORT")

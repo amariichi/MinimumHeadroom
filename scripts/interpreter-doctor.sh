@@ -173,7 +173,11 @@ PY
 check_port() {
   local port="$1"
   local label="$2"
-  if command -v ss >/dev/null 2>&1 && ss -ltnH 2>/dev/null | awk '{print $4}' | rg -q "[:.]${port}$"; then
+  if command -v ss >/dev/null 2>&1 \
+    && ss -ltnH 2>/dev/null | awk -v port="$port" '
+      $4 ~ ("[:.]" port "$") { listening = 1 }
+      END { exit(listening ? 0 : 1) }
+    '; then
     warn "${label} port ${port} is already listening; no process will be killed"
   else
     ok "${label} port ${port} is available"
@@ -187,7 +191,7 @@ check_browser_mp3_encoder() {
   fi
   local encoder_list
   encoder_list="$("$FFMPEG_COMMAND" -hide_banner -encoders 2>/dev/null || true)"
-  if rg -q '^[[:space:]]*A[^[:space:]]*[[:space:]]+libmp3lame[[:space:]]' <<<"$encoder_list"; then
+  if grep -Eq '^[[:space:]]*A[^[:space:]]*[[:space:]]+libmp3lame[[:space:]]' <<<"$encoder_list"; then
     ok "browser TTS MP3 encoder: ${FFMPEG_COMMAND} libmp3lame 128 kbit/s"
   else
     warn "browser TTS MP3 encoder lacks libmp3lame; runtime will fall back to PCM16"
@@ -311,7 +315,8 @@ if [[ "$TTS_OWNER" == "supertonic" ]]; then
     version="$(package_version "$SUPERTONIC_VENV/bin/python" supertonic || true)"
     [[ "$version" == "1.3.1" ]] && ok "supertonic package=1.3.1" || fail "supertonic package version is ${version:-unavailable}, expected 1.3.1"
   fi
-  if [[ -d "$SUPERTONIC_CACHE" ]] && find "$SUPERTONIC_CACHE" -type f -print -quit 2>/dev/null | rg -q .; then
+  if [[ -d "$SUPERTONIC_CACHE" ]] \
+    && [[ -n "$(find "$SUPERTONIC_CACHE" -type f -print -quit 2>/dev/null)" ]]; then
     ok "Supertonic asset cache is populated"
   else
     fail "Supertonic asset cache is missing or empty: $SUPERTONIC_CACHE"
