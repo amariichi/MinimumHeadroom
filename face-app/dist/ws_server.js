@@ -46,6 +46,35 @@ function asNonEmptyString(value) {
   return trimmed === '' ? null : trimmed;
 }
 
+export function receivedPayloadLogMessage(payload) {
+  if (payload?.type !== 'atom_audio_frame') {
+    return JSON.stringify(payload);
+  }
+  const sequence = Number.isFinite(payload.seq)
+    ? Math.floor(payload.seq)
+    : null;
+  if (sequence !== null && sequence !== 1 && sequence % 50 !== 0) {
+    return null;
+  }
+  const audioBase64 = typeof payload.audio_base64 === 'string'
+    ? payload.audio_base64
+    : typeof payload.audioBase64 === 'string'
+      ? payload.audioBase64
+      : '';
+  return JSON.stringify({
+    v: payload.v,
+    type: payload.type,
+    session_id: payload.session_id,
+    device_id: payload.device_id,
+    sample_rate: payload.sample_rate,
+    sample_count: payload.sample_count,
+    encoding: payload.encoding,
+    generation: payload.generation,
+    seq: payload.seq,
+    audio_base64_chars: audioBase64.length
+  });
+}
+
 function timingSafeStringEqual(left, right) {
   const leftBuffer = Buffer.from(String(left ?? ''), 'utf8');
   const rightBuffer = Buffer.from(String(right ?? ''), 'utf8');
@@ -344,7 +373,13 @@ function safeSocketWrite(socket, frame) {
   }
 }
 
-async function serveStaticFile(request, response, staticDir) {
+async function serveStaticFile(
+  request,
+  response,
+  staticDir,
+  defaultDocument = 'index.html',
+  documentRoutes = {}
+) {
   if (!staticDir) {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     response.end('WebSocket endpoint only\n');
@@ -358,7 +393,17 @@ async function serveStaticFile(request, response, staticDir) {
     pathname = '/';
   }
 
-  const requestPath = pathname === '/' ? '/index.html' : pathname;
+  const safeDefaultDocument =
+    typeof defaultDocument === 'string'
+    && /^[A-Za-z0-9._-]+$/u.test(defaultDocument)
+      ? defaultDocument
+      : 'index.html';
+  const routedDocument = documentRoutes[pathname];
+  const requestPath = typeof routedDocument === 'string' && routedDocument.trim() !== ''
+    ? `/${routedDocument.replace(/^\/+/, '')}`
+    : pathname === '/'
+      ? `/${safeDefaultDocument}`
+      : pathname;
   if (requestPath === '/vendor/three.module.js') {
     const vendorPath = path.resolve(staticDir, '../../node_modules/three/build/three.module.js');
     try {
@@ -413,6 +458,7 @@ export async function startFaceWebSocketServer(options = {}) {
   const wsPath = normalizePath(options.path ?? '/ws');
   const onPayload = typeof options.onPayload === 'function' ? options.onPayload : () => {};
   const onHttpRequest = typeof options.onHttpRequest === 'function' ? options.onHttpRequest : null;
+  const onClientClose = typeof options.onClientClose === 'function' ? options.onClientClose : null;
   // Called once per broadcastPayload when a TTS audio payload is about to be
   // delivered to at least one Arduino/Atom socket. Used by the Atom VAD
   // bridge to reset any partial buffer from the prior turn before the device
@@ -420,6 +466,10 @@ export async function startFaceWebSocketServer(options = {}) {
   const onAtomTtsDispatch = typeof options.onAtomTtsDispatch === 'function' ? options.onAtomTtsDispatch : null;
   const relayPayloads = options.relayPayloads ?? true;
   const staticDir = options.staticDir ?? null;
+  const defaultDocument = options.defaultDocument ?? 'index.html';
+  const documentRoutes = options.documentRoutes && typeof options.documentRoutes === 'object'
+    ? options.documentRoutes
+    : {};
   const authToken = asNonEmptyString(options.authToken);
   const requireOriginCheck = options.requireOriginCheck === true;
   const sendAudioToArduino = options.sendAudioToArduino === true;
@@ -452,6 +502,10 @@ export async function startFaceWebSocketServer(options = {}) {
     return websocketProtocolSet(request.headers["sec-websocket-protocol"]).has("mh-audio-focus-v1");
   }
 
+  function isAtomBridgeUpgrade(request) {
+    return websocketProtocolSet(request.headers["sec-websocket-protocol"]).has("mh-atom-http-bridge-v1");
+  }
+
   function isArduinoSocket(socket) {
     return socket && socket.__mhArduinoClient === true;
   }
@@ -460,9 +514,59 @@ export async function startFaceWebSocketServer(options = {}) {
     return socket && socket.__mhAudioFocusObserver === true;
   }
 
+  function isAtomSocket(socket) {
+    return Boolean(
+      socket
+      && (
+        socket.__mhAtomClient === true
+        || socket.__mhAtomBridgeClient === true
+        || socket.__mhArduinoClient === true
+      )
+    );
+  }
+
+  function isDirectAtomSocket(socket) {
+    return Boolean(
+      socket
+      && socket.__mhAtomBridgeClient !== true
+      && (socket.__mhAtomClient === true || socket.__mhArduinoClient === true)
+    );
+  }
+
+  function isPreferredAtomAudioSocket(socket) {
+    const directConnected = [...sockets].some((peer) => isDirectAtomSocket(peer));
+    return directConnected
+      ? isDirectAtomSocket(socket)
+      : socket?.__mhAtomBridgeClient === true;
+  }
+
+  function isPreferredAtomReferenceSocket(socket) {
+    // A tts_audio_ref is an authenticated HTTP URL. The supervised HTTP
+    // bridge can fetch that URL and POST the resulting binary WAV to Atom;
+    // direct firmware WebSockets only understand inline audio payloads.
+    // Prefer the bridge for references when both transports are connected,
+    // while retaining the direct socket as the no-bridge fallback.
+    const bridgeConnected = [...sockets].some(
+      (peer) => peer?.__mhAtomBridgeClient === true
+    );
+    return bridgeConnected
+      ? socket?.__mhAtomBridgeClient === true
+      : isDirectAtomSocket(socket);
+  }
+
   function shouldSendPayloadToSocket(socket, payload) {
     if (isAudioFocusSocket(socket)) {
       return payload?.type === 'audio_focus';
+    }
+    if (payload?.type === 'tts_audio' || payload?.type === 'tts_audio_ref') {
+      if (payload.audio_endpoint === 'atom') {
+        return payload.type === 'tts_audio_ref'
+          ? isPreferredAtomReferenceSocket(socket)
+          : isPreferredAtomAudioSocket(socket);
+      }
+      if (payload.audio_endpoint === 'browser') {
+        return !isAtomSocket(socket);
+      }
     }
     if (!isArduinoSocket(socket)) {
       return true;
@@ -570,7 +674,8 @@ export async function startFaceWebSocketServer(options = {}) {
       if (
         onAtomTtsDispatch &&
         payload &&
-        (payload.type === 'tts_audio' || payload.type === 'tts_audio_ref')
+        (payload.type === 'tts_audio' || payload.type === 'tts_audio_ref') &&
+        payload.audio_endpoint !== 'browser'
       ) {
         try {
           onAtomTtsDispatch(payload);
@@ -621,7 +726,7 @@ export async function startFaceWebSocketServer(options = {}) {
       }
     }
 
-    await serveStaticFile(request, response, staticDir);
+    await serveStaticFile(request, response, staticDir, defaultDocument, documentRoutes);
   });
 
   server.on('upgrade', (request, socket) => {
@@ -662,6 +767,7 @@ export async function startFaceWebSocketServer(options = {}) {
     const acceptValue = websocketAcceptValue(key);
     const arduinoClient = isArduinoUpgrade(request);
     const audioFocusObserver = isAudioFocusUpgrade(request);
+    const atomBridgeClient = isAtomBridgeUpgrade(request);
     const responseHeaders = [
       'HTTP/1.1 101 Switching Protocols',
       'Upgrade: websocket',
@@ -670,6 +776,8 @@ export async function startFaceWebSocketServer(options = {}) {
     ];
     if (audioFocusObserver) {
       responseHeaders.push('Sec-WebSocket-Protocol: mh-audio-focus-v1');
+    } else if (atomBridgeClient) {
+      responseHeaders.push('Sec-WebSocket-Protocol: mh-atom-http-bridge-v1');
     } else if (arduinoClient) {
       responseHeaders.push('Sec-WebSocket-Protocol: arduino');
     }
@@ -678,6 +786,7 @@ export async function startFaceWebSocketServer(options = {}) {
 
     socket.__mhArduinoClient = arduinoClient;
     socket.__mhAudioFocusObserver = audioFocusObserver;
+    socket.__mhAtomBridgeClient = atomBridgeClient;
     sockets.add(socket);
     replayCachedPayloads(socket);
     const state = { buffer: Buffer.alloc(0) };
@@ -693,12 +802,26 @@ export async function startFaceWebSocketServer(options = {}) {
           }
           try {
             const payload = JSON.parse(text);
-            log.info(`[face-app] received ${JSON.stringify(payload)}`);
-            const payloadDirective = onPayload(payload);
+            const receivedLogMessage = receivedPayloadLogMessage(payload);
+            if (receivedLogMessage !== null) {
+              log.info(`[face-app] received ${receivedLogMessage}`);
+            }
+            if (payload?.type === 'atom_audio_frame') {
+              socket.__mhAtomClient = true;
+            }
+            const payloadDirective = onPayload(payload, {
+              socket,
+              isArduino: isArduinoSocket(socket),
+              isAtom: isAtomSocket(socket),
+              isAtomBridge: socket.__mhAtomBridgeClient === true
+            });
             const allowRelay =
-              !payloadDirective ||
-              typeof payloadDirective !== 'object' ||
-              payloadDirective.relay !== false;
+              payload?.type !== 'atom_endpoint_state'
+              && (
+                !payloadDirective
+                || typeof payloadDirective !== 'object'
+                || payloadDirective.relay !== false
+              );
 
             if (relayPayloads && allowRelay) {
               broadcastPayload(payload, socket);
@@ -717,6 +840,18 @@ export async function startFaceWebSocketServer(options = {}) {
 
     socket.on('close', () => {
       sockets.delete(socket);
+      if (onClientClose) {
+        try {
+          onClientClose({
+            socket,
+            isArduino: isArduinoSocket(socket),
+            isAtom: isAtomSocket(socket),
+            isAtomBridge: socket.__mhAtomBridgeClient === true
+          });
+        } catch (error) {
+          log.warn?.(`[face-app] client close callback failed: ${error.message}`);
+        }
+      }
     });
   });
 
@@ -746,6 +881,12 @@ export async function startFaceWebSocketServer(options = {}) {
     httpUrl,
     broadcast(payload) {
       return broadcastPayload(payload, null);
+    },
+    sendToSocket(socket, payload) {
+      if (!sockets.has(socket)) {
+        return false;
+      }
+      return sendPayloadToSocket(socket, payload);
     },
     async stop() {
       for (const socket of sockets) {

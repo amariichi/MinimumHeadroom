@@ -13,7 +13,8 @@
 // samples per frame the per-frame overhead is < 1%.
 //
 // Output buffer must be at least ima_adpcm_encoded_size(sampleCount)
-// bytes. sampleCount must be even (the algorithm packs pairs of nibbles).
+// bytes. The first sample is stored in the block header; the remaining
+// samples are packed as nibbles, with an odd final nibble padded in its byte.
 // Returns the number of bytes written.
 //
 // Algorithm reference: IMA Digital Audio Focus and Technical Working
@@ -27,15 +28,25 @@ extern "C" {
 
 // Required output buffer size in bytes for an input PCM buffer of
 // `sampleCount` 16-bit samples. Reserves 4 bytes for the block header
-// plus one nibble per sample (rounded up).
+// plus one nibble for each sample after the predictor.
 inline size_t ima_adpcm_encoded_size(size_t sampleCount) {
-  return 4 + (sampleCount + 1) / 2;
+  return sampleCount == 0 ? 0 : 4 + sampleCount / 2;
 }
 
 // Encode `sampleCount` 16-bit PCM samples into IMA ADPCM 4-bit nibbles.
 // `dst` must point at a buffer of at least ima_adpcm_encoded_size(sampleCount)
 // bytes. Returns the number of bytes actually written.
 size_t ima_adpcm_encode(const int16_t* src, size_t sampleCount, uint8_t* dst);
+
+// Maximum PCM samples represented by one independent IMA block, including
+// the predictor stored in its four-byte header.
+inline size_t ima_adpcm_decoded_sample_capacity(size_t encodedBytes) {
+  return encodedBytes < 4 ? 0 : 1 + ((encodedBytes - 4) * 2);
+}
+
+// Decode one independent IMA block. `maxSamples` may trim padding from a full
+// WAV block. Returns the number of samples written, or 0 for an invalid block.
+size_t ima_adpcm_decode(const uint8_t* src, size_t encodedBytes, int16_t* dst, size_t maxSamples);
 
 #ifdef __cplusplus
 }

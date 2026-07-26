@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#101412" />
+    <title>Interpreter</title>
+    <link rel="stylesheet" href="/interpreter.css" />
+    <link rel="stylesheet" href="/runtime_mode.css" />
+  </head>
+  <body>
+    <main class="interpreter-shell">
+      <header class="instrument-header">
+        <div>
+          <p class="eyebrow">LIVE INTERPRETER</p>
+          <h1>Conversation</h1>
+        </div>
+        <div class="connection-block" aria-live="polite">
+          <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
+          <span id="connection-label">Connecting</span>
+        </div>
+      </header>
+
+      <section class="route-strip" aria-label="Interpreter configuration">
+        <span id="audio-endpoint">Audio: Phone</span>
+        <span aria-hidden="true">·</span>
+        <button
+          class="runtime-provider-trigger runtime-mode-trigger"
+          id="runtime-mode-trigger"
+          type="button"
+          aria-haspopup="dialog"
+          aria-controls="runtime-mode-dialog"
+          aria-expanded="false"
+        ><span id="provider-label">Starting</span></button>
+        <button
+          class="volume-trigger"
+          id="volume-trigger"
+          type="button"
+          aria-controls="volume-dialog"
+          aria-expanded="false"
+          aria-label="Adjust Atom volume"
+          hidden
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 10v4h4l5 4V6L8 10H4Z"></path>
+            <path d="M16 9.2c1.1 1.5 1.1 4.1 0 5.6"></path>
+          </svg>
+          <span id="volume-trigger-value">112</span>
+        </button>
+      </section>
+
+      <section class="pair-panel" aria-labelledby="pair-heading">
+        <p class="section-label" id="pair-heading">LANGUAGE PAIR</p>
+        <button
+          class="pair-readout pair-trigger"
+          id="pair-trigger"
+          type="button"
+          aria-haspopup="dialog"
+          aria-controls="pair-dialog"
+          aria-expanded="false"
+          disabled
+        >
+          <span class="language-value">
+            <span class="language-role">ANCHOR</span>
+            <strong id="anchor-language">Waiting</strong>
+          </span>
+          <span class="pair-direction" aria-label="Two-way translation">⇄</span>
+          <span class="language-value language-value-right">
+            <span class="language-role">PARTNER</span>
+            <strong id="partner-language">English</strong>
+          </span>
+          <span class="pair-chevron" aria-hidden="true">⌄</span>
+        </button>
+      </section>
+
+      <section class="conversation-panel" aria-labelledby="conversation-heading">
+        <div class="conversation-heading-row">
+          <p class="section-label" id="conversation-heading">LATEST TURN</p>
+          <button class="text-button" id="reset-button" type="button">Reset pair</button>
+        </div>
+
+        <article class="turn-block">
+          <div class="turn-meta">
+            <span>HEARD</span>
+            <span id="source-language">—</span>
+          </div>
+          <p class="turn-text muted" id="transcript">Speak to begin.</p>
+        </article>
+
+        <div class="translation-rule" aria-hidden="true"></div>
+
+        <article class="turn-block translation-block">
+          <div class="turn-meta">
+            <span>TRANSLATION</span>
+            <span id="target-language">—</span>
+          </div>
+          <p class="turn-text muted" id="translation">The first target is English.</p>
+        </article>
+      </section>
+
+      <section class="control-dock" aria-label="Voice controls">
+        <p class="status-line" id="status-line" role="status" aria-live="polite">
+          Hold the button while speaking.
+        </p>
+        <button class="talk-button" id="talk-button" type="button">
+          <span class="talk-button-core" aria-hidden="true"></span>
+          <span id="talk-button-label">Hold to speak</span>
+        </button>
+        <button class="replay-button" id="replay-button" type="button" hidden>
+          Play last translation
+        </button>
+        <p class="control-hint" id="control-hint">
+          Say “translate to Spanish” at any time to change the pair.
+        </p>
+      </section>
+    </main>
+
+    <dialog class="pair-dialog" id="pair-dialog" aria-labelledby="pair-dialog-title">
+      <form id="pair-form">
+        <div class="pair-dialog-head">
+          <div>
+            <p class="section-label">MANUAL SELECTION</p>
+            <h2 id="pair-dialog-title">Choose language pair</h2>
+          </div>
+          <button
+            class="pair-dialog-close"
+            id="pair-dialog-close"
+            type="button"
+            aria-label="Close language pair"
+          >×</button>
+        </div>
+
+        <div class="pair-fields">
+          <label for="pair-anchor-select">
+            <span>Anchor language</span>
+            <select id="pair-anchor-select" name="anchorLanguage" required>
+              <option value="">Choose language</option>
+            </select>
+          </label>
+          <label for="pair-partner-select">
+            <span>Partner language</span>
+            <select id="pair-partner-select" name="partnerLanguage" required>
+              <option value="">Choose language</option>
+            </select>
+          </label>
+        </div>
+
+        <p class="pair-dialog-status" id="pair-dialog-status" role="status" aria-live="polite"></p>
+        <div class="pair-dialog-actions">
+          <button class="pair-cancel" id="pair-cancel" type="button">Cancel</button>
+          <button class="pair-apply" id="pair-apply" type="submit">Apply pair</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="volume-dialog" id="volume-dialog" aria-labelledby="volume-title">
+      <div class="volume-dialog-head">
+        <div>
+          <p class="section-label">ATOM OUTPUT</p>
+          <h2 id="volume-title">Speaker volume</h2>
+        </div>
+        <button
+          class="volume-close"
+          id="volume-close"
+          type="button"
+          aria-label="Close volume controls"
+        >×</button>
+      </div>
+
+      <div class="volume-readout" aria-live="polite">
+        <strong id="volume-value">112</strong>
+        <span>/ 200</span>
+      </div>
+
+      <div class="volume-adjust-row">
+        <button
+          class="volume-step"
+          type="button"
+          data-volume-delta="-8"
+          aria-label="Decrease Atom volume"
+        >−</button>
+        <input
+          id="volume-slider"
+          type="range"
+          min="0"
+          max="200"
+          step="1"
+          value="112"
+          aria-label="Atom speaker volume"
+        />
+        <button
+          class="volume-step"
+          type="button"
+          data-volume-delta="8"
+          aria-label="Increase Atom volume"
+        >+</button>
+      </div>
+
+      <div class="volume-presets" aria-label="Volume presets">
+        <button type="button" data-volume-preset="0">Mute</button>
+        <button type="button" data-volume-preset="112">Indoor</button>
+        <button type="button" data-volume-preset="160">Outdoor</button>
+      </div>
+
+      <p class="volume-warning" id="volume-warning" hidden>
+        200 is the maximum to avoid speaker noise.
+      </p>
+      <p class="volume-status" id="volume-status" role="status" aria-live="polite">
+        Changes are temporary and reset after Atom restarts.
+      </p>
+    </dialog>
+
+    <dialog
+      class="runtime-mode-dialog"
+      id="runtime-mode-dialog"
+      aria-labelledby="runtime-mode-title"
+    >
+      <form id="runtime-mode-form">
+        <div class="runtime-mode-head">
+          <div>
+            <p class="runtime-mode-kicker">RUNTIME</p>
+            <h2 id="runtime-mode-title">Switch mode</h2>
+          </div>
+          <button
+            class="runtime-mode-close"
+            id="runtime-mode-close"
+            type="button"
+            aria-label="Close mode switch"
+          >×</button>
+        </div>
+        <div class="runtime-mode-fields">
+          <label for="runtime-mode-select">
+            <span>Mode</span>
+            <select id="runtime-mode-select" required>
+              <option value="operator">Operator</option>
+              <option value="interpreter">Interpreter</option>
+            </select>
+          </label>
+          <label for="runtime-backend-select">
+            <span>Backend preset</span>
+            <select id="runtime-backend-select" required></select>
+          </label>
+        </div>
+        <p
+          class="runtime-mode-status"
+          id="runtime-mode-status"
+          role="status"
+          aria-live="polite"
+        ></p>
+        <div class="runtime-mode-actions">
+          <button id="runtime-mode-cancel" type="button">Cancel</button>
+          <button
+            class="runtime-mode-submit"
+            id="runtime-mode-submit"
+            type="submit"
+          >Switch</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/interpreter.js"></script>
+  </body>
+</html>

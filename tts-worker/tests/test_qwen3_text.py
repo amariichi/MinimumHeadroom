@@ -10,10 +10,26 @@ SRC_DIR = ROOT_DIR / 'tts-worker' / 'src'
 if str(SRC_DIR) not in sys.path:
   sys.path.insert(0, str(SRC_DIR))
 
-from tts_worker.qwen3_text import prepare_qwen3_text
+from tts_worker.qwen3_text import build_qwen3_instruction, prepare_qwen3_text
 
 
 class Qwen3TextPreparationTests(unittest.TestCase):
+  def test_auto_and_non_japanese_languages_keep_text_unmodified(self) -> None:
+    self.assertEqual(
+      prepare_qwen3_text('Bonjour le monde.', ascii_mode='preserve', language='Auto'),
+      'Bonjour le monde.',
+    )
+    self.assertEqual(
+      prepare_qwen3_text('Bonjour le monde.', ascii_mode='preserve', language='French'),
+      'Bonjour le monde.',
+    )
+
+  def test_auto_instruction_does_not_force_english_or_japanese(self) -> None:
+    instruction = build_qwen3_instruction('neutral', language='Auto')
+    self.assertIn('text language', instruction)
+    self.assertNotIn('Speak in English', instruction)
+    self.assertNotIn('日本語で', instruction)
+
   def test_english_profile_adds_hai_for_kanji_start(self) -> None:
     rendered = prepare_qwen3_text(
       '本日は状態を確認します。',

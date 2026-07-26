@@ -16,10 +16,46 @@ from .kokoro_engine import KokoroEngine, resolve_model_paths
 from .playback import PlaybackEngine, encode_wav_base64
 from .protocol import ParsedCommand, ProtocolWriter, parse_command
 from .qwen3_engine import Qwen3TtsEngine
+from .supertonic_engine import SupertonicEngine
 from .shared_text import normalize_shared_tts_text
 
 
 AUDIO_TARGETS = {'local', 'browser', 'both'}
+
+
+async def synthesize_engine_text(
+  engine: TtsEngine,
+  text: str,
+  *,
+  speaker: Optional[str],
+  language: Optional[str],
+) -> tuple[Any, int]:
+  if isinstance(engine, SupertonicEngine):
+    # onnxruntime 1.22 on this host can stall indefinitely when a
+    # Supertonic session created on Python's main thread is invoked from
+    # asyncio.to_thread. Keep this short CPU backend on the event-loop
+    # thread; other engines retain the existing background-thread path.
+    return engine.synthesize_text(
+      text,
+      voice_override=speaker,
+      language_override=language,
+    )
+  return await asyncio.to_thread(
+    engine.synthesize_text,
+    text,
+    voice_override=speaker,
+    language_override=language,
+  )
+
+
+async def encode_engine_wav_base64(
+  engine: TtsEngine,
+  audio: Any,
+  sample_rate: int,
+) -> str:
+  if isinstance(engine, SupertonicEngine):
+    return encode_wav_base64(audio, sample_rate)
+  return await asyncio.to_thread(encode_wav_base64, audio, sample_rate)
 
 
 def resolve_audio_target(raw: Optional[str]) -> str:
@@ -49,6 +85,7 @@ class SpeakRequest:
   utterance_id: str
   text: str
   speaker: Optional[str]
+  language: Optional[str]
   expires_at: int
   message_id: Optional[str]
   revision: Optional[int]
@@ -205,6 +242,8 @@ class WorkerRuntime:
 
     speaker_raw = raw.get('speaker')
     speaker = speaker_raw.strip() if isinstance(speaker_raw, str) and speaker_raw.strip() != '' else None
+    language_raw = raw.get('language')
+    language = language_raw.strip() if isinstance(language_raw, str) and language_raw.strip() != '' else None
 
     expires_at = raw.get('expires_at')
     if not isinstance(expires_at, int):
@@ -234,6 +273,7 @@ class WorkerRuntime:
       utterance_id=utterance_id,
       text=text.strip(),
       speaker=speaker,
+      language=language,
       expires_at=expires_at,
       message_id=message_id,
       revision=revision,
@@ -309,7 +349,7 @@ class WorkerRuntime:
 
     try:
       shared_text = normalize_shared_tts_text(request.text)
-      prepared_text = self.engine.prepare_text(shared_text)
+      prepared_text = self.engine.prepare_text(shared_text, language_override=request.language)
       if prepared_text.strip() == '':
         self.writer.event(
           phase='dropped',
@@ -326,7 +366,12 @@ class WorkerRuntime:
         )
         self._clear_current(generation)
         return
-      audio, sample_rate = await asyncio.to_thread(self.engine.synthesize_text, prepared_text, voice_override=request.speaker)
+      audio, sample_rate = await synthesize_engine_text(
+        self.engine,
+        prepared_text,
+        speaker=request.speaker,
+        language=request.language,
+      )
     except asyncio.CancelledError:
       self.playback.stop()
       self.writer.event(
@@ -427,7 +472,11 @@ class WorkerRuntime:
 
     if self.browser_audio_enabled:
       try:
-        audio_base64 = await asyncio.to_thread(encode_wav_base64, audio, sample_rate)
+        audio_base64 = await encode_engine_wav_base64(
+          self.engine,
+          audio,
+          sample_rate,
+        )
       except Exception as error:
         self.writer.event(
           phase='error',
@@ -586,7 +635,9 @@ def create_tts_engine() -> TtsEngine:
     return KokoroEngine(model_paths=model_paths, voice=resolve_kokoro_voice())
   if engine_name == 'qwen3':
     return Qwen3TtsEngine()
-  raise RuntimeError(f'unsupported TTS_ENGINE: {engine_name} (expected kokoro|qwen3)')
+  if engine_name == 'supertonic':
+    return SupertonicEngine()
+  raise RuntimeError(f'unsupported TTS_ENGINE: {engine_name} (expected kokoro|qwen3|supertonic)')
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

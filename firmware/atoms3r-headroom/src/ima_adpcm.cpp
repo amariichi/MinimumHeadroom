@@ -75,6 +75,18 @@ uint8_t encodeSample(int sample, int& predictor, int& stepIndex) {
   return code & 0x0f;
 }
 
+int16_t decodeSample(uint8_t code, int& predictor, int& stepIndex) {
+  const int step = kStepTable[stepIndex];
+  int delta = step >> 3;
+  if (code & 0x1) delta += step >> 2;
+  if (code & 0x2) delta += step >> 1;
+  if (code & 0x4) delta += step;
+  predictor += (code & 0x8) ? -delta : delta;
+  predictor = clampPredictor(predictor);
+  stepIndex = clampStepIndex(stepIndex + kIndexTable[code & 0x0f]);
+  return static_cast<int16_t>(predictor);
+}
+
 }  // namespace
 
 size_t ima_adpcm_encode(const int16_t* src, size_t sampleCount, uint8_t* dst) {
@@ -114,4 +126,27 @@ size_t ima_adpcm_encode(const int16_t* src, size_t sampleCount, uint8_t* dst) {
     dst[outIdx++] = pendingByte;
   }
   return outIdx;
+}
+
+size_t ima_adpcm_decode(const uint8_t* src, size_t encodedBytes, int16_t* dst, size_t maxSamples) {
+  if (!src || !dst || encodedBytes < 4 || maxSamples == 0) {
+    return 0;
+  }
+  int predictor = static_cast<int16_t>(
+      static_cast<uint16_t>(src[0]) | (static_cast<uint16_t>(src[1]) << 8));
+  int stepIndex = src[2];
+  if (stepIndex > 88 || src[3] != 0) {
+    return 0;
+  }
+
+  size_t written = 0;
+  dst[written++] = static_cast<int16_t>(predictor);
+  for (size_t index = 4; index < encodedBytes && written < maxSamples; ++index) {
+    const uint8_t packed = src[index];
+    dst[written++] = decodeSample(packed & 0x0f, predictor, stepIndex);
+    if (written < maxSamples) {
+      dst[written++] = decodeSample((packed >> 4) & 0x0f, predictor, stepIndex);
+    }
+  }
+  return written;
 }

@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { startFaceWebSocketServer } from '../../face-app/dist/ws_server.js';
+import {
+  receivedPayloadLogMessage,
+  startFaceWebSocketServer
+} from '../../face-app/dist/ws_server.js';
+
+const silentLog = {
+  info() {},
+  warn() {},
+  error() {}
+};
 
 function waitForOpen(socket, timeoutMs = 2000) {
   return new Promise((resolve, reject) => {
@@ -65,6 +76,35 @@ async function waitForCondition(predicate, timeoutMs = 2000) {
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+test('Atom frame logs omit audio and sample only stream checkpoints', () => {
+  const first = receivedPayloadLogMessage({
+    v: 1,
+    type: 'atom_audio_frame',
+    session_id: 'atom-log',
+    device_id: 'atom-one',
+    sample_rate: 16_000,
+    sample_count: 1024,
+    encoding: 'pcm16',
+    generation: 2,
+    seq: 1,
+    audio_base64: 'secret-audio-content'
+  });
+  assert.match(first, /"seq":1/);
+  assert.match(first, /"audio_base64_chars":20/);
+  assert.doesNotMatch(first, /secret-audio-content/);
+
+  assert.equal(receivedPayloadLogMessage({
+    type: 'atom_audio_frame',
+    seq: 2,
+    audio_base64: 'secret-audio-content'
+  }), null);
+  assert.match(receivedPayloadLogMessage({
+    type: 'atom_audio_frame',
+    seq: 50,
+    audio_base64: 'secret-audio-content'
+  }), /"seq":50/);
+});
 
 test('ws server serves static ui and relays payloads to display clients', async (t) => {
   const currentFile = fileURLToPath(import.meta.url);
@@ -414,4 +454,202 @@ test("ws server suppresses audio payloads to arduino clients by default", async 
   assert.equal(arduinoMessages.some((payload) => payload.type === "tts_audio"), false);
   assert.equal(arduinoMessages.some((payload) => payload.type === "media_state"), false);
   assert.equal(arduinoMessages.some((payload) => payload.type === "audio_focus"), false);
+});
+
+test("ws server routes endpoint-targeted TTS audio without browser/Atom duplication", async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    relayPayloads: true,
+    log: silentLog
+  });
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const browser = new WebSocket(server.url);
+  const atomBridge = new WebSocket(server.url, "mh-atom-http-bridge-v1");
+  t.after(() => {
+    try { browser.close(); } catch {}
+    try { atomBridge.close(); } catch {}
+  });
+  await Promise.all([waitForOpen(browser), waitForOpen(atomBridge)]);
+
+  const browserMessages = [];
+  const atomMessages = [];
+  browser.addEventListener("message", (event) => browserMessages.push(JSON.parse(event.data)));
+  atomBridge.addEventListener("message", (event) => atomMessages.push(JSON.parse(event.data)));
+
+  server.broadcast({
+    type: "tts_audio",
+    audio_endpoint: "atom",
+    audio_base64: "YQ=="
+  });
+  server.broadcast({
+    type: "tts_audio",
+    audio_endpoint: "browser",
+    audio_base64: "Yg=="
+  });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.equal(browserMessages.some((payload) => payload.audio_base64 === "YQ=="), false);
+  assert.equal(browserMessages.some((payload) => payload.audio_base64 === "Yg=="), true);
+  assert.equal(atomMessages.some((payload) => payload.audio_base64 === "YQ=="), true);
+  assert.equal(atomMessages.some((payload) => payload.audio_base64 === "Yg=="), false);
+});
+
+test("ws server prefers one direct Atom transport over the HTTP bridge", async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    relayPayloads: true,
+    log: silentLog
+  });
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const directAtom = new WebSocket(server.url, "arduino");
+  const atomBridge = new WebSocket(server.url, "mh-atom-http-bridge-v1");
+  t.after(() => {
+    try { directAtom.close(); } catch {}
+    try { atomBridge.close(); } catch {}
+  });
+  await Promise.all([waitForOpen(directAtom), waitForOpen(atomBridge)]);
+
+  const directMessages = [];
+  const bridgeMessages = [];
+  directAtom.addEventListener("message", (event) => directMessages.push(JSON.parse(event.data)));
+  atomBridge.addEventListener("message", (event) => bridgeMessages.push(JSON.parse(event.data)));
+
+  server.broadcast({
+    type: "tts_audio",
+    audio_endpoint: "atom",
+    audio_base64: "b25jZQ=="
+  });
+  await delay(25);
+
+  assert.equal(directMessages.some((payload) => payload.audio_base64 === "b25jZQ=="), true);
+  assert.equal(bridgeMessages.some((payload) => payload.audio_base64 === "b25jZQ=="), false);
+});
+
+test("ws server prefers the HTTP bridge for Atom audio references", async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    relayPayloads: true,
+    log: silentLog
+  });
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const directAtom = new WebSocket(server.url, "arduino");
+  const atomBridge = new WebSocket(server.url, "mh-atom-http-bridge-v1");
+  t.after(() => {
+    try { directAtom.close(); } catch {}
+    try { atomBridge.close(); } catch {}
+  });
+  await Promise.all([waitForOpen(directAtom), waitForOpen(atomBridge)]);
+
+  const directMessages = [];
+  const bridgeMessages = [];
+  directAtom.addEventListener("message", (event) => directMessages.push(JSON.parse(event.data)));
+  atomBridge.addEventListener("message", (event) => bridgeMessages.push(JSON.parse(event.data)));
+
+  server.broadcast({
+    type: "tts_audio_ref",
+    audio_endpoint: "atom",
+    audio_id: "reference-one",
+    url: "/api/tts/audio/reference-one.wav"
+  });
+  await delay(25);
+
+  assert.equal(directMessages.some((payload) => payload.audio_id === "reference-one"), false);
+  assert.equal(bridgeMessages.some((payload) => payload.audio_id === "reference-one"), true);
+});
+
+test("ws server can send a correlated control payload to one selected Atom socket", async (t) => {
+  let selectedSocket = null;
+  const server = await startFaceWebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    relayPayloads: true,
+    onPayload(payload, context) {
+      if (payload.type === "atom_endpoint_state") {
+        selectedSocket = context.socket;
+        return { relay: false };
+      }
+      return null;
+    },
+    log: silentLog
+  });
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const atomBridge = new WebSocket(server.url, "mh-atom-http-bridge-v1");
+  t.after(() => {
+    try { atomBridge.close(); } catch {}
+  });
+  await waitForOpen(atomBridge);
+  atomBridge.send(JSON.stringify({
+    type: "atom_endpoint_state",
+    connected: true
+  }));
+  await waitForCondition(() => selectedSocket !== null);
+
+  const received = waitForMessage(atomBridge);
+  assert.equal(server.sendToSocket(selectedSocket, {
+    type: "atom_volume_set",
+    request_id: "volume-one",
+    volume: 160
+  }), true);
+  assert.deepEqual(await received, {
+    type: "atom_volume_set",
+    request_id: "volume-one",
+    volume: 160
+  });
+  assert.equal(server.sendToSocket({}, { type: "ignored" }), false);
+});
+
+test("ws server serves a configured default document without changing the operator default", async (t) => {
+  const staticDir = await mkdtemp(path.join(tmpdir(), "mh-default-document-"));
+  await writeFile(path.join(staticDir, "index.html"), "operator");
+  await writeFile(path.join(staticDir, "interpreter.html"), "interpreter");
+  const server = await startFaceWebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    staticDir,
+    defaultDocument: "interpreter.html",
+    log: silentLog
+  });
+  t.after(async () => {
+    await server.stop();
+  });
+  const response = await fetch(server.httpUrl);
+  assert.equal(await response.text(), "interpreter");
+});
+
+test("ws server can expose a separate clean document route", async (t) => {
+  const staticDir = await mkdtemp(path.join(tmpdir(), "mh-document-route-"));
+  await writeFile(path.join(staticDir, "index.html"), "operator");
+  await writeFile(path.join(staticDir, "interpreter.html"), "interpreter");
+  const server = await startFaceWebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    staticDir,
+    documentRoutes: {
+      "/interpreter": "interpreter.html",
+      "/interpreter/": "interpreter.html"
+    },
+    log: silentLog
+  });
+  t.after(async () => {
+    await server.stop();
+  });
+
+  const response = await fetch(`${server.httpUrl}interpreter`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "interpreter");
 });

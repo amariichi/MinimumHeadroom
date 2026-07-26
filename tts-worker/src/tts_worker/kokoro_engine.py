@@ -84,13 +84,21 @@ class KokoroEngine:
       voices_path=str(self.model_paths.voices_path),
     )
 
-  def prepare_text(self, text: str) -> str:
+  def prepare_text(self, text: str, *, language_override: str | None = None) -> str:
+    del language_override
     return text
 
   def chunk_text(self, text: str) -> list[TextChunk]:
     return split_text_chunks(text)
 
-  def synthesize_text(self, text: str, *, voice_override: str | None = None) -> Tuple[np.ndarray, int]:
+  def synthesize_text(
+    self,
+    text: str,
+    *,
+    voice_override: str | None = None,
+    language_override: str | None = None,
+  ) -> Tuple[np.ndarray, int]:
+    del language_override
     chunks = self.chunk_text(text)
     return self.synthesize_chunks(chunks, voice_override=voice_override)
 

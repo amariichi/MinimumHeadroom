@@ -15,6 +15,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SHARED_ENV="${MH_SHARED_ENV_FILE:-$HOME/.config/minimum-headroom.env}"
 LOG="${ATOMS3R_BRIDGE_LOG:-/tmp/atoms3r-bridge.log}"
+WAIT_UNMANAGED_SECONDS="${MH_ATOMS3R_BRIDGE_WAIT_UNMANAGED_SECONDS:-0}"
+
+if [[ ! "$WAIT_UNMANAGED_SECONDS" =~ ^[0-9]+$ ]] \
+  || ((10#$WAIT_UNMANAGED_SECONDS > 60)); then
+  echo "[ensure-atoms3r-bridge] MH_ATOMS3R_BRIDGE_WAIT_UNMANAGED_SECONDS must be 0..60" >&2
+  exit 0
+fi
 
 if [[ "${MH_SKIP_ATOMS3R_BRIDGE:-0}" == "1" ]]; then
   echo "[ensure-atoms3r-bridge] skipped (MH_SKIP_ATOMS3R_BRIDGE=1)"
@@ -22,8 +29,22 @@ if [[ "${MH_SKIP_ATOMS3R_BRIDGE:-0}" == "1" ]]; then
 fi
 
 if pgrep -f 'atoms3r-http-bridge\.mjs' >/dev/null 2>&1; then
-  echo "[ensure-atoms3r-bridge] already running"
-  exit 0
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux set-option -t "$SESSION" @minimum_headroom_atom_bridge_owner operator
+    echo "[ensure-atoms3r-bridge] already running"
+    exit 0
+  fi
+  wait_steps=$((10#$WAIT_UNMANAGED_SECONDS * 5))
+  for ((step = 0; step < wait_steps; step += 1)); do
+    sleep 0.2
+    if ! pgrep -f 'atoms3r-http-bridge\.mjs' >/dev/null 2>&1; then
+      break
+    fi
+  done
+  if pgrep -f 'atoms3r-http-bridge\.mjs' >/dev/null 2>&1; then
+    echo "[ensure-atoms3r-bridge] bridge process is running outside the operator session" >&2
+    exit 0
+  fi
 fi
 
 if ! command -v tmux >/dev/null 2>&1; then
@@ -51,5 +72,6 @@ if ! tmux new-session -d -s "$SESSION" -c "$REPO_ROOT" "${tmux_env[@]}" \
   exit 0
 fi
 
+tmux set-option -t "$SESSION" @minimum_headroom_atom_bridge_owner operator
 echo "[ensure-atoms3r-bridge] started (tmux session '$SESSION', log: $LOG)"
 exit 0

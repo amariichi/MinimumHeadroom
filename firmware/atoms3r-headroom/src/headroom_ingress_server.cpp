@@ -1,5 +1,6 @@
 #include "headroom_ingress_server.h"
 
+#include <ArduinoJson.h>
 #include <WiFi.h>
 
 namespace {
@@ -28,7 +29,10 @@ String bearerToken(const String& authorization) {
 }
 
 size_t estimatePayloadLimit(const HeadroomSettingsData& settings) {
-  size_t decodedBytes = static_cast<size_t>(max(1, min(15, settings.maxBase64TtsSeconds))) * 24000 * 2 + 128;
+  // Supertonic currently emits 44.1 kHz PCM, and an older/forced-PCM sender
+  // must still fit through the binary ingress fallback. Budget at the maximum
+  // playback rate rather than the historical 24 kHz worker rate.
+  size_t decodedBytes = static_cast<size_t>(max(1, min(15, settings.maxBase64TtsSeconds))) * 48000 * 2 + 128;
   size_t jsonBytes = ((decodedBytes + 2) / 3) * 4 + 16384;
   return min(kMaximumPayloadBytes, max(kMinimumPayloadBytes, jsonBytes));
 }
@@ -83,15 +87,18 @@ void HeadroomIngressServer::begin(const HeadroomSettingsData& settings, Headroom
   vadFirmwareRms_ = settings.vadFirmwareRms;
   vadEncoding_ = settings.vadEncoding;
   vadSpeechTailFrames_ = settings.vadSpeechTailFrames;
+  vadPlaybackCooldownMs_ = settings.vadPlaybackCooldownMs;
   maxPayloadBytes_ = estimatePayloadLimit(settings);
 
-  const char* headerKeys[] = {"Authorization", "X-Headroom-Auth"};
-  server_.collectHeaders(headerKeys, 2);
+  const char* headerKeys[] = {"Authorization", "X-Headroom-Auth", "X-Audio-Id", "X-Generation"};
+  server_.collectHeaders(headerKeys, 4);
   server_.on("/health", HTTP_GET, [this]() { handleHealth(); });
   server_.on("/api/headroom/payload", HTTP_OPTIONS, [this]() { handleOptions(); });
   server_.on("/api/headroom/payload", HTTP_POST, [this]() { handlePayload(); });
   server_.on("/api/headroom/audio", HTTP_OPTIONS, [this]() { handleOptions(); });
   server_.on("/api/headroom/audio", HTTP_POST, [this]() { handleAudio(); }, [this]() { handleAudioRaw(); });
+  server_.on("/api/headroom/volume", HTTP_OPTIONS, [this]() { handleOptions(); });
+  server_.on("/api/headroom/volume", HTTP_POST, [this]() { handleVolume(); });
   server_.onNotFound([this]() { handleNotFound(); });
   server_.begin();
   active_ = true;
@@ -147,9 +154,13 @@ void HeadroomIngressServer::handleHealth() {
   body += String(vadFirmwareRms_, 4);
   body += F(",\"vad_speech_tail_frames\":");
   body += String(vadSpeechTailFrames_);
+  body += F(",\"vad_playback_cooldown_ms\":");
+  body += String(vadPlaybackCooldownMs_);
+  body += F(",\"speaker_volume\":");
+  body += audio_ ? String(audio_->speakerVolume()) : F("null");
   body += F(",\"vad_encoding\":\"");
   body += jsonEscape(vadEncoding_);
-  body += F("\"}");
+  body += F("\",\"playback_codecs\":[\"pcm16_wav\",\"ima_adpcm_wav\"]}");
   sendJson(200, body);
 }
 
@@ -268,6 +279,15 @@ void HeadroomIngressServer::handleAudio() {
     return;
   }
 
+  const String audioId = server_.header("X-Audio-Id");
+  const String generationHeader = server_.header("X-Generation");
+  const int generation = generationHeader.length() > 0 ? generationHeader.toInt() : -1;
+  if (audio_->isDuplicateAudio(audioId, generation)) {
+    releaseAudioRawBuffer();
+    sendJson(202, F("{\"ok\":true,\"duplicate\":true}"));
+    return;
+  }
+
   if (beforeAudioPlaybackCallback_) {
     beforeAudioPlaybackCallback_(beforeAudioPlaybackContext_);
   }
@@ -293,13 +313,53 @@ void HeadroomIngressServer::handleAudio() {
 
   faceState_->expression = HeadroomExpression::Speaking;
   faceState_->mouthOpen = max(faceState_->mouthOpen, 0.28f);
+  audio_->rememberAudio(audioId, generation);
   lastPayloadMs_ = millis();
   sendJson(202, F("{\"ok\":true}"));
 }
 
+void HeadroomIngressServer::handleVolume() {
+  if (!isAuthorized()) {
+    sendJson(401, F("{\"ok\":false,\"error\":\"unauthorized\"}"));
+    return;
+  }
+  if (!audio_) {
+    sendJson(503, F("{\"ok\":false,\"error\":\"audio_not_ready\"}"));
+    return;
+  }
+
+  const String body = server_.arg("plain");
+  if (body.length() == 0) {
+    sendJson(400, F("{\"ok\":false,\"error\":\"empty_body\"}"));
+    return;
+  }
+  if (body.length() > 128) {
+    sendJson(413, F("{\"ok\":false,\"error\":\"payload_too_large\"}"));
+    return;
+  }
+
+  JsonDocument doc;
+  const DeserializationError error = deserializeJson(doc, body);
+  if (error || !doc["volume"].is<int>()) {
+    sendJson(400, F("{\"ok\":false,\"error\":\"invalid_volume\"}"));
+    return;
+  }
+  const int volume = doc["volume"].as<int>();
+  if (volume < 0 || volume > kHeadroomMaxSpeakerVolume) {
+    sendJson(400, F("{\"ok\":false,\"error\":\"volume_out_of_range\"}"));
+    return;
+  }
+
+  audio_->setSpeakerVolume(static_cast<uint8_t>(volume));
+  String response = F("{\"ok\":true,\"speaker_volume\":");
+  response += String(volume);
+  response += F(",\"persistent\":false}");
+  sendJson(200, response);
+}
+
 void HeadroomIngressServer::handleOptions() {
   server_.sendHeader("Access-Control-Allow-Origin", "*");
-  server_.sendHeader("Access-Control-Allow-Headers", "content-type,authorization,x-headroom-auth,x-utterance-id,x-generation");
+  server_.sendHeader("Access-Control-Allow-Headers", "content-type,authorization,x-headroom-auth,x-utterance-id,x-generation,x-audio-id,x-audio-codec");
   server_.sendHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   server_.send(204, "text/plain", "");
 }

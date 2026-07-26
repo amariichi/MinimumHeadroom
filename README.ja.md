@@ -27,12 +27,13 @@
 ## 全体像（要点）
 
 - **スマホから PC のコーディングエージェントを操作** — モバイルブラウザで承認・入力・音声コマンドを送信できます。
+- **独立した適応型通訳スタック** — モバイル画面の長押し操作から会話の言語ペアを学習し、音声による翻訳先変更にも追従します。4 つの起動プリセットから選んだ ASR／翻訳／TTS プロバイダーだけを起動し、通常のオペレーターとは別画面・別プロセスで動作します。[Interpreter Stack Guide](doc/guides/interpreter-stack.md#japanese) を参照。
 - **Claude Code、Codex CLI、Antigravity CLI に対応** — ターミナルで動くエージェントなら何でも使えます。
 - **tmux オペレーターブリッジ** がブラウザ画面とエージェントペイン間の入出力を中継します。
 - **3D フェイス + TTS + MCP シグナリング** でエージェントに声と表情を与え、状態をリアルタイムに反映します。
 - **任意の AtomS3R 卓上デバイス** — 名前のよく似た2種類の M5Stack 基板を追加できます: **AtomS3R**（顔＋音声入出力 — 話しかける物理の卓上フェイス）と **AtomS3R-M12**（カメラ＋音声出力 — 周囲状況の把握、マイク非搭載）。[AtomS3R Devices](doc/guides/atom-devices.md#japanese) を参照。
 - **M12 視覚サブシステム** — AtomS3R-M12 カメラ、diffusiongemma（vLLM）による画像説明、階層化された状況メモリ、`GET /situation` によるエージェント文脈への注入、M12 Echo Base への音声アラートを追加します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) と [vision-worker README](vision-worker/README.md#japanese) を参照。
-- **汎用ブラウザメディア** — 信頼済みのローカル MP3 配信元を1件だけ、URL をブラウザへ公開せず、認証済みのデスクトップ／モバイルブラウザへ128 kbit/sで中継します。[汎用ブラウザメディア連携ガイド](doc/guides/generic-browser-media.md#japanese)を参照。
+- **汎用ブラウザメディア** — 信頼済みのローカル MP3 配信元を1件だけ、URL をブラウザへ公開せず、認証済みのデスクトップ／モバイルブラウザへ 128 kbit/s で中継します。[汎用ブラウザメディア連携ガイド](doc/guides/generic-browser-media.md#japanese)を参照。
 - **マルチエージェント対応**（実験的） — 分離ワークツリーにヘルパーを生成し、権限プリセットとミッション追跡で管理します。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
 - **Tailscale Serve** でスマホ/タブレットから安全にリモートアクセス。
 
@@ -40,12 +41,13 @@
 ## 機能
 
 - **オペレーター入力** — 端末直接入力、ブラウザ PTT（JA/EN ASR）、テキスト入力、デスクトップの `Space`/`Shift+Space` 長押し安全装置、キー操作（`Esc`, `↑`, `Select`, `↓`）
+- **通訳スタック** — 英語表記の専用モバイル画面、自動言語判定、サーバー側で保持する 2 言語の会話状態、音声による翻訳先指定、Atom VAD による自動ターン、4 つのローカル起動プリセット
 - **ターミナルミラー** — tmux 末尾出力の読み取り専用スナップショット（500ms、変更時のみ）。実機の幅そのままで描画され、長い行は横スクロール。タッチ端末では指の位置を中心にピンチズーム、ダブルタップで等倍復帰
 - **マルチエージェント**（実験的） — デスクトップのタイルまたはモバイルのリストからヘルパーの生成/フォーカス/削除、権限プリセット、ミッション割当・配信、owner inbox を操作できます。バックグラウンドの停止検出が各ヘルパーの tmux ペインを監視し、既知の CLI モーダル（承認プロンプト、モデルピッカー、利用上限通知、サーベイ）を検出すると owner inbox に自動で `blocked` レポートを投函するので、ポーリング不要で停止に気づけます。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
 - **M12 視覚** — AtomS3R-M12 カメラ + diffusiongemma（vLLM）による画像説明、変化判定付き SQLite メモリと段階的な要約、`GET /situation` の要約注入、訂正、キーワード監視、Echo Base 音声アラートを提供します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) を参照。
 - **MCP シグナリング** — `face.event` / `face.say` / `face.ping`、汎用 `media.play` / `media.stop` / `media.status`（[連携ガイド](doc/guides/generic-browser-media.md#japanese)）、エージェントライフサイクルツール（`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`）
 - **3D フェイス** — 眉・目・口・頭のアニメーション、状態モード（`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`）、ドラッグ制御、パネル切替
-- **TTS** — Kokoro ONNX + Misaki 既定、任意 Qwen3-TTS 日本語バックエンド、鮮度優先発話ポリシー。[TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) を参照。
+- **TTS** — Kokoro ONNX + Misaki 既定、任意の多言語Supertonic/Qwen3-TTS、鮮度優先発話ポリシー。[TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) を参照。
 - **ASR** — Parakeet バッチ処理、任意 Voxtral リアルタイム処理。[Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) を参照。
 - **Looking Glass** WebXR 対応経路
 
@@ -307,7 +309,7 @@ docker network ls -q | xargs -I{} docker network inspect {} --format '{{.Name}} 
 
 `daemon.json` の `default-address-pools` で別レンジ(例: `10.200.0.0/16`)に変更している場合や、LAN 自体が `172.16/12` を採番している場合(企業 LAN にときどきあります、`ip -brief addr` で確認)は、特定 Docker network の subnet(例: `172.20.0.0/16`)に置き換え、`docker network create` / compose 側で subnet を固定して再作成時のずれを防いでください。家庭 LAN(`192.168/16` か `10/8`)+ 標準 Docker という典型構成なら、`172.16/12` ルールで LAN と Tailnet (`100.64/10`) は引き続き拒否されます。
 
-トークンは、face-app・オペレーターブリッジ・MCP 転送を行うエージェント CLI を **起動するシェル**に存在している必要があります。`~/.config/minimum-headroom.env` を `.bashrc` から source している場合、非対話シェルや GUI 起動からは引き継がれません。`~/.profile` でも source するか、起動ラッパーで環境変数を渡してください。MCP の WebSocket が 401 で落ちたときは、起動シェルで `set -a; . ~/.config/minimum-headroom.env; set +a` してからエージェントを立て直すと復旧します。
+トークンは、face-app、オペレーターブリッジ、MCP 転送を行うエージェント CLI のすべてに渡す必要があります。通常の `run-operator-once.sh` と `run-interpreter-once.sh` は `~/.config/minimum-headroom.env` を自動的に読み込み、各ペインへ既定値としてエクスポートするため、`set -a` は不要です。GUI や低レベルプロセスを個別に起動する場合だけ、`~/.profile` または専用ランチャーからトークンを継承させてください。
 
 ### Path A: Face + MCP（最小構成）
 
@@ -325,25 +327,35 @@ docker network ls -q | xargs -I{} docker network inspect {} --format '{{.Name}} 
 これは、シンプルなフェイス画面とシグナリングだけを使いたいとき向けです。`run-face-app.sh` は既定でオペレーターパネルを隠します。
 
 - 利用中のコーディングエージェントが MCP クライアント設定からこのリポジトリの MCP サーバーを自動起動する場合、`./scripts/run-mcp-server.sh` は二重起動しないでください。
-- 既定では `face-app` が `tts-worker` を子プロセス起動するため、`FACE_TTS_ENABLED=0` にしていない限り別ターミナルでの起動は不要です。既定バックエンドは Kokoro で、`face-app` 側を `TTS_ENGINE=qwen3` 付きで起動すると任意の Qwen3 ワーカー経路を使います。Kokoro の既定音声は `MH_LANG` に従います（英語は `af_heart`、それ以外は `jf_alpha`）。`MH_KOKORO_VOICE` を指定すると上書きできます。
+- 既定では `face-app` が `tts-worker` を子プロセス起動するため、`FACE_TTS_ENABLED=0` にしていない限り別ターミナルでの起動は不要です。既定バックエンドは Kokoro です。任意導入後にだけ、`TTS_ENGINE=supertonic` または `TTS_ENGINE=qwen3` で別のワーカー経路を選びます。Kokoro の既定音声は `MH_LANG` に従います（英語は `af_heart`、それ以外は `jf_alpha`）。`MH_KOKORO_VOICE` を指定すると上書きできます。
 
 ### Path B: フルモバイルオペレータースタック（推奨）
 
-`./scripts/setup.sh` 実行後の推奨 1 発起動:
+基本セットアップが導入するTTSはKokoroだけです。SupertonicまたはQwen3-TTSは明示的に追加します。
+
+```bash
+./scripts/setup.sh
+./scripts/setup.sh --with-supertonic
+./scripts/setup.sh --with-qwen3-tts
+```
+
+その後の推奨 1 発起動:
 
 ```bash
 ./scripts/run-operator-once.sh --profile realtime
 ```
 
-これは、tmux 連携、ブラウザ PTT、ターミナルミラー、隠し復旧、ブリッジの安全な既定配線まで含む、いちばん実用的な構成です。特に Qwen3 TTS を使いたい理由がなければ、`--profile default` か `--profile realtime` から始めてください。
+これは、tmux 連携、ブラウザ PTT、ターミナルミラー、隠し復旧、ブリッジの安全な既定配線まで含む、いちばん実用的な構成です。特にSupertonicまたはQwen3 TTSを使いたい理由がなければ、`--profile default` か `--profile realtime` から始めてください。
 
-- `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`qwen3` / `qwen3-realtime` プロファイルは、この子起動ワーカーに `TTS_ENGINE=qwen3` を渡して切り替えます。Kokoro プロファイルでは `MH_LANG=en` または `MH_LANG=ja` でデプロイ既定を選び、英語・日本語で共通利用する音声を明示したい場合だけ `MH_KOKORO_VOICE` を指定します。
+- `run-operator-once.sh` / `run-operator-stack.sh` は `face-app` を起動し、その `face-app` が既定で `tts-worker` を子起動します。`FACE_TTS_ENABLED=0` を指定しない限り、別ターミナルでの TTS 起動は不要です。`supertonic*`と`qwen3*`プロファイルは、選択した`TTS_ENGINE`をこの子ワーカーへ渡します。以後、そのOperator宛ての通常の`face_say`は選択したワーカーを使います。TTSエンジンは発話ごとではなく、stackの起動または再起動時に選びます。Kokoro プロファイルでは `MH_LANG=en` または `MH_LANG=ja` でデプロイ既定を選び、英語・日本語で共通利用する音声を明示したい場合だけ `MH_KOKORO_VOICE` を指定します。
 - `run-operator-once.sh` はオペレーターペインに `MH_FACE_AGENT_ID=__operator__` / `MH_FACE_AGENT_LABEL=Operator` を export し、統合オペレータースタックの任意起動 MCP サーバーも同じ識別子に束縛します。ヘルパーペインは生成時に割り当てられたヘルパー ID を受け取り、Docker 経由のヘルパーコマンドには `docker exec -e` でコンテナ内へ渡されます。
 - MCP のフェイスツールは MCP サーバープロセスに `MH_FACE_AGENT_ID` がある場合、`agent_id` を自動補完し、明示された ID が束縛値と違う場合は対応方法つきで拒否します。MCP クライアントが別の未束縛サーバーを起動する構成では、`MH_FACE_AGENT_ID` を正として `face_ping` / `face_event` / `face_say` の全呼び出しに `agent_id` を明示してください。
 - `--agent-cmd` は主オペレーターペインだけを指定します。`MH_AGENT_DEFAULT_CMD` は、あとでヘルパーを追加するときに `face-app` が使うヘルパーエージェント起動テンプレートです。このヘルパーテンプレートが `docker exec` で始まる場合、Minimum Headroom はヘルパーごとの `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` を `docker exec -e` で挿入します。Docker でない場合は `env ...` をコマンドの前に付けます。Docker の具体例は[Operator Stack Guide](doc/guides/operator-stack.md#ja-docker-and-helper-agent-commands)を参照してください。
 - profile の意味:
   - `--profile default`: Kokoro TTS + batch ASR のみ
   - `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
+  - `--profile supertonic`: Supertonic 3 CPU TTS + batch ASR のみ
+  - `--profile supertonic-realtime`: Supertonic 3 CPU TTS + Voxtral realtime ASR + Parakeet fallback
   - `--profile qwen3`: Qwen3 TTS + batch ASR のみ
   - `--profile qwen3-realtime`: Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback
 - このアプリを使って別の作業リポジトリを扱う場合は、その対象リポジトリ側にもプロジェクトローカルな `AGENTS.md` を置いてください。`doc/examples/AGENTS.sample.md` を出発点にして、そのリポジトリ固有の build/test/run ルールを追記するのが簡単です。
@@ -372,6 +384,9 @@ cd /path/to/target-repo
 # 起動だけ行い、現在のシェルを維持
 ./scripts/run-operator-once.sh --profile realtime --no-attach
 
+# 任意環境を導入済みの時だけCPU Supertonicを選ぶ
+./scripts/run-operator-once.sh --profile supertonic
+
 # Qwen3 TTS を使いたい時だけ明示的に選ぶ
 ./scripts/run-operator-once.sh --profile qwen3-realtime
 
@@ -382,6 +397,32 @@ cd /path/to/target-repo
 ```
 
 `browser` / `local` / `both` の選び方は[音声出力先と UI モード](doc/guides/operator-stack.md#音声出力先と-ui-モード)を参照してください。
+
+### Path C: 独立した通訳スタック
+
+通訳機能はオペレーターのプロファイルではなく、独立したランタイムスタックと専用画面として動作します。4 つのローカル構成から 1 つを事前確認し、その構成だけを導入・診断してから、専用の 2 ペイン tmux ウィンドウを起動します。左ペインは Bash、右ペインは通訳バックエンドのログです。
+
+```bash
+./scripts/setup-interpreter-stack.sh --preset gemma4-supertonic --dry-run
+./scripts/setup-interpreter-stack.sh --preset gemma4-supertonic
+./scripts/interpreter-doctor.sh --preset gemma4-supertonic
+./scripts/run-interpreter-once.sh --preset gemma4-supertonic
+```
+
+ランチャーは `~/.config/minimum-headroom.env`（または `MH_ENV_FILE`）を利用者別の既定設定として自動的に読み込むため、`set -a` は不要です。コマンドラインで明示したオプションと環境変数が優先されます。
+
+いずれかの現行 2 ペインランチャーで起動した後、`Operator` というタイトルまたは Interpreter 画面のプロバイダー名をタップすると、認証済みの `Switch mode` ダイアログが開きます。Operator のプロファイル、Interpreter のプリセットを変更できるほか、同じ右ペインと 8765 番ポートを両アプリ間で引き渡せます。左側のシェル／Codex ペインは動作を続け、切替先の起動に失敗した場合は直前の状態への復元を 1 回だけ試みます。導入条件と復旧範囲はガイドを参照してください。
+
+切替の管理対象は共通の右ペインにあるスタックだけです。左ペイン、別の tmux セッション、サービス、Docker で起動したローカルモデル（M12 用 diffusiongemma を含む）は動作を続けます。空き VRAM の確認や既知の外部プロセスの停止は利用者が行ってください。
+切替前に外部モデルを停止した場合も、Operator へ戻るだけでは再起動されません。必要になった時に手動で起動してください。
+
+Gemma 音声認識を使う構成は `gemma4-supertonic` または `gemma4-qwen3` です。Gemma とは異なる認識傾向、対応言語、速度、失敗特性を持つ独立 ASR と比較したい場合は、`nemotron-gemma4-supertonic` または `nemotron-gemma4-qwen3` で Nemotron ASR と Gemma を両方常駐させます。どちらが常に高精度とは断定せず、利用者の声と騒音条件で比較してください。すべての構成で、意図解析と翻訳はローカル Gemma が担当し、通訳に `agy` は不要です。
+
+今回の一文テストでは、`gemma4-supertonic` が最も軽量で、エンコード済み音声の準備まで約 2.1 秒でした。Qwen 構成は約 4.3〜4.5 秒ですが、中国語音声を出力できます。別に合成した中国語音声では Nemotron ASR の結果が良かったため、双方向の中国語通訳では `nemotron-gemma4-qwen3` から試す価値があります。ただし、これは普遍的な精度順位を示すものではありません。
+
+Nemotron が文字起こし不能を示す特定の 422 応答を返した場合に限り、同じ WAV を常駐中の Gemma 音声 ASR へ 1 回渡します。プロバイダー停止など、その他の失敗は黙って再試行しません。旧 `light-cloud` 名は `nemotron-gemma4-supertonic` の非推奨な別名としてのみ受け付けます。モデルのダウンロードやスマホ向けのループバック以外へのバインドを行う前に、[Interpreter Stack Guide](doc/guides/interpreter-stack.md#japanese) を確認してください。同ガイドには、4 構成の実測、顔 Atom／スマホでの操作、第三者モデルのライセンス一覧があります。
+
+スマホ向け TTS には、正常動作している Music Player 経路と同じ FFmpeg／libmp3lame による MP3 128 kbit/s を使用します。エンコーダーがない場合に限り、doctor が容量の大きい PCM へのフォールバックを通知します。
 
 <a id="ja-generic-browser-media"></a>
 ### 汎用ブラウザメディア連携
@@ -429,11 +470,7 @@ env = { "FACE_WS_URL" = "ws://127.0.0.1:8765/ws", "MCP_TOOL_NAME_STYLE" = "under
 
 `run-bound-mcp-server.sh` は MCP サーバーを起動し、可能な場合は現在のエージェントプロセスまたは親プロセスから `MH_FACE_AGENT_ID` / `MH_FACE_AGENT_LABEL` を引き継ぎます。Minimum Headroom から起動されたオペレーター/ヘルパーペインでは、これにより `face_ping` / `face_event` / `face_say` の `agent_id` 省略が可能になります。
 
-face-app をループバック外にバインドして `MH_FACE_AUTH_TOKEN` が必要な場合、
-同じラッパーは現在の環境・親プロセス・`MH_FACE_ENV_FILE` から
-`MH_FACE_AUTH_TOKEN` を転送します。既定の env file は
-`~/.config/minimum-headroom.env` です。実トークンは Codex 設定に
-チェックインしないでください。
+face-app をループバック以外にバインドして `MH_FACE_AUTH_TOKEN` が必要な場合、同じラッパーは現在の環境、親プロセス、`MH_FACE_ENV_FILE` からトークンを転送します。既定の環境設定ファイルは `~/.config/minimum-headroom.env` です。実際のトークンは Codex の設定ファイルへチェックインしないでください。
 
 ### Antigravity (CLI と GUI)
 
@@ -520,7 +557,9 @@ MCP クライアントがドット付きツール名（例: `face.event`、`medi
 - [汎用ブラウザメディア連携](doc/guides/generic-browser-media.md#japanese) — 第三者の MP3 配信元とコントローラーの準備、任意のカタログ機能とローカルファイルの安全な扱い、HTTP/MCP 契約、モバイル再生、セキュリティ、任意の TTS フォーカス連携を解説
 - [AtomS3R Devices](doc/guides/atom-devices.md#japanese) — 2つの物理 Atom デバイス（顔 と M12 カメラ）の違い、どの文書がどちらのものか、`--asr-lang` の落とし穴
 - [Operator Stack and ASR Guide](doc/guides/operator-stack.md#japanese) — 起動スクリプトの選び方、tmux ブリッジ、オペレーター画面、キーボードショートカット、バッチ / リアルタイム ASR、隠し復旧、Tailscale リモート運用
-- [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Qwen3 のセットアップ、発話ゲート、長文発話、発話前の正規化
+- [Interpreter Stack Guide](doc/guides/interpreter-stack.md#japanese) — 独立した四つのpreset、実測比較、setup/doctor/start/stop、言語ペア規則、スマホ/Atom操作、第三者license
+- [Gemma 4 and llama.cpp Guide](doc/guides/gemma4-llama-cpp.md#japanese) — 公式固定GGUF、変換済みMTP assistant、llama.cpp互換性、再現手順
+- [TTS and Speech Guide](doc/guides/tts-and-speech.md#japanese) — Kokoro / Supertonic / Qwen3 のセットアップ、対応言語、発話ゲート、長文発話、発話前の正規化
 - [M12 Vision Guide](doc/guides/m12-vision.md#japanese) — M12 の認識の流れ、記憶と忘却、訂正、キーワード監視、音声アラート
 - [マルチエージェントガイド](doc/guides/multi-agent.md#japanese) — ヘルパーの生成、権限プリセット、ミッション割当、owner inbox、ワークツリー分離、セキュリティ強化
 - [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#japanese) — **顔 AtomS3R:** ハンズフリー VAD 経路、書き込み＋USB プロビジョニング、RMS と Silero、ADPCM、各チューニング（endSilence / 閾値 / 末尾フレーム / maxUtterance）、PTT、トラブルシュート
@@ -580,7 +619,7 @@ npm run asr-worker:smoke
 
 - 実行時ローカルファイル（モデル、ローカル MCP 設定、キャッシュ、venv など）は `.gitignore` で除外されています。
 - three.js は unpkg CDN ではなくローカル配信になりました（PR #65）。Face UI は外部 CDN の可用性に依存しません。
-- ノイズ状の TTS 出力は、任意で有効化する録音専用診断で調査できます（PR #66）。環境変数で有効化し、WAV + JSON を `~/.cache/minimum-headroom/tts-captures` に保存します。
+- ノイズ状の TTS 出力は、任意で有効化する録音専用診断で調査できます（PR #66）。既定では無効です。有効時は発話を含むWAVとmetrics JSONを`~/.cache/minimum-headroom/tts-captures`へ保存します。本文とrequest識別子は別のopt-in指定が必要です。captureは機密情報として扱い、診断後に削除してください。
 
 ## 謝辞
 

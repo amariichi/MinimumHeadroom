@@ -196,10 +196,12 @@ function stripFillerPunctuation(text) {
 
 // VAD backend interface
 // ---------------------
-// A backend exposes one method: `decide(frame, sampleRate)`. It may return
-// either a plain object `{ isSpeech: boolean }` (sync) or a Promise that
-// resolves to one (async). The bridge tolerates both. A sync RMS backend
-// is the default; the Silero adapter below calls an external worker.
+// A backend exposes one method: `decide(frame, sampleRate, context)`.
+// Backends that explicitly set `synchronous: true` return a plain
+// `{ isSpeech: boolean }` decision immediately. Every other backend is
+// treated as asynchronous and invoked inside a per-session FIFO so stateful
+// inference cannot run concurrently. RMS is synchronous; the Silero adapter
+// below calls an external worker.
 
 // Built-in RMS-energy backend. Mirrors the historical pcm16Rms gate so the
 // default behavior is unchanged when no backend override is supplied.
@@ -207,6 +209,7 @@ export function createRmsVadBackend(options = {}) {
   const threshold = Number.isFinite(options.thresholdRms) ? options.thresholdRms : 0.025;
   return {
     name: 'rms',
+    synchronous: true,
     decide(frame /* , sampleRate */) {
       return { isSpeech: pcm16Rms(frame) >= threshold };
     }
@@ -230,14 +233,28 @@ export function createSileroVadBackend(options = {}) {
   const threshold = Number.isFinite(options.threshold) ? options.threshold : 0.5;
   return {
     name: 'silero',
-    async decide(frame, sampleRate) {
+    synchronous: false,
+    async decide(frame, sampleRate, context = {}) {
+      const sessionId = typeof context.sessionId === 'string' && context.sessionId.trim() !== ''
+        ? context.sessionId.trim().slice(0, 128)
+        : 'atom-headroom';
       const response = await fetchImpl(endpointUrl, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           audioBase64: frame.toString('base64'),
           sampleRate,
-          threshold
+          threshold,
+          sessionId,
+          streamEpoch: Number.isFinite(context.streamEpoch)
+            ? Math.floor(context.streamEpoch)
+            : 0,
+          generation: Number.isFinite(context.generation)
+            ? Math.floor(context.generation)
+            : 0,
+          sequence: Number.isFinite(context.seq)
+            ? Math.floor(context.seq)
+            : 0
         })
       });
       if (!response.ok) {
@@ -261,6 +278,7 @@ export function createAtomAudioVadBridge(options = {}) {
   const fallbackLanguage = languageDefaultFromMhLang(env.MH_LANG, 'ja');
   const onOperatorResponse = typeof options.onOperatorResponse === 'function' ? options.onOperatorResponse : null;
   const onAcceptedSpeech = typeof options.onAcceptedSpeech === 'function' ? options.onAcceptedSpeech : null;
+  const onUtterance = typeof options.onUtterance === 'function' ? options.onUtterance : null;
   // thresholdRms: RMS energy floor a frame must exceed to count as speech.
   // 0.025 (-32 dBFS) ignores typical ambient noise and short non-verbal
   // bursts like throat clicks; lower values pick up "うん" / "あ" / "ピッ"
@@ -276,6 +294,13 @@ export function createAtomAudioVadBridge(options = {}) {
   // is allowed to finalize. 350 ms rejects momentary bursts that exceed
   // thresholdRms for one or two frames but never sustain.
   const minSpeechMs = Number.isFinite(options.minSpeechMs) ? Math.max(0, Math.floor(options.minSpeechMs)) : 350;
+  // Learned VADs need a few frames of recurrent context before their first
+  // positive decision. Preserve a bounded ring of preceding PCM so ASR does
+  // not lose the first syllable. The default remains zero for byte-compatible
+  // operator behavior; interpreter_index.js opts in explicitly.
+  const preRollMs = Number.isFinite(options.preRollMs)
+    ? Math.max(0, Math.min(2000, Math.floor(options.preRollMs)))
+    : 0;
   const ignoredFillerTexts = options.ignoredFillerTexts instanceof Set
     ? options.ignoredFillerTexts
     : DEFAULT_IGNORED_FILLER_TEXTS;
@@ -307,6 +332,8 @@ export function createAtomAudioVadBridge(options = {}) {
         speechMs: 0,
         silenceMs: 0,
         utteranceMs: 0,
+        preRollFrames: [],
+        preRollDurationMs: 0,
         seq: 0,
         // Wall-clock time (from nowFn) of the most recent frame applied while
         // active. checkUtteranceTimeouts() uses it to finalize on a receive
@@ -332,15 +359,31 @@ export function createAtomAudioVadBridge(options = {}) {
     return session;
   }
 
-  async function submitUtterance(session, pcmBuffer) {
-    const language = normalizeLanguage(session.language, fallbackLanguage);
+  async function submitUtterance(metadata, pcmBuffer) {
+    const language = normalizeLanguage(metadata.language, fallbackLanguage);
+    const wav = pcm16ToWavBuffer(pcmBuffer, metadata.sampleRate);
+    if (onUtterance) {
+      const result = await onUtterance({
+        wav,
+        mimeType: 'audio/wav',
+        sessionId: metadata.sessionId,
+        sampleRate: metadata.sampleRate,
+        languageHint: language,
+        speechMs: metadata.speechMs,
+        utteranceMs: metadata.utteranceMs,
+        seq: metadata.seq,
+        generation: metadata.generation,
+        source: 'atom_vad'
+      });
+      if (result?.handled !== false) {
+        return;
+      }
+    }
     const upstreamUrl = resolveUpstreamUrl({ endpointUrl, baseUrl, language });
     if (!upstreamUrl) {
       log.warn('[face-app] Atom VAD utterance dropped: ASR upstream is not configured');
       return;
     }
-
-    const wav = pcm16ToWavBuffer(pcmBuffer, session.sampleRate);
     const response = await fetchImpl(upstreamUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -385,7 +428,7 @@ export function createAtomAudioVadBridge(options = {}) {
       await onOperatorResponse({
         v: 1,
         type: 'operator_response',
-        session_id: session.id,
+        session_id: metadata.sessionId,
         request_id: null,
         response_kind: 'text',
         value: normalized.text,
@@ -401,26 +444,66 @@ export function createAtomAudioVadBridge(options = {}) {
     session.speechMs = 0;
     session.silenceMs = 0;
     session.utteranceMs = 0;
+    session.preRollFrames = [];
+    session.preRollDurationMs = 0;
+  }
+
+  function rememberPreRoll(session, frame, frameMs) {
+    if (preRollMs <= 0) {
+      return;
+    }
+    session.preRollFrames.push({ frame, frameMs });
+    session.preRollDurationMs += frameMs;
+    while (
+      session.preRollFrames.length > 0
+      && session.preRollDurationMs > preRollMs
+    ) {
+      const removed = session.preRollFrames.shift();
+      session.preRollDurationMs -= removed.frameMs;
+    }
+  }
+
+  function promotePreRoll(session) {
+    if (session.preRollFrames.length === 0) {
+      return;
+    }
+    for (const item of session.preRollFrames) {
+      session.buffers.push(item.frame);
+      session.utteranceMs += item.frameMs;
+    }
+    session.preRollFrames = [];
+    session.preRollDurationMs = 0;
   }
 
   function applyFrameDecision(session, frame, frameMs, decision) {
     const isSpeech = Boolean(decision && decision.isSpeech);
     if (isSpeech) {
-      session.active = true;
+      if (!session.active) {
+        session.active = true;
+        promotePreRoll(session);
+      }
       session.speechMs += frameMs;
       session.silenceMs = 0;
     } else if (session.active) {
       session.silenceMs += frameMs;
+    } else {
+      rememberPreRoll(session, frame, frameMs);
+      return;
     }
     if (session.active) {
       session.lastFrameAtMs = nowFn();
       session.buffers.push(frame);
       session.utteranceMs += frameMs;
-      if (
-        (session.silenceMs >= endSilenceMs && session.speechMs >= minSpeechMs) ||
-        session.utteranceMs >= maxUtteranceMs
-      ) {
-        finalize(session);
+      const reachedEndSilence = session.silenceMs >= endSilenceMs;
+      const reachedMaximum = session.utteranceMs >= maxUtteranceMs;
+      if (reachedEndSilence || reachedMaximum) {
+        if (session.speechMs >= minSpeechMs) {
+          finalize(session);
+        } else {
+          // A click or other short burst must not keep an active buffer alive
+          // until it is accidentally joined to the next real utterance.
+          clearSessionBuffers(session);
+        }
       }
     }
   }
@@ -430,11 +513,28 @@ export function createAtomAudioVadBridge(options = {}) {
   // epoch captured at enqueue time gates the apply step against external
   // resets (resetSession, higher-generation frame) that happened while
   // the backend call was outstanding.
-  function enqueueAsyncFrame(session, frame, frameMs, decisionPromise) {
+  function enqueueAsyncFrame(session, frame, frameMs) {
     const epochAtEnqueue = session.epoch;
+    const sampleRate = session.sampleRate;
+    const context = {
+      sessionId: session.id,
+      streamEpoch: epochAtEnqueue,
+      generation: session.generation,
+      seq: session.seq
+    };
     const work = session.pendingProcessing
       .then(async () => {
-        const decision = await decisionPromise;
+        if (session.epoch !== epochAtEnqueue) {
+          return;
+        }
+        // Invoke the backend inside the FIFO chain. Merely applying already
+        // started Promises in order is insufficient for stateful Silero:
+        // concurrent HTTP requests can mutate recurrent state out of order.
+        const decision = await vadBackend.decide(
+          frame,
+          sampleRate,
+          context
+        );
         if (session.epoch !== epochAtEnqueue) {
           return;
         }
@@ -450,11 +550,20 @@ export function createAtomAudioVadBridge(options = {}) {
 
   function finalize(session) {
     const pcm = Buffer.concat(session.buffers);
+    const metadata = {
+      sessionId: session.id,
+      sampleRate: session.sampleRate,
+      language: session.language,
+      speechMs: session.speechMs,
+      utteranceMs: session.utteranceMs,
+      seq: session.seq,
+      generation: session.generation
+    };
     clearSessionBuffers(session);
     if (pcm.length === 0) {
       return;
     }
-    const task = submitUtterance(session, pcm)
+    const task = submitUtterance(metadata, pcm)
       .catch((error) => {
         log.warn(`[face-app] Atom VAD submit failed: ${error.message}`);
       })
@@ -468,7 +577,8 @@ export function createAtomAudioVadBridge(options = {}) {
   // If neither base nor explicit endpoint URL is set, the bridge cannot
   // submit utterances, so we drop frames at the door rather than buffer
   // them silently.
-  const asrConfigured = (typeof endpointUrl === 'string' && endpointUrl.trim() !== '') ||
+  const asrConfigured = Boolean(onUtterance) ||
+    (typeof endpointUrl === 'string' && endpointUrl.trim() !== '') ||
     (typeof baseUrl === 'string' && baseUrl.trim() !== '');
 
   function handlePayload(payload) {
@@ -548,12 +658,22 @@ export function createAtomAudioVadBridge(options = {}) {
 
     const frameMs = Math.max(1, Math.round((Math.floor(frame.length / 2) / session.sampleRate) * 1000));
 
-    const decisionOrPromise = vadBackend.decide(frame, session.sampleRate);
-    if (decisionOrPromise && typeof decisionOrPromise.then === 'function') {
-      // Async backend (e.g., Silero HTTP): apply via FIFO queue.
-      enqueueAsyncFrame(session, frame, frameMs, decisionOrPromise);
+    const decisionContext = {
+      sessionId: session.id,
+      streamEpoch: session.epoch,
+      generation: session.generation,
+      seq: session.seq
+    };
+    if (vadBackend.synchronous !== true) {
+      // Async/stateful backends are invoked lazily inside the FIFO queue.
+      enqueueAsyncFrame(session, frame, frameMs);
       return { relay: false, accepted: true };
     }
+    const decisionOrPromise = vadBackend.decide(
+      frame,
+      session.sampleRate,
+      decisionContext
+    );
     applyFrameDecision(session, frame, frameMs, decisionOrPromise);
     return {
       relay: false,
@@ -593,7 +713,12 @@ export function createAtomAudioVadBridge(options = {}) {
     handlePayload,
     resetSession,
     async drain() {
-      await Promise.all([...pending]);
+      // Async VAD work can finalize an utterance and add its submit task while
+      // the first snapshot is settling. Keep draining until no tracked work
+      // remains so callers can rely on this as a true quiescence barrier.
+      while (pending.size > 0) {
+        await Promise.all([...pending]);
+      }
     },
     // Wall-clock fallback finalize. When the device stops sending frames
     // (firmware silence-skip after a short tail) no more silence frames arrive
@@ -608,8 +733,12 @@ export function createAtomAudioVadBridge(options = {}) {
           continue;
         }
         const effectiveSilenceMs = session.silenceMs + Math.max(0, nowMs - session.lastFrameAtMs);
-        if (effectiveSilenceMs >= endSilenceMs && session.speechMs >= minSpeechMs) {
-          finalize(session);
+        if (effectiveSilenceMs >= endSilenceMs) {
+          if (session.speechMs >= minSpeechMs) {
+            finalize(session);
+          } else {
+            clearSessionBuffers(session);
+          }
         }
       }
     },

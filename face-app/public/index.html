@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Minimum Headroom Face</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/runtime_mode.css" />
   </head>
   <body class="boot-pending">
     <main class="stage" id="stage">
@@ -107,7 +108,14 @@
 
       <section id="operator-panel" class="operator-panel hidden" aria-live="polite">
         <header class="operator-header">
-          <h2 id="operator-title" class="operator-title">Operator</h2>
+          <button
+            id="operator-title"
+            class="operator-title runtime-mode-trigger"
+            type="button"
+            aria-haspopup="dialog"
+            aria-controls="runtime-mode-dialog"
+            aria-expanded="false"
+          >Operator</button>
           <div class="operator-header-actions">
             <button id="operator-esc-inline" type="button" class="operator-btn">Esc</button>
             <button
@@ -227,6 +235,54 @@
       </section>
       <button id="audio-replay" class="audio-replay hidden" type="button">Tap to enable audio</button>
     </main>
+
+    <dialog
+      class="runtime-mode-dialog"
+      id="runtime-mode-dialog"
+      aria-labelledby="runtime-mode-title"
+    >
+      <form id="runtime-mode-form">
+        <div class="runtime-mode-head">
+          <div>
+            <p class="runtime-mode-kicker">RUNTIME</p>
+            <h2 id="runtime-mode-title">Switch mode</h2>
+          </div>
+          <button
+            class="runtime-mode-close"
+            id="runtime-mode-close"
+            type="button"
+            aria-label="Close mode switch"
+          >×</button>
+        </div>
+        <div class="runtime-mode-fields">
+          <label for="runtime-mode-select">
+            <span>Mode</span>
+            <select id="runtime-mode-select" required>
+              <option value="operator">Operator</option>
+              <option value="interpreter">Interpreter</option>
+            </select>
+          </label>
+          <label for="runtime-backend-select">
+            <span>Backend preset</span>
+            <select id="runtime-backend-select" required></select>
+          </label>
+        </div>
+        <p
+          class="runtime-mode-status"
+          id="runtime-mode-status"
+          role="status"
+          aria-live="polite"
+        ></p>
+        <div class="runtime-mode-actions">
+          <button id="runtime-mode-cancel" type="button">Cancel</button>
+          <button
+            class="runtime-mode-submit"
+            id="runtime-mode-submit"
+            type="submit"
+          >Switch</button>
+        </div>
+      </form>
+    </dialog>
 
     <script type="importmap">
       {

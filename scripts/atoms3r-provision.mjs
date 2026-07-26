@@ -7,8 +7,10 @@
 // the user never has to type them into the Wi-Fi setup portal by hand.
 //
 // No npm dependency: the tty is configured with `stty raw -echo` and the
-// device file is read/written through plain fs streams. The ESP32 USB-CDC
-// endpoint ignores the nominal baud; `raw -echo` is what matters.
+// device file is read/written through plain fs calls. The ESP32 USB-CDC
+// endpoint ignores the nominal baud; `raw -echo` is what matters. A
+// side-effect-free RMHCFG? handshake absorbs USB-CDC startup delay before the
+// configuration command is sent exactly once.
 //
 // Token resolution order (matches scripts/run-bound-mcp-server.sh):
 //   1. --token <t>
@@ -29,6 +31,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+const MAX_ATOM_SPEAKER_VOLUME = 200;
+
 function usage() {
   console.log(`atoms3r-provision — push Wi-Fi/token/URLs to an AtomS3R over USB serial
 
@@ -47,14 +51,19 @@ Options:
   --vad-off             disable continuous VAD mode
   --vad-rms <f>         firmware speech threshold (0..1; 0 = send every frame, ~0.025 default,
                         lower for Silero PC backend)
-  --vad-encoding <enc>  pcm16 (default, raw 16-bit) or ima_adpcm (4:1 lossy for mobile use)
-  --vad-tail <n>        trailing silence frames sent after speech (0..240; ~16 ≈ 1s).
-                        Must exceed the PC endSilenceMs/64ms so natural pauses don't
-                        chop the utterance; lets vad-rms stay >0 to skip idle silence
+  --vad-encoding <enc>  ima_adpcm (fresh firmware default, 4:1) or pcm16 (compatibility)
+  --vad-tail <n>        trailing silence frames sent after speech (0..240; 8 ≈ 0.5s).
+                        Carries speech decay; the PC receive-gap timer handles
+                        turn finalization, so this need not span endSilenceMs
+  --vad-playback-cooldown-ms <n>
+                        delay after playback ends before VAD resumes (200..5000;
+                        conservative device default: 1200)
+  --speaker-volume <n>  persist safe speaker volume (0..200; faced Atom
+                        indoor default 112, outdoor starting point 160)
   --token <t>           auth token (else env MH_FACE_AUTH_TOKEN, else shared env file)
   --reboot              tell the Atom to reboot after saving
   --dry-run             print the redacted RMHCFG payload and exit (no port access)
-  --timeout-ms <n>      reply wait in ms (default: 5000)
+  --timeout-ms <n>      wait per serial phase in ms (default: 5000)
   --help                this help
 `);
 }
@@ -77,6 +86,8 @@ function parseArgs(argv) {
     else if (a === '--vad-rms') out.vadRms = next();
     else if (a === '--vad-encoding') out.vadEncoding = next();
     else if (a === '--vad-tail') out.vadTail = next();
+    else if (a === '--vad-playback-cooldown-ms') out.vadPlaybackCooldownMs = next();
+    else if (a === '--speaker-volume') out.speakerVolume = next();
     else if (a === '--token') out.token = next();
     else if (a === '--reboot') out.reboot = true;
     else if (a === '--dry-run') out.dryRun = true;
@@ -163,6 +174,22 @@ function buildPayload(opts, token) {
     }
     cfg.vad_tail = n;
   }
+  if (opts.vadPlaybackCooldownMs !== undefined) {
+    const n = Number(opts.vadPlaybackCooldownMs);
+    if (!Number.isInteger(n) || n < 200 || n > 5000) {
+      console.error('--vad-playback-cooldown-ms must be an integer between 200 and 5000 (got: ' + opts.vadPlaybackCooldownMs + ')');
+      process.exit(2);
+    }
+    cfg.vad_playback_cooldown_ms = n;
+  }
+  if (opts.speakerVolume !== undefined) {
+    const n = Number(opts.speakerVolume);
+    if (!Number.isInteger(n) || n < 0 || n > MAX_ATOM_SPEAKER_VOLUME) {
+      console.error('--speaker-volume must be an integer between 0 and 200 (got: ' + opts.speakerVolume + ')');
+      process.exit(2);
+    }
+    cfg.speaker_volume = n;
+  }
   if (token) cfg.auth = token;
   if (opts.reboot) cfg.reboot = true;
   return cfg;
@@ -176,37 +203,167 @@ function redact(cfg) {
   return r;
 }
 
-async function sendAndWait(port, line, timeoutMs) {
-  execFileSync('stty', ['-F', port, '115200', 'raw', '-echo', '-hupcl']);
-  const rx = fs.createReadStream(port);
-  let buf = '';
-  const result = await new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ok: false, line: '(timeout: no RMHCFG reply)' }), timeoutMs);
-    rx.on('data', (chunk) => {
-      buf += chunk.toString('utf8');
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const got = buf.slice(0, nl).replace(/\r$/, '');
-        buf = buf.slice(nl + 1);
-        if (/^RMHCFG (OK|ERR)/.test(got)) {
-          clearTimeout(timer);
-          resolve({ ok: got.startsWith('RMHCFG OK'), line: got });
-          return;
-        }
-        if (got.startsWith('RMHCFG STATE')) {
-          clearTimeout(timer);
-          resolve({ ok: true, line: got });
-          return;
-        }
-      }
-    });
-    rx.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, line: `(read error: ${e.message})` }); });
-    fs.writeFile(port, line, (e) => {
-      if (e) { clearTimeout(timer); resolve({ ok: false, line: `(write error: ${e.message})` }); }
-    });
-  });
-  rx.close();
-  return result;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function timingFromEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+function openSerial(port) {
+  try {
+    execFileSync('stty', ['-F', port, '115200', 'raw', '-echo', '-hupcl']);
+  } catch (error) {
+    return { ok: false, line: `(serial setup error: ${error.message})` };
+  }
+
+  const flags = fs.constants.O_RDWR
+    | fs.constants.O_NONBLOCK
+    | (fs.constants.O_NOCTTY ?? 0);
+  try {
+    return {
+      ok: true,
+      session: {
+        fd: fs.openSync(port, flags),
+        buffer: '',
+      },
+    };
+  } catch (error) {
+    return { ok: false, line: `(open error: ${error.message})` };
+  }
+}
+
+function closeSerial(session) {
+  try { fs.closeSync(session.fd); } catch { /* already closed or disconnected */ }
+}
+
+function writeSerialLine(session, line) {
+  try {
+    const payload = Buffer.from(line, 'utf8');
+    const written = fs.writeSync(session.fd, payload, 0, payload.length, null);
+    if (written !== payload.length) {
+      return { ok: false, line: `(short write: ${written}/${payload.length})` };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, line: `(write error: ${error.message})` };
+  }
+}
+
+function readSerialLines(session) {
+  const scratch = Buffer.allocUnsafe(4096);
+  const lines = [];
+  while (true) {
+    let bytesRead;
+    try {
+      bytesRead = fs.readSync(session.fd, scratch, 0, scratch.length, null);
+    } catch (error) {
+      if (error.code === 'EAGAIN' || error.code === 'EWOULDBLOCK') break;
+      return { ok: false, line: `(read error: ${error.message})`, lines };
+    }
+    if (bytesRead === 0) break;
+    session.buffer += scratch.subarray(0, bytesRead).toString('utf8');
+    let newline;
+    while ((newline = session.buffer.indexOf('\n')) >= 0) {
+      lines.push(session.buffer.slice(0, newline).replace(/\r$/, ''));
+      session.buffer = session.buffer.slice(newline + 1);
+    }
+  }
+  return { ok: true, lines };
+}
+
+async function waitForProtocolLine(session, predicate, timeoutMs, options = {}) {
+  const pollMs = timingFromEnv('MH_ATOM_SERIAL_POLL_MS', 10);
+  const probeIntervalMs = timingFromEnv('MH_ATOM_SERIAL_PROBE_INTERVAL_MS', 250);
+  const deadline = Date.now() + timeoutMs;
+  let nextProbeAt = Date.now();
+  let probeCount = 0;
+
+  while (true) {
+    const read = readSerialLines(session);
+    for (const line of read.lines) {
+      if (predicate(line)) return { ok: true, line, probeCount };
+    }
+    if (!read.ok) return read;
+
+    const now = Date.now();
+    if (options.probeLine && now >= nextProbeAt) {
+      const write = writeSerialLine(session, options.probeLine);
+      if (!write.ok) return write;
+      probeCount += 1;
+      nextProbeAt = now + probeIntervalMs;
+    }
+    if (now >= deadline) {
+      return {
+        ok: false,
+        line: options.timeoutLine || '(timeout: no RMHCFG reply)',
+        probeCount,
+      };
+    }
+    await sleep(Math.max(1, Math.min(pollMs, deadline - now)));
+  }
+}
+
+async function provisionOverSerial(port, payloadLine, timeoutMs, reboot) {
+  const opened = openSerial(port);
+  if (!opened.ok) return opened;
+  const { session } = opened;
+
+  try {
+    await sleep(timingFromEnv('MH_ATOM_SERIAL_SETTLE_MS', 250));
+
+    const ready = await waitForProtocolLine(
+      session,
+      (line) => line.startsWith('RMHCFG STATE'),
+      timeoutMs,
+      {
+        probeLine: 'RMHCFG?\n',
+        timeoutLine: '(timeout: Atom serial opened, but RMHCFG ready handshake did not complete)',
+      },
+    );
+    if (!ready.ok) return ready;
+
+    const sent = writeSerialLine(session, payloadLine);
+    if (!sent.ok) return sent;
+
+    const saved = await waitForProtocolLine(
+      session,
+      (line) => /^RMHCFG (OK|ERR)/.test(line),
+      timeoutMs,
+      {
+        timeoutLine: '(timeout: configuration was sent once; no RMHCFG OK/ERR reply, so it was not retried)',
+      },
+    );
+    if (!saved.ok) return { ...saved, readyLine: ready.line };
+    if (saved.line.startsWith('RMHCFG ERR')) {
+      return { ok: false, line: saved.line, readyLine: ready.line };
+    }
+    if (reboot) {
+      return { ok: true, line: saved.line, readyLine: ready.line };
+    }
+
+    const query = writeSerialLine(session, 'RMHCFG?\n');
+    if (!query.ok) return { ...query, readyLine: ready.line, savedLine: saved.line };
+    const state = await waitForProtocolLine(
+      session,
+      (line) => line.startsWith('RMHCFG STATE'),
+      timeoutMs,
+      {
+        timeoutLine: '(timeout: configuration was saved, but the confirmation state was not received)',
+      },
+    );
+    if (!state.ok) {
+      return { ...state, readyLine: ready.line, savedLine: saved.line };
+    }
+    return {
+      ok: true,
+      line: saved.line,
+      readyLine: ready.line,
+      stateLine: state.line,
+    };
+  } finally {
+    closeSerial(session);
+  }
 }
 
 async function main() {
@@ -219,7 +376,7 @@ async function main() {
   }
   const cfg = buildPayload(opts, token);
   if (Object.keys(cfg).length === 0) {
-    console.error('nothing to send: pass at least one of --wifi/--http-base/--ws-url/--device-id/--token');
+    console.error('nothing to send: pass at least one configuration option (for example --wifi or --vad-playback-cooldown-ms)');
     process.exit(2);
   }
   const payloadLine = `RMHCFG ${JSON.stringify(cfg)}\n`;
@@ -231,17 +388,16 @@ async function main() {
   }
 
   console.log(`provisioning ${opts.port} ...`);
-  const res = await sendAndWait(opts.port, payloadLine, opts.timeoutMs);
+  const res = await provisionOverSerial(opts.port, payloadLine, opts.timeoutMs, opts.reboot);
+  if (res.readyLine) console.log(`atom ready: ${res.readyLine}`);
+  if (res.savedLine) console.log(`atom: ${res.savedLine}`);
   console.log(`atom: ${res.line}`);
   if (!res.ok) process.exit(1);
   if (opts.reboot) {
     console.log('atom: reboot requested; skipping state read');
     return;
   }
-
-  // Confirm with a redacted state read.
-  const state = await sendAndWait(opts.port, 'RMHCFG?\n', opts.timeoutMs);
-  console.log(`atom: ${state.line}`);
+  console.log(`atom state: ${res.stateLine}`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

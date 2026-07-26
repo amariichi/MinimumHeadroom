@@ -1,6 +1,6 @@
 # Operator Stack and ASR Guide
 
-This guide collects the detailed runtime notes for the operator panel, `operator-bridge`, browser PTT, batch ASR, optional realtime ASR, and remote/mobile operation. The top-level [README](../../README.md) stays shorter on purpose; use this file when you are operating the mobile stack itself.
+This guide collects the detailed runtime notes for the operator panel, `operator-bridge`, browser PTT, batch ASR, optional realtime ASR, and remote/mobile operation. The top-level [README](../../README.md) stays shorter on purpose; use this file when you are operating the mobile stack itself. The independent multilingual interpreter is documented in the [Interpreter Stack Guide](interpreter-stack.md#english).
 
 [English](#english) | [日本語](#japanese)
 
@@ -19,6 +19,8 @@ Profile shorthand for `run-operator-once.sh`:
 
 - `--profile default`: Kokoro TTS + batch ASR only
 - `--profile realtime`: Kokoro TTS + Voxtral realtime ASR + Parakeet fallback
+- `--profile supertonic`: Supertonic 3 CPU TTS + batch ASR only
+- `--profile supertonic-realtime`: Supertonic 3 CPU TTS + Voxtral realtime ASR + Parakeet fallback
 - `--profile qwen3`: Qwen3 TTS + batch ASR only
 - `--profile qwen3-realtime`: Qwen3 TTS + Voxtral realtime ASR + Parakeet fallback
 
@@ -202,6 +204,14 @@ Voxtral realtime plus Parakeet fallback (best current experience, higher VRAM):
 
     ./scripts/run-operator-once.sh --profile realtime
 
+Supertonic 3 CPU TTS plus batch ASR:
+
+    ./scripts/run-operator-once.sh --profile supertonic
+
+Supertonic 3 CPU TTS plus Voxtral realtime ASR and Parakeet fallback:
+
+    ./scripts/run-operator-once.sh --profile supertonic-realtime
+
 Qwen3 TTS plus batch ASR:
 
     ./scripts/run-operator-once.sh --profile qwen3
@@ -256,6 +266,40 @@ Multi-agent control now follows one simple model:
 - `Delete` is the only normal visible lifecycle action; it performs pane stop/detach, worktree cleanup, and runtime record purge behind the scenes.
 - The built-in `operator` entry represents the primary pane and is not removed through the helper-agent delete flow.
 - After a full tmux shutdown and a fresh `./scripts/run-operator-once.sh`, helper agents are recreated from saved worktrees when those worktrees still exist; otherwise they reappear as `missing`.
+
+### Runtime mode and backend dialog
+
+In a current two-pane launch, the `Operator` title is also the compact runtime
+control. Tap it to open `Switch mode`, choose `Operator` or `Interpreter`,
+choose an allowlisted `Backend preset`, and press `Switch`. There is no
+permanent mode-button row, and changing either select has no effect until the
+explicit submit.
+
+Choosing another Operator profile restarts only the right backend pane with
+that profile. Choosing Interpreter replaces that same right pane with one of
+the four Interpreter presets. The left coding-agent pane and attached tmux
+client remain in place, so Codex does not need to be restarted. The page
+briefly reconnects on the same port 8765 and reloads after the selected backend
+reports ready. The Interpreter page exposes the same dialog through its active
+provider label.
+
+The tmux session and window keep the names assigned by the launcher that
+created the two-pane container, for example `agent:operator` or
+`interpreter:stack`. Those names are stable container identifiers, not the
+active-mode label. The active mode lives in window options and the service
+health response, while a switch respawns only the recorded right-pane id.
+Whenever Operator is active, it also receives the actual tmux session name for
+helper creation, so an Interpreter-to-Operator handoff does not require
+renaming the live session or window.
+
+The switch is authenticated and accepts fixed profile/preset names, not
+arbitrary commands. It starts no download or installation. If the selected
+backend cannot become ready, the controller attempts the exact previous
+profile/mode once and reports whether it was restored. The control is disabled
+for `run-face-app.sh`, direct low-level stack launches, and windows without the
+two trusted pane markers. See
+[Switch mode or backend from the web page](interpreter-stack.md#runtime-mode-switch)
+for the full handoff, Atom bridge, saved-recipe, and recovery behavior.
 
 ### Keyboard shortcuts
 
@@ -501,6 +545,8 @@ env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 
 - `--profile default`: Kokoro TTS + バッチ ASR のみ
 - `--profile realtime`: Kokoro TTS + Voxtral リアルタイム ASR + Parakeet フォールバック
+- `--profile supertonic`: Supertonic 3 CPU TTS + バッチ ASR のみ
+- `--profile supertonic-realtime`: Supertonic 3 CPU TTS + Voxtral リアルタイム ASR + Parakeet フォールバック
 - `--profile qwen3`: Qwen3 TTS + バッチ ASR のみ
 - `--profile qwen3-realtime`: Qwen3 TTS + Voxtral リアルタイム ASR + Parakeet フォールバック
 
@@ -606,6 +652,14 @@ Voxtral リアルタイム ASR + Parakeet フォールバック（現在の推�
 
     ./scripts/run-operator-once.sh --profile realtime
 
+Supertonic 3 CPU TTS + バッチ ASR のみ:
+
+    ./scripts/run-operator-once.sh --profile supertonic
+
+Supertonic 3 CPU TTS + Voxtral リアルタイム ASR + Parakeet フォールバック:
+
+    ./scripts/run-operator-once.sh --profile supertonic-realtime
+
 Qwen3 TTS + バッチ ASR のみ:
 
     ./scripts/run-operator-once.sh --profile qwen3
@@ -665,6 +719,33 @@ Voxtral リアルタイム ASR のみ（ハイブリッド構成より VRAM を�
 - tmux を完全に終了してから `./scripts/run-operator-once.sh` で新規起動した場合も、補助
   エージェントのワークツリーが残っていれば、新しい tmux ペインを作って復元します。
   ワークツリーがなければ、`missing` として再表示します。
+
+### 実行モードとバックエンドの切り替えダイアログ
+
+現行の二ペイン起動では、`Operator`というtitleが小さなruntime controlも兼ねます。
+tapして`Switch mode`を開き、`Operator`または`Interpreter`、allowlist内の
+`Backend preset`を選び、最後に`Switch`を押します。常設のmode button列は増やして
+いません。selectを変えただけでは何も開始しません。
+
+別のOperator profileを選ぶと、右側backendペインだけをそのprofileで再起動します。
+Interpreterを選ぶと、同じ右ペインを四つのInterpreter presetの一つへ置き換えます。
+左のcoding-agentペインと接続中tmux clientは維持されるため、Codexを再起動する必要は
+ありません。画面は同じport 8765へ一時的に再接続し、選択先のready確認後にreloadします。
+Interpreter画面でも、上部の使用中provider名から同じdialogを開けます。
+
+tmuxのsession名とwindow名は、二ペイン構成を最初に作ったlauncherの名前を維持します。
+例えば`agent:operator`または`interpreter:stack`です。これは現在のmode名ではなく、動作中の
+二ペイン構成を安定して参照する識別子です。現在のmodeはwindow optionとserviceのhealth
+responseで管理し、切替時は記録済みの右pane idだけをrespawnします。Operatorの動作中は
+helper作成処理にも実際のtmux session名を渡すため、InterpreterからOperatorへ移る場合も、
+sessionやwindowをrenameする必要はありません。
+
+切替は認証され、固定profile/preset名だけを受け付け、任意commandは実行しません。
+downloadやinstallも始めません。選択先がreadyにならなければ、直前のprofile/modeを一回だけ
+復元し、結果を表示します。`run-face-app.sh`、低レベルstackの直接起動、信頼する二ペイン
+markerがないwindowでは無効です。Atom bridge、保存recipe、復旧を含む完全な動作は
+[Web画面からモードまたはbackendを切り替える](interpreter-stack.md#ja-runtime-mode-switch)
+を参照してください。
 
 ### キーボードショートカット
 

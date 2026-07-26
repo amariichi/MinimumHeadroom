@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-26",
+  "runtime": {
+    "repository": "google/gemma-4-12B-it-qat-q4_0-gguf",
+    "revision": "29d097773436b69ff9feafd636ab4cf873786537",
+    "license": "apache-2.0",
+    "licenseUrl": "https://ai.google.dev/gemma/apache_2",
+    "files": [
+      {
+        "role": "main",
+        "filename": "gemma-4-12b-it-qat-q4_0.gguf",
+        "bytes": 6975879296,
+        "sha256": "93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b"
+      },
+      {
+        "role": "mmproj",
+        "filename": "mmproj-gemma-4-12b-it-qat-q4_0.gguf",
+        "bytes": 175115616,
+        "sha256": "cb018338a7538a9814d994bfe54644c71eb7ed54e31eae2f721e45fd3c260da7"
+      }
+    ]
+  },
+  "assistantSource": {
+    "repository": "google/gemma-4-12B-it-qat-q4_0-unquantized-assistant",
+    "revision": "18934064dd4c5c6cc3621f6381e7d377fc8cb7bd",
+    "license": "apache-2.0",
+    "licenseUrl": "https://ai.google.dev/gemma/apache_2",
+    "modelFile": {
+      "filename": "model.safetensors",
+      "bytes": 845719296,
+      "sha256": "67f1420cf24aa5065089aaed175223f7c245ccfda16111b6c56765afd7280db6"
+    }
+  },
+  "assistantGguf": {
+    "role": "standalone Gemma 4 MTP draft model",
+    "license": "apache-2.0",
+    "licenseUrl": "https://ai.google.dev/gemma/apache_2",
+    "filename": "mtp-gemma-4-12B-it-qat-Q4_0.gguf",
+    "quantization": "Q4_0",
+    "bytes": 322915136,
+    "sha256": "25f143b4c15b20cd04216e35e99bd7a56afc6f65e7a4e090a3e20091bb590cbb",
+    "convertedAt": "2026-07-23T10:39:41+09:00",
+    "converterUsesMtpFlag": false
+  },
+  "llamaCpp": {
+    "repository": "https://github.com/ggml-org/llama.cpp.git",
+    "license": "mit",
+    "licenseUrl": "https://github.com/ggml-org/llama.cpp/blob/master/LICENSE",
+    "knownGoodCommit": "c1304d7b28e14380dbb90252c92aa2798db60185",
+    "observedBuildVersion": 9671,
+    "requiredServerFlags": [
+      "--mmproj",
+      "--spec-draft-model",
+      "--spec-type",
+      "--spec-draft-n-max",
+      "--spec-draft-ngl"
+    ],
+    "assistantArchitectures": [
+      "Gemma4AssistantForCausalLM",
+      "Gemma4UnifiedAssistantForCausalLM"
+    ],
+    "conversionRequirements": "requirements/requirements-convert_hf_to_gguf.txt"
+  }
+}

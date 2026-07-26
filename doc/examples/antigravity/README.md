@@ -19,7 +19,7 @@ Files shipped here:
 | `settings-hooks.snippet.json`       | Compatibility hook entries to merge into `~/.gemini/settings.json` |
 | (skill source)                      | canonical `~/.agents/skills/<name>/SKILL.md`, with `doc/examples/skills` as a portable fallback |
 
-Before any of the steps below, **replace `/ABS/PATH/minimum-headroom`** in `mcp_config.json`, `hooks.json`, and `settings-hooks.snippet.json` with the absolute path of your checkout (e.g. `/home/you/github/minimum-headroom`).
+Before any of the steps below, **replace `/ABS/PATH/minimum-headroom`** in `mcp_config.json`, `hooks.json`, and `settings-hooks.snippet.json` with the absolute path of your checkout (for example, `/path/to/minimum-headroom`).
 
 For manual skill copies, resolve the same canonical-first sources used by the
 RMH launcher. These are shell variables for the commands below:

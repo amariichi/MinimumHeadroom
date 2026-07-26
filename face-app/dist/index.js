@@ -27,6 +27,8 @@ import { createMediaController, parseMediaAllowedEndpoints } from './media_contr
 import { createMediaProxy } from './media_proxy.js';
 import { createMediaApi } from './media_api.js';
 import { createAudioFocusController } from './audio_focus_controller.js';
+import { createRuntimeModeApi } from './runtime_mode_api.js';
+import { isRuntimeSelection } from './runtime_mode_config.js';
 
 const host = process.env.FACE_WS_HOST ?? '127.0.0.1';
 const port = Number.parseInt(process.env.FACE_WS_PORT ?? '8765', 10);
@@ -173,6 +175,19 @@ const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 const staticDir = path.resolve(currentDir, '../public');
 const repoRoot = path.resolve(currentDir, '../..');
+const requestedOperatorProfile =
+  process.env.MH_RUNTIME_OPERATOR_PROFILE ?? 'default';
+const operatorProfile = isRuntimeSelection(
+  'operator',
+  requestedOperatorProfile
+)
+  ? requestedOperatorProfile
+  : 'default';
+const runtimeModeApi = createRuntimeModeApi({
+  mode: 'operator',
+  selection: operatorProfile,
+  repoRoot
+});
 const ttsEnabled = (process.env.FACE_TTS_ENABLED ?? '1') !== '0';
 const fixedAckEnabled = (process.env.MH_FIXED_ACK_ENABLED ?? '1') !== '0';
 const operatorAsrBaseUrl = process.env.MH_OPERATOR_ASR_BASE_URL ?? 'http://127.0.0.1:8091';
@@ -354,15 +369,19 @@ async function handleInternalSay(payload, options = {}) {
     server.broadcast(sayPayload);
   }
   if (!ttsController) {
-    server.broadcast(toSayResultPayload(sayPayload, { accepted: false, spoken: false, reason: 'tts_disabled' }));
-    return;
+    const result = { accepted: false, spoken: false, reason: 'tts_disabled' };
+    server.broadcast(toSayResultPayload(sayPayload, result));
+    return result;
   }
   try {
     const result = await ttsController.handleSayPayload(sayPayload);
     server.broadcast(toSayResultPayload(sayPayload, result));
+    return result;
   } catch (error) {
     console.error('[face-app] internal say failed: ' + error.message);
-    server.broadcast(toSayResultPayload(sayPayload, { accepted: false, spoken: false }, 'controller_error'));
+    const result = { accepted: false, spoken: false, reason: 'controller_error' };
+    server.broadcast(toSayResultPayload(sayPayload, result, 'controller_error'));
+    return result;
   }
 }
 
@@ -585,6 +604,24 @@ const server = await startFaceWebSocketServer({
   },
   async onHttpRequest(request, response) {
     const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (parsedUrl.pathname === '/healthz') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        writeJson(response, 405, {
+          ok: false,
+          error: 'method_not_allowed'
+        });
+        return true;
+      }
+      writeJson(response, 200, {
+        ok: true,
+        service: 'operator',
+        profile: operatorProfile
+      });
+      return true;
+    }
+    if (await runtimeModeApi.handleHttpRequest(request, response)) {
+      return true;
+    }
     if (await mediaApi.handleHttpRequest(request, response)) {
       return true;
     }

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "interpreter-weather-example-v1",
+  "description": "One deterministic Japanese example for comparing the four interpreter presets. It is not an accuracy corpus.",
+  "generator": {
+    "engine": "supertonic-3-onnx",
+    "revision": "724fb5abbf5502583fb520898d45929e62f02c0b",
+    "voice": "F2",
+    "steps": 8,
+    "speed": 1.05,
+    "intraOpThreads": 10,
+    "interOpThreads": 1,
+    "outputSampleRate": 16000
+  },
+  "requiredBaselineLanguages": [
+    "ja"
+  ],
+  "cases": [
+    {
+      "id": "ja-weather",
+      "category": "baseline",
+      "language": "ja",
+      "text": "こんにちは。今日はいい天気ですね。雨は降るかな？",
+      "expectedTranscript": "こんにちは。今日はいい天気ですね。雨は降るかな？",
+      "expectedContentText": "こんにちは。今日はいい天気ですね。雨は降るかな？",
+      "expectedSource": "ja",
+      "expectedPipelineTarget": "en",
+      "expectedTarget": "en",
+      "referenceTranslation": "Hello. The weather is nice today. I wonder if it will rain?"
+    }
+  ]
+}

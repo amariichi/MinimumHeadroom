@@ -6,14 +6,16 @@ cd "$ROOT_DIR"
 
 WITH_REALTIME_ASR=0
 WITH_QWEN3_TTS=0
+WITH_SUPERTONIC=0
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/setup.sh [--with-realtime-asr] [--with-qwen3-tts]
+Usage: ./scripts/setup.sh [--with-realtime-asr] [--with-qwen3-tts] [--with-supertonic]
 
 Options:
   --with-realtime-asr  Also install the optional vLLM + Voxtral realtime ASR environment.
   --with-qwen3-tts     Also install the optional dedicated Qwen3-TTS environment.
+  --with-supertonic    Also install the optional CPU Supertonic 3 environment.
   -h, --help           Show this help.
 EOF
 }
@@ -26,6 +28,10 @@ while (($# > 0)); do
       ;;
     --with-qwen3-tts)
       WITH_QWEN3_TTS=1
+      shift
+      ;;
+    --with-supertonic)
+      WITH_SUPERTONIC=1
       shift
       ;;
     -h|--help)
@@ -66,6 +72,13 @@ if [[ "$WITH_QWEN3_TTS" == "1" ]]; then
   ./scripts/setup-qwen3-tts.sh
 else
   echo "[setup] skipping optional Qwen3-TTS setup (use --with-qwen3-tts to include Qwen3-TTS)"
+fi
+
+if [[ "$WITH_SUPERTONIC" == "1" ]]; then
+  echo "[setup] installing optional Supertonic 3 environment"
+  ./scripts/setup-supertonic.sh
+else
+  echo "[setup] skipping optional Supertonic setup (use --with-supertonic to include Supertonic 3)"
 fi
 
 echo "[setup] done"
