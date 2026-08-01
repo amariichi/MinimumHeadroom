@@ -44,3 +44,21 @@ test('operator mode entry reuses the title and keeps the confirmation UI in a di
   assert.match(behavior, /fetchImpl\('\/api\/runtime\/switch'/u);
   assert.match(behavior, /window\.location\.reload\(\)/u);
 });
+
+test('operator terminal bootstrap wires the existing WebSocket sender explicitly', async () => {
+  const source = await readFile(path.join(repoRoot, 'face-app/public/app.js'), 'utf8');
+  assert.match(
+    source,
+    /createOperatorTerminalView\(\{[\s\S]*scrollSpacer:\s*operatorTerminalScrollSpacerEl[\s\S]*sendPayload:\s*sendSocketPayload[\s\S]*\}\)/u
+  );
+});
+
+test('touch terminals use a native scroll spacer while xterm stays pinned in the viewport', async () => {
+  const source = await readFile(path.join(repoRoot, 'face-app/public/index.html'), 'utf8');
+  const styles = await readFile(path.join(repoRoot, 'face-app/public/styles.css'), 'utf8');
+  assert.match(source, /id="operator-terminal-scroll-spacer"/u);
+  assert.match(
+    styles,
+    /\.operator-mirror\.operator-native-scroll-proxy \.operator-terminal-host\s*\{[\s\S]*position:\s*sticky;[\s\S]*\.operator-mirror\.operator-native-scroll-proxy \.operator-terminal-scroll-spacer\s*\{[\s\S]*display:\s*block;/u
+  );
+});

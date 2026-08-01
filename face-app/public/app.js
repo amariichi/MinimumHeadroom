@@ -140,6 +140,12 @@ const operatorMirrorToggleEl = document.getElementById('operator-mirror-toggle')
 const operatorHelpToggleEl = document.getElementById('operator-help-toggle');
 const operatorKeyboardHelpEl = document.getElementById('operator-keyboard-help');
 const operatorMirrorEl = document.getElementById('operator-mirror');
+const operatorTerminalHostEl = document.getElementById('operator-terminal-host');
+const operatorTerminalScrollSpacerEl = document.getElementById('operator-terminal-scroll-spacer');
+const operatorTerminalCopyStatusEl = document.getElementById('operator-terminal-copy-status');
+const operatorTerminalCopyStatusTextEl = document.getElementById('operator-terminal-copy-status-text');
+const operatorTerminalCopyRetryEl = document.getElementById('operator-terminal-copy-retry');
+const operatorTerminalA11yCopyEl = document.getElementById('operator-terminal-a11y-copy');
 const agentDashboardEl = document.getElementById('agent-dashboard');
 const agentDashboardFaceCanvasEl = document.getElementById('agent-dashboard-face-canvas');
 const agentDashboardStatusEl = document.getElementById('agent-dashboard-status');
@@ -429,6 +435,7 @@ const dragState = {
 let operatorUiState = createInitialOperatorUiState();
 let operatorActivePrompt = null;
 let operatorTerminalSnapshotLines = [];
+let operatorTerminalView = null;
 let operatorMirrorAutoFollow = true;
 let operatorMirrorInitialScrollDone = false;
 let operatorMirrorFontScale = 1;
@@ -2463,6 +2470,7 @@ function installAgentDashboardControls() {
 
 function installOperatorStateRefreshHooks() {
   document.addEventListener('visibilitychange', () => {
+    syncOperatorTerminalVisibility();
     if (document.visibilityState === 'visible') {
       refreshAgentDashboardSoon();
     }
@@ -2630,6 +2638,45 @@ function sendSocketPayload(payload) {
   }
 }
 
+async function initializeOperatorTerminalView() {
+  if (operatorTerminalView || !operatorMirrorEl || !operatorTerminalHostEl) {
+    return operatorTerminalView;
+  }
+  const [{ createOperatorTerminalView }, { Terminal }] = await Promise.all([
+    import('./operator_terminal_view.js'),
+    import('@xterm/xterm')
+  ]);
+  operatorTerminalView = createOperatorTerminalView({
+    root: operatorMirrorEl,
+    host: operatorTerminalHostEl,
+    scrollSpacer: operatorTerminalScrollSpacerEl,
+    copyStatus: operatorTerminalCopyStatusEl,
+    copyStatusText: operatorTerminalCopyStatusTextEl,
+    copyRetryButton: operatorTerminalCopyRetryEl,
+    accessibleCopyButton: operatorTerminalA11yCopyEl,
+    TerminalClass: Terminal,
+    sessionId: resolveOperatorSessionId(),
+    sendPayload: sendSocketPayload
+  });
+  applyOperatorMirrorFontScale();
+  syncOperatorTerminalVisibility();
+  return operatorTerminalView;
+}
+
+function syncOperatorTerminalVisibility() {
+  if (!operatorTerminalView) {
+    return;
+  }
+  const flags = deriveOperatorUiFlags(operatorUiState);
+  operatorTerminalView.setVisible(Boolean(
+    operatorPanelEnabled
+    && panelsVisible
+    && flags.showPanel
+    && document.visibilityState !== 'hidden'
+    && !operatorMirrorEl?.classList.contains('hidden')
+  ));
+}
+
 function setOperatorStatusLine(text, tone = 'default') {
   if (!operatorStatusEl) {
     return;
@@ -2650,6 +2697,7 @@ function rememberOperatorBridgeSessionId(payload) {
   const sessionId = resolvePayloadSessionId(payload);
   if (sessionId !== '-') {
     operatorBridgeSessionId = sessionId;
+    operatorTerminalView?.setSession(sessionId);
   }
 }
 
@@ -3436,28 +3484,18 @@ function renderAnsiTextToMirror(text) {
 }
 
 function isOperatorMirrorNearBottom() {
-  if (!operatorMirrorEl) {
-    return true;
-  }
-  const distance = operatorMirrorEl.scrollHeight - operatorMirrorEl.scrollTop - operatorMirrorEl.clientHeight;
-  return distance <= OPERATOR_MIRROR_FOLLOW_THRESHOLD_PX;
+  return operatorTerminalView?.isNearBottom?.() ?? true;
 }
 
 function scrollOperatorMirrorToBottom() {
-  if (!operatorMirrorEl) {
-    return;
-  }
-  operatorMirrorEl.scrollTop = operatorMirrorEl.scrollHeight;
+  operatorTerminalView?.scrollToBottom?.();
 }
 
 function scrollOperatorMirrorByPage(direction) {
-  if (!operatorMirrorEl || !Number.isFinite(direction) || direction === 0) {
+  if (!operatorTerminalView || !Number.isFinite(direction) || direction === 0) {
     return false;
   }
-  const pageSize = Math.max(80, Math.floor(operatorMirrorEl.clientHeight * 0.9));
-  operatorMirrorEl.scrollTop += pageSize * direction;
-  handleOperatorMirrorScroll();
-  return true;
+  return operatorTerminalView.scrollPages(direction);
 }
 
 function handleOperatorMirrorScroll() {
@@ -3465,29 +3503,15 @@ function handleOperatorMirrorScroll() {
 }
 
 function ensureOperatorMirrorBaseFontSize() {
-  if (!operatorMirrorEl || operatorMirrorBaseFontSizePx > 0) {
+  if (operatorMirrorBaseFontSizePx > 0) {
     return;
   }
-  const computed = window.getComputedStyle(operatorMirrorEl).fontSize;
-  const px = Number.parseFloat(computed);
-  if (Number.isFinite(px) && px > 0) {
-    operatorMirrorBaseFontSizePx = px;
-  }
+  operatorMirrorBaseFontSizePx = 14;
 }
 
 function applyOperatorMirrorFontScale() {
-  if (!operatorMirrorEl) {
-    return;
-  }
   ensureOperatorMirrorBaseFontSize();
-  if (!operatorMirrorBaseFontSizePx) {
-    return;
-  }
-  if (operatorMirrorFontScale === 1) {
-    operatorMirrorEl.style.fontSize = '';
-  } else {
-    operatorMirrorEl.style.fontSize = `${operatorMirrorBaseFontSizePx * operatorMirrorFontScale}px`;
-  }
+  operatorTerminalView?.setFontScale?.(operatorMirrorFontScale);
 }
 
 function pinchDistanceFromTouches(touches) {
@@ -3645,28 +3669,13 @@ function handleOperatorMirrorTouchCancel() {
 }
 
 function renderOperatorTerminalSnapshot() {
-  if (!operatorMirrorEl) {
+  if (!operatorTerminalView) {
     return;
   }
-  if (!operatorTerminalSnapshotLines || operatorTerminalSnapshotLines.length === 0) {
-    operatorMirrorEl.textContent = '(empty)';
-    return;
-  }
-
-  const shouldStickToBottom = operatorMirrorAutoFollow || isOperatorMirrorNearBottom();
-  renderAnsiTextToMirror(operatorTerminalSnapshotLines.join('\n'));
-
-  if (!operatorMirrorInitialScrollDone) {
-    scrollOperatorMirrorToBottom();
-    operatorMirrorInitialScrollDone = true;
-    operatorMirrorAutoFollow = true;
-    return;
-  }
-
-  if (shouldStickToBottom) {
-    scrollOperatorMirrorToBottom();
-    operatorMirrorAutoFollow = true;
-  }
+  void operatorTerminalView.handleSnapshot({
+    pane: operatorMirrorPaneId,
+    lines: operatorTerminalSnapshotLines
+  });
 }
 
 function updateOperatorUi() {
@@ -3699,6 +3708,7 @@ function updateOperatorUi() {
     if (operatorCurrentAgentButtonEl) {
       operatorCurrentAgentButtonEl.classList.add('hidden');
     }
+    syncOperatorTerminalVisibility();
     return;
   }
 
@@ -3801,7 +3811,7 @@ function updateOperatorUi() {
     }
   }
 
-  renderOperatorTerminalSnapshot();
+  syncOperatorTerminalVisibility();
 }
 
 function handleOperatorPrompt(payload) {
@@ -3933,8 +3943,8 @@ function handleOperatorRecoverResult(payload) {
   });
 }
 
-function handleOperatorTerminalSnapshot(payload) {
-  if (!payload || !Array.isArray(payload.lines)) {
+function trackOperatorTerminalActivity(payload) {
+  if (!payload || typeof payload !== 'object') {
     return;
   }
   rememberOperatorBridgeSessionId(payload);
@@ -3959,9 +3969,31 @@ function handleOperatorTerminalSnapshot(payload) {
     operatorMirrorActivitySuppression = null;
   }
   syncSelectedDashboardAgentToMirrorPane();
+  updateOperatorCurrentAgentBar();
+}
+
+function handleOperatorTerminalSnapshot(payload) {
+  if (!payload || !Array.isArray(payload.lines)) {
+    return;
+  }
+  trackOperatorTerminalActivity(payload);
   operatorTerminalSnapshotLines = payload.lines.map((line) => String(line));
   renderOperatorTerminalSnapshot();
-  updateOperatorCurrentAgentBar();
+}
+
+function handleOperatorTerminalReset(payload) {
+  trackOperatorTerminalActivity(payload);
+  void operatorTerminalView?.handleReset(payload);
+}
+
+function handleOperatorTerminalData(payload) {
+  trackOperatorTerminalActivity(payload);
+  void operatorTerminalView?.handleData(payload);
+}
+
+function handleOperatorTerminalError(payload) {
+  rememberOperatorBridgeSessionId(payload);
+  operatorTerminalView?.handleError(payload);
 }
 
 function showUtterance(text, ttlMs) {
@@ -5126,6 +5158,12 @@ function handlePayload(payload) {
     }
   } else if (payload.type === 'operator_terminal_snapshot') {
     handleOperatorTerminalSnapshot(payload);
+  } else if (payload.type === 'operator_terminal_reset') {
+    handleOperatorTerminalReset(payload);
+  } else if (payload.type === 'operator_terminal_data') {
+    handleOperatorTerminalData(payload);
+  } else if (payload.type === 'operator_terminal_error') {
+    handleOperatorTerminalError(payload);
   } else if (payload.type === 'operator_realtime_asr_delta') {
     handleOperatorRealtimeAsrDelta(payload);
   } else if (payload.type === 'operator_realtime_asr_done') {
@@ -5155,6 +5193,7 @@ function connectWebSocket() {
   socket.addEventListener('open', () => {
     reconnectAttempts = 0;
     setWsStatus('online', 'ok');
+    operatorTerminalView?.socketOpen();
     dispatchOperatorUiAction({ type: 'socket_open' });
     setOperatorStatusLine('connected', 'ok');
   });
@@ -5175,6 +5214,7 @@ function connectWebSocket() {
 
   socket.addEventListener('close', () => {
     setWsStatus('offline', 'warn');
+    operatorTerminalView?.socketClose();
     dispatchOperatorUiAction({ type: 'socket_close' });
     setOperatorStatusLine('offline', 'warn');
 
@@ -5253,6 +5293,7 @@ function setPanelsVisible(visible) {
     panel.classList.toggle('panel-hidden', !visible);
   }
   uiHiddenHintEl.classList.toggle('hidden', visible);
+  syncOperatorTerminalVisibility();
 }
 
 function togglePanelsVisible() {
@@ -6175,6 +6216,7 @@ async function bootstrap() {
   installAudioReplayButton();
   installMediaPlayerControls();
   if (operatorPanelEnabled) {
+    await initializeOperatorTerminalView();
     installOperatorControls();
   } else {
     updateOperatorUi();
@@ -6244,6 +6286,8 @@ window.addEventListener('beforeunload', () => {
   stopActiveBrowserAudio();
   mediaPlayerDragController?.destroy();
   mediaPlayer.destroy();
+  operatorTerminalView?.dispose();
+  operatorTerminalView = null;
   renderer.setAnimationLoop(null);
   renderer.dispose();
   agentDashboardFaceRenderer?.dispose();

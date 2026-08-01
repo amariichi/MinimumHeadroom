@@ -2,13 +2,27 @@ import http from 'node:http';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 
 const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const OPERATOR_BRIDGE_PROTOCOL = 'mh-operator-bridge-v1';
+const TERMINAL_CLIENT_MESSAGE_TYPES = new Set([
+  'operator_terminal_subscribe',
+  'operator_terminal_unsubscribe',
+  'operator_terminal_ack',
+  'operator_terminal_resync'
+]);
+const TERMINAL_STREAM_MESSAGE_TYPES = new Set([
+  'operator_terminal_reset',
+  'operator_terminal_data',
+  'operator_terminal_error'
+]);
 
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
   ['.js', 'application/javascript; charset=utf-8'],
+  ['.mjs', 'application/javascript; charset=utf-8'],
   ['.json', 'application/json; charset=utf-8'],
   ['.svg', 'image/svg+xml'],
   ['.png', 'image/png'],
@@ -47,6 +61,23 @@ function asNonEmptyString(value) {
 }
 
 export function receivedPayloadLogMessage(payload) {
+  if (payload?.type === 'operator_terminal_data' || payload?.type === 'operator_terminal_ack') {
+    return null;
+  }
+  if (payload?.type === 'operator_terminal_reset') {
+    const dataBase64 = typeof payload.data_base64 === 'string' ? payload.data_base64 : '';
+    return JSON.stringify({
+      v: payload.v,
+      type: payload.type,
+      session_id: payload.session_id,
+      pane: payload.pane,
+      generation: payload.generation,
+      seq: payload.seq,
+      cols: payload.cols,
+      rows: payload.rows,
+      data_base64_chars: dataBase64.length
+    });
+  }
   if (payload?.type !== 'atom_audio_frame') {
     return JSON.stringify(payload);
   }
@@ -73,6 +104,49 @@ export function receivedPayloadLogMessage(payload) {
     seq: payload.seq,
     audio_base64_chars: audioBase64.length
   });
+}
+
+export function armTerminalResetAfterDrain(socket, requestReset) {
+  if (
+    !socket
+    || socket.__mhTerminalResetOnDrain === true
+    || typeof socket.once !== 'function'
+    || typeof requestReset !== 'function'
+  ) {
+    return false;
+  }
+  socket.__mhTerminalResetOnDrain = true;
+  socket.once('drain', () => {
+    socket.__mhTerminalResetOnDrain = false;
+    if (socket.__mhTerminalNeedsReset === true) {
+      requestReset();
+    }
+  });
+  return true;
+}
+
+export function encodeTerminalPayloadForSubscription(payload, subscription) {
+  if (
+    subscription?.dataEncoding !== 'gzip-base64'
+    || !TERMINAL_STREAM_MESSAGE_TYPES.has(payload?.type)
+    || typeof payload?.data_base64 !== 'string'
+  ) {
+    return payload;
+  }
+  const raw = Buffer.from(payload.data_base64, 'base64');
+  if (raw.length === 0) {
+    return payload;
+  }
+  const compressed = gzipSync(raw, { level: 6 });
+  if (compressed.length >= raw.length) {
+    return payload;
+  }
+  return {
+    ...payload,
+    data_encoding: 'gzip-base64',
+    data_base64: compressed.toString('base64'),
+    data_uncompressed_bytes: raw.length
+  };
 }
 
 function timingSafeStringEqual(left, right) {
@@ -364,12 +438,14 @@ function parseFrames(socket, state, chunk, onText, log) {
 
 function safeSocketWrite(socket, frame) {
   if (socket.destroyed || socket.writableEnded) {
-    return;
+    return false;
   }
   try {
     socket.write(frame);
+    return true;
   } catch {
     socket.destroy();
+    return false;
   }
 }
 
@@ -404,13 +480,19 @@ async function serveStaticFile(
     : pathname === '/'
       ? `/${safeDefaultDocument}`
       : pathname;
-  if (requestPath === '/vendor/three.module.js') {
-    const vendorPath = path.resolve(staticDir, '../../node_modules/three/build/three.module.js');
+  const vendorRelativePath = {
+    '/vendor/three.module.js': '../../node_modules/three/build/three.module.js',
+    '/vendor/xterm.mjs': '../../node_modules/@xterm/xterm/lib/xterm.mjs',
+    '/vendor/xterm.css': '../../node_modules/@xterm/xterm/css/xterm.css'
+  }[requestPath];
+  if (vendorRelativePath) {
+    const vendorPath = path.resolve(staticDir, vendorRelativePath);
     try {
       const content = await readFile(vendorPath);
+      const extension = path.extname(vendorPath).toLowerCase();
       response.writeHead(200, {
-        'content-type': MIME_TYPES.get('.js'),
-        'cache-control': 'no-store'
+        'content-type': MIME_TYPES.get(extension) ?? 'application/octet-stream',
+        'cache-control': 'public, max-age=86400, must-revalidate'
       });
       response.end(content);
     } catch {
@@ -473,6 +555,9 @@ export async function startFaceWebSocketServer(options = {}) {
   const authToken = asNonEmptyString(options.authToken);
   const requireOriginCheck = options.requireOriginCheck === true;
   const sendAudioToArduino = options.sendAudioToArduino === true;
+  const terminalSocketHighWaterBytes = Number.isFinite(options.terminalSocketHighWaterBytes)
+    ? Math.max(16 * 1024, Math.min(8 * 1024 * 1024, Math.floor(options.terminalSocketHighWaterBytes)))
+    : 256 * 1024;
   const allowedOrigins = new Set(
     (Array.isArray(options.allowedOrigins) ? options.allowedOrigins : [])
       .map((origin) => normalizeOrigin(origin))
@@ -482,6 +567,7 @@ export async function startFaceWebSocketServer(options = {}) {
 
   const sockets = new Set();
   const replayablePayloads = new Map();
+  let nextTerminalSubscriberId = 1;
 
   function websocketProtocolSet(header) {
     const values = Array.isArray(header) ? header : [header];
@@ -506,12 +592,29 @@ export async function startFaceWebSocketServer(options = {}) {
     return websocketProtocolSet(request.headers["sec-websocket-protocol"]).has("mh-atom-http-bridge-v1");
   }
 
+  function isOperatorBridgeUpgrade(request) {
+    return websocketProtocolSet(request.headers['sec-websocket-protocol']).has(OPERATOR_BRIDGE_PROTOCOL);
+  }
+
   function isArduinoSocket(socket) {
     return socket && socket.__mhArduinoClient === true;
   }
 
   function isAudioFocusSocket(socket) {
     return socket && socket.__mhAudioFocusObserver === true;
+  }
+
+  function isOperatorBridgeSocket(socket) {
+    return socket && socket.__mhOperatorBridge === true;
+  }
+
+  function isTerminalBrowserSocket(socket) {
+    return Boolean(
+      socket
+      && !isOperatorBridgeSocket(socket)
+      && !isAudioFocusSocket(socket)
+      && !isAtomSocket(socket)
+    );
   }
 
   function isAtomSocket(socket) {
@@ -555,6 +658,27 @@ export async function startFaceWebSocketServer(options = {}) {
   }
 
   function shouldSendPayloadToSocket(socket, payload) {
+    if (TERMINAL_STREAM_MESSAGE_TYPES.has(payload?.type)) {
+      const subscription = socket?.__mhTerminalSubscription;
+      if (!isTerminalBrowserSocket(socket) || !subscription) {
+        return false;
+      }
+      const payloadSessionId = asNonEmptyString(payload.session_id) ?? 'default';
+      if (subscription.sessionId !== payloadSessionId) {
+        return false;
+      }
+      const targetSubscriberId = asNonEmptyString(payload.subscriber_id);
+      if (targetSubscriberId && targetSubscriberId !== socket.__mhTerminalSubscriberId) {
+        return false;
+      }
+      if (payload.type === 'operator_terminal_data' && socket.__mhTerminalNeedsReset === true) {
+        return false;
+      }
+      return true;
+    }
+    if (TERMINAL_CLIENT_MESSAGE_TYPES.has(payload?.type)) {
+      return isOperatorBridgeSocket(socket);
+    }
     if (isAudioFocusSocket(socket)) {
       return payload?.type === 'audio_focus';
     }
@@ -622,10 +746,80 @@ export async function startFaceWebSocketServer(options = {}) {
 
   function sendPayloadToSocket(socket, payload) {
     try {
-      safeSocketWrite(socket, encodeServerFrame(0x1, JSON.stringify(payload)));
-      return true;
+      return safeSocketWrite(socket, encodeServerFrame(0x1, JSON.stringify(payload)));
     } catch {
       return false;
+    }
+  }
+
+  function sendToOperatorBridges(payload) {
+    let sent = false;
+    for (const peer of sockets) {
+      if (isOperatorBridgeSocket(peer)) {
+        sent = sendPayloadToSocket(peer, payload) || sent;
+      }
+    }
+    return sent;
+  }
+
+  function terminalControlPayload(socket, payload, subscription = socket.__mhTerminalSubscription) {
+    return {
+      ...payload,
+      v: 1,
+      session_id: subscription?.sessionId ?? asNonEmptyString(payload?.session_id) ?? 'default',
+      subscriber_id: socket.__mhTerminalSubscriberId,
+      ts: Number.isFinite(payload?.ts) ? payload.ts : Date.now()
+    };
+  }
+
+  function handleTerminalClientPayload(socket, payload) {
+    if (!TERMINAL_CLIENT_MESSAGE_TYPES.has(payload?.type) || !isTerminalBrowserSocket(socket)) {
+      return false;
+    }
+    if (payload.type === 'operator_terminal_subscribe') {
+      const sessionId = asNonEmptyString(payload.session_id) ?? 'default';
+      const requestedEncodings = Array.isArray(payload.data_encodings)
+        ? payload.data_encodings.map((value) => asNonEmptyString(value)).filter(Boolean)
+        : [];
+      const dataEncoding = requestedEncodings.includes('gzip-base64') ? 'gzip-base64' : 'base64';
+      const previous = socket.__mhTerminalSubscription;
+      if (previous && previous.sessionId !== sessionId) {
+        sendToOperatorBridges(terminalControlPayload(socket, {
+          type: 'operator_terminal_unsubscribe'
+        }, previous));
+      }
+      socket.__mhTerminalSubscription = { sessionId, dataEncoding };
+      socket.__mhTerminalNeedsReset = false;
+      sendToOperatorBridges(terminalControlPayload(socket, payload));
+      return true;
+    }
+    const subscription = socket.__mhTerminalSubscription;
+    if (!subscription) {
+      return true;
+    }
+    if (payload.type === 'operator_terminal_unsubscribe') {
+      sendToOperatorBridges(terminalControlPayload(socket, payload, subscription));
+      socket.__mhTerminalSubscription = null;
+      socket.__mhTerminalNeedsReset = false;
+      return true;
+    }
+    const outgoing = terminalControlPayload(socket, payload, subscription);
+    if (socket.__mhTerminalNeedsReset === true) {
+      outgoing.needs_reset = true;
+      socket.__mhTerminalNeedsReset = false;
+    }
+    sendToOperatorBridges(outgoing);
+    return true;
+  }
+
+  function replayTerminalSubscriptionsToBridge(bridgeSocket) {
+    for (const peer of sockets) {
+      if (!isTerminalBrowserSocket(peer) || !peer.__mhTerminalSubscription) {
+        continue;
+      }
+      sendPayloadToSocket(bridgeSocket, terminalControlPayload(peer, {
+        type: 'operator_terminal_subscribe'
+      }));
     }
   }
 
@@ -653,7 +847,9 @@ export async function startFaceWebSocketServer(options = {}) {
   function broadcastPayload(payload, excludeSocket = null) {
     try {
       rememberReplayablePayload(payload);
-      const frame = encodeServerFrame(0x1, JSON.stringify(payload));
+      const plainFrame = encodeServerFrame(0x1, JSON.stringify(payload));
+      let gzipPayload = null;
+      let gzipFrame = null;
       for (const peer of sockets) {
         if (excludeSocket && peer === excludeSocket) {
           continue;
@@ -661,7 +857,40 @@ export async function startFaceWebSocketServer(options = {}) {
         if (!shouldSendPayloadToSocket(peer, payload)) {
           continue;
         }
-        safeSocketWrite(peer, frame);
+        if (
+          payload?.type === 'operator_terminal_data'
+          && Number(peer.writableLength ?? 0) > terminalSocketHighWaterBytes
+        ) {
+          peer.__mhTerminalNeedsReset = true;
+          armTerminalResetAfterDrain(peer, () => {
+            if (!sockets.has(peer) || !peer.__mhTerminalSubscription) {
+              return;
+            }
+            sendToOperatorBridges(terminalControlPayload(peer, {
+              type: 'operator_terminal_resync',
+              reason: 'socket_backpressure'
+            }));
+          });
+          continue;
+        }
+        let frame = plainFrame;
+        if (
+          peer.__mhTerminalSubscription?.dataEncoding === 'gzip-base64'
+          && TERMINAL_STREAM_MESSAGE_TYPES.has(payload?.type)
+          && typeof payload?.data_base64 === 'string'
+        ) {
+          if (gzipPayload === null) {
+            gzipPayload = encodeTerminalPayloadForSubscription(payload, peer.__mhTerminalSubscription);
+            gzipFrame = gzipPayload === payload
+              ? plainFrame
+              : encodeServerFrame(0x1, JSON.stringify(gzipPayload));
+          }
+          frame = gzipFrame;
+        }
+        const sent = safeSocketWrite(peer, frame);
+        if (sent && payload?.type === 'operator_terminal_reset') {
+          peer.__mhTerminalNeedsReset = false;
+        }
       }
       // Fire the Atom TTS dispatch hook on every tts_audio / tts_audio_ref
       // broadcast, regardless of which sockets received it. face-app does not
@@ -768,6 +997,7 @@ export async function startFaceWebSocketServer(options = {}) {
     const arduinoClient = isArduinoUpgrade(request);
     const audioFocusObserver = isAudioFocusUpgrade(request);
     const atomBridgeClient = isAtomBridgeUpgrade(request);
+    const operatorBridgeClient = isOperatorBridgeUpgrade(request);
     const responseHeaders = [
       'HTTP/1.1 101 Switching Protocols',
       'Upgrade: websocket',
@@ -780,6 +1010,8 @@ export async function startFaceWebSocketServer(options = {}) {
       responseHeaders.push('Sec-WebSocket-Protocol: mh-atom-http-bridge-v1');
     } else if (arduinoClient) {
       responseHeaders.push('Sec-WebSocket-Protocol: arduino');
+    } else if (operatorBridgeClient) {
+      responseHeaders.push(`Sec-WebSocket-Protocol: ${OPERATOR_BRIDGE_PROTOCOL}`);
     }
     responseHeaders.push('\r\n');
     socket.write(responseHeaders.join('\r\n'));
@@ -787,8 +1019,17 @@ export async function startFaceWebSocketServer(options = {}) {
     socket.__mhArduinoClient = arduinoClient;
     socket.__mhAudioFocusObserver = audioFocusObserver;
     socket.__mhAtomBridgeClient = atomBridgeClient;
+    socket.__mhOperatorBridge = operatorBridgeClient;
+    socket.__mhTerminalSubscriberId = `terminal-${nextTerminalSubscriberId}`;
+    nextTerminalSubscriberId += 1;
+    socket.__mhTerminalSubscription = null;
+    socket.__mhTerminalNeedsReset = false;
+    socket.__mhTerminalResetOnDrain = false;
     sockets.add(socket);
     replayCachedPayloads(socket);
+    if (operatorBridgeClient) {
+      replayTerminalSubscriptionsToBridge(socket);
+    }
     const state = { buffer: Buffer.alloc(0) };
 
     socket.on('data', (chunk) => {
@@ -809,11 +1050,22 @@ export async function startFaceWebSocketServer(options = {}) {
             if (payload?.type === 'atom_audio_frame') {
               socket.__mhAtomClient = true;
             }
+            if (handleTerminalClientPayload(socket, payload)) {
+              onPayload(payload, {
+                socket,
+                isArduino: false,
+                isAtom: false,
+                isAtomBridge: false,
+                isOperatorBridge: false
+              });
+              return;
+            }
             const payloadDirective = onPayload(payload, {
               socket,
               isArduino: isArduinoSocket(socket),
               isAtom: isAtomSocket(socket),
-              isAtomBridge: socket.__mhAtomBridgeClient === true
+              isAtomBridge: socket.__mhAtomBridgeClient === true,
+              isOperatorBridge: isOperatorBridgeSocket(socket)
             });
             const allowRelay =
               payload?.type !== 'atom_endpoint_state'
@@ -839,6 +1091,11 @@ export async function startFaceWebSocketServer(options = {}) {
     });
 
     socket.on('close', () => {
+      if (socket.__mhTerminalSubscription) {
+        sendToOperatorBridges(terminalControlPayload(socket, {
+          type: 'operator_terminal_unsubscribe'
+        }));
+      }
       sockets.delete(socket);
       if (onClientClose) {
         try {
@@ -846,7 +1103,8 @@ export async function startFaceWebSocketServer(options = {}) {
             socket,
             isArduino: isArduinoSocket(socket),
             isAtom: isAtomSocket(socket),
-            isAtomBridge: socket.__mhAtomBridgeClient === true
+            isAtomBridge: socket.__mhAtomBridgeClient === true,
+            isOperatorBridge: isOperatorBridgeSocket(socket)
           });
         } catch (error) {
           log.warn?.(`[face-app] client close callback failed: ${error.message}`);

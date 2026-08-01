@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createOperatorBridgeRuntime, createTmuxController, normalizeOperatorKeyToken } from '../../face-app/dist/operator_bridge.js';
+import {
+  createOperatorBridgeRuntime,
+  createTmuxController,
+  loadBridgeOptionsFromEnv,
+  normalizeOperatorKeyToken
+} from '../../face-app/dist/operator_bridge.js';
 
 function createFakeTmux() {
   const calls = [];
@@ -56,10 +61,63 @@ function createRuntimeHarness(options = {}) {
   return { runtime, payloads, tmux };
 }
 
+test('Control Mode terminal defaults to two timer-driven updates per second', () => {
+  const options = loadBridgeOptionsFromEnv({ MH_BRIDGE_TMUX_PANE: '%1' });
+  assert.equal(options.terminalTransport, 'control');
+  assert.equal(options.terminalBatchDelayMs, 500);
+});
+
 function findLatestAck(payloads) {
   const acks = payloads.filter((item) => item.type === 'operator_ack');
   return acks[acks.length - 1] ?? null;
 }
+
+test('control terminal messages are delegated and pane switches restart the active stream', async () => {
+  const calls = [];
+  const tmux = createFakeTmux();
+  const terminalTransport = {
+    async handleSubscribe(payload) { calls.push(['subscribe', payload.subscriber_id]); },
+    async handleUnsubscribe(payload) { calls.push(['unsubscribe', payload.subscriber_id]); },
+    async handleAck(payload) { calls.push(['ack', payload.seq]); },
+    async handleResync(payload) { calls.push(['resync', payload.subscriber_id]); },
+    async setPane() { calls.push(['setPane', tmux.pane]); },
+    async disconnectAll() { calls.push(['disconnectAll']); },
+    async shutdown() { calls.push(['shutdown']); }
+  };
+  const runtime = createOperatorBridgeRuntime({
+    sessionId: 's1',
+    tmuxController: tmux,
+    defaultRecoveryTmuxPane: 'demo:0.0',
+    terminalTransport,
+    terminalTransportMode: 'control',
+    sendPayload() { return true; }
+  });
+
+  await runtime.handlePayload({ type: 'operator_terminal_subscribe', subscriber_id: 'browser-1' });
+  await runtime.handlePayload({ type: 'operator_terminal_ack', subscriber_id: 'browser-1', seq: 3 });
+  await runtime.handlePayload({ type: 'operator_terminal_resync', subscriber_id: 'browser-1' });
+  await runtime.handlePayload({ type: 'operator_terminal_unsubscribe', subscriber_id: 'browser-1' });
+  await runtime.handlePayload({
+    type: 'operator_bridge_set_pane',
+    session_id: 's1',
+    pane: '%22',
+    agent_id: 'helper-2'
+  });
+  assert.deepEqual(calls.slice(0, 5), [
+    ['subscribe', 'browser-1'],
+    ['ack', 3],
+    ['resync', 'browser-1'],
+    ['unsubscribe', 'browser-1'],
+    ['setPane', '%22']
+  ]);
+  assert.equal(tmux.calls.some((call) => call.kind === 'setPane' && call.pane === '%22'), true);
+  assert.equal(await runtime.publishTerminalSnapshot('s1'), false);
+  assert.equal(tmux.calls.some((call) => call.kind === 'captureTail'), false);
+
+  await runtime.disconnectTerminalSubscribers();
+  await runtime.shutdown();
+  assert.deepEqual(calls.slice(-2), [['disconnectAll'], ['shutdown']]);
+});
 
 async function openTextPrompt(runtime, requestId = 'r1') {
   await runtime.handlePayload({

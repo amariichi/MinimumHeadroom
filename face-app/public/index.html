@@ -6,6 +6,7 @@
     <title>Minimum Headroom Face</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/runtime_mode.css" />
+    <link rel="stylesheet" href="/vendor/xterm.css" />
   </head>
   <body class="boot-pending">
     <main class="stage" id="stage">
@@ -213,7 +214,20 @@
           <button id="operator-key-right" type="button" class="operator-key-btn" aria-label="Right">→</button>
         </div>
 
-        <pre id="operator-mirror" class="operator-mirror" aria-label="Read only terminal mirror"></pre>
+        <div
+          id="operator-mirror"
+          class="operator-mirror"
+          aria-label="Read only terminal. Scroll normally, or hold still, drag to select text, release to confirm, and tap Copy."
+          tabindex="0"
+        >
+          <div id="operator-terminal-copy-status" class="operator-terminal-copy-status" role="status" aria-live="polite" hidden>
+            <span id="operator-terminal-copy-status-text"></span>
+            <button id="operator-terminal-copy-retry" class="operator-terminal-copy-retry" type="button" hidden>Retry</button>
+          </div>
+          <div id="operator-terminal-host" class="operator-terminal-host"></div>
+          <div id="operator-terminal-scroll-spacer" class="operator-terminal-scroll-spacer" aria-hidden="true"></div>
+          <button id="operator-terminal-a11y-copy" class="visually-hidden" type="button">Copy selected terminal text</button>
+        </div>
         <p id="operator-ack" class="operator-ack">ack: -</p>
       </section>
 
@@ -287,7 +301,8 @@
     <script type="importmap">
       {
         "imports": {
-          "three": "/vendor/three.module.js"
+          "three": "/vendor/three.module.js",
+          "@xterm/xterm": "/vendor/xterm.mjs"
         }
       }
     </script>

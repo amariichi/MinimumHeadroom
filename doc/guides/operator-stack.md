@@ -109,7 +109,7 @@ If the agent process runs in a separate Docker network namespace, also see the `
 - batch `asr-worker` (unless you disable it)
 - optional realtime ASR (`run-vllm-voxtral.sh`) when enabled
 
-`run-operator-bridge.sh` mirrors exactly one tmux pane and sends approved input back into that pane with `tmux send-keys`.
+`run-operator-bridge.sh` streams exactly one tmux pane through tmux Control Mode and sends approved input back into that pane with `tmux send-keys`. The browser uses xterm.js for ANSI/VT parsing and keeps 5,000 lines of local scrollback. The bridge sends terminal bytes only while a browser is visibly subscribed.
 
 ### tmux pane targeting
 
@@ -122,8 +122,12 @@ Important bridge variables:
 - `MH_BRIDGE_RECOVERY_TMUX_PANE`: the safe default pane used by hidden recovery
 - `MH_BRIDGE_RESTART_COMMAND`: restart command used by the `Restart` button or recovery flows
 - `MH_BRIDGE_RESTART_PRE_KEYS`: keys sent before the restart command
-- `MH_BRIDGE_MIRROR_LINES`: terminal tail size
-- `MH_BRIDGE_MIRROR_INTERVAL_MS`: mirror publish interval
+- `MH_BRIDGE_TERMINAL_TRANSPORT`: `control` (default) or `snapshot` (temporary rollback)
+- `MH_BRIDGE_TERMINAL_SCROLLBACK`: xterm checkpoint and browser scrollback line limit (default `5000`)
+- `MH_BRIDGE_TERMINAL_BATCH_DELAY_MS`: maximum live-output batching delay (default `500` ms, up to two updates per second)
+- `MH_BRIDGE_TERMINAL_BATCH_MAX_BYTES`: maximum incremental batch size (default `16384`)
+- `MH_BRIDGE_MIRROR_LINES`: rollback snapshot tail size; used only in `snapshot` mode
+- `MH_BRIDGE_MIRROR_INTERVAL_MS`: rollback snapshot polling interval; used only in `snapshot` mode
 
 </details>
 
@@ -254,6 +258,12 @@ In the full operator stack:
 - `↑`, `Select`, and `↓` are always shown
 - desktop browsers show a small `?` button near `Esc` for the keyboard cheat sheet
 - terminal mirror is read-only
+- ordinary one-finger movement keeps the browser's native momentum scrolling; a local spacer maps that position into xterm's saved buffer because xterm.js 6 no longer exposes its history as a native overflow element
+- holding one finger still for about 0.55 seconds selects the character under it, dragging extends the range, and releasing confirms the selection
+- no permanent copy toolbar is shown; a contextual `Copy` button appears after release, then changes to `Retry` only if the clipboard write fails
+- hiding the panel or backgrounding the page unsubscribes only the terminal stream; prompts, TTS, status, and audio stay connected
+
+The default Control Mode path does not poll `capture-pane`. It uses one checkpoint on subscribe or resynchronization, followed by sequenced `operator_terminal_data` increments. A browser with the standard `DecompressionStream` gzip API negotiates `gzip-base64` payloads; older browsers automatically stay on plain Base64. To diagnose an environment-specific Control Mode problem, temporarily set `MH_BRIDGE_TERMINAL_TRANSPORT=snapshot` and restart the existing stack with `./scripts/restart-operator-stack-in-place.sh`. Snapshot mode restores the old full-tail polling behavior and therefore uses substantially more network data.
 
 `PTT JA` and `PTT EN` insert recognized text at the current caret position in the text fallback input, not only at the end of the draft.
 
@@ -520,7 +530,7 @@ env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 - バッチ処理用の `asr-worker`（無効化しない限り）
 - 任意のリアルタイム ASR（`run-vllm-voxtral.sh`、有効時）
 
-`run-operator-bridge.sh` は 1 つの tmux ペインだけをミラーし、承認済みの入力を `tmux send-keys` でそのペインへ送ります。
+`run-operator-bridge.sh` は 1 つの tmux ペインだけを tmux Control Mode でストリームし、承認済みの入力を `tmux send-keys` でそのペインへ送ります。ブラウザは xterm.js で ANSI/VT を解釈し、5,000 行のローカルスクロールバックを保持します。端末バイトは、ブラウザで端末が実際に表示され購読されている間だけ送られます。
 
 ### tmux ペインの接続先
 
@@ -533,8 +543,12 @@ env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 - `MH_BRIDGE_RECOVERY_TMUX_PANE`: 隠し復旧時の安全な既定復旧先
 - `MH_BRIDGE_RESTART_COMMAND`: `Restart` ボタンなどで使う再開コマンド
 - `MH_BRIDGE_RESTART_PRE_KEYS`: 再開コマンド前に送るキー
-- `MH_BRIDGE_MIRROR_LINES`: terminal tail 行数
-- `MH_BRIDGE_MIRROR_INTERVAL_MS`: ミラー発行間隔
+- `MH_BRIDGE_TERMINAL_TRANSPORT`: `control`（既定）または一時ロールバック用 `snapshot`
+- `MH_BRIDGE_TERMINAL_SCROLLBACK`: xterm checkpoint とブラウザのスクロールバック行数（既定 `5000`）
+- `MH_BRIDGE_TERMINAL_BATCH_DELAY_MS`: 増分出力をまとめる最大時間（既定 `500` ms、最大毎秒 2 回更新）
+- `MH_BRIDGE_TERMINAL_BATCH_MAX_BYTES`: 増分バッチの最大サイズ（既定 `16384` bytes）
+- `MH_BRIDGE_MIRROR_LINES`: `snapshot` ロールバック時だけ使う tail 行数
+- `MH_BRIDGE_MIRROR_INTERVAL_MS`: `snapshot` ロールバック時だけ使うポーリング間隔
 
 </details>
 
@@ -702,6 +716,12 @@ Voxtral リアルタイム ASR のみ（ハイブリッド構成より VRAM を�
 - `↑`, `Select`, `↓` は常時表示
 - デスクトップでは `Esc` の近くに `?` ボタンを表示（キーボード操作の早見表）
 - ターミナルミラーは読み取り専用
+- 1 本指の通常移動はブラウザの慣性スクロールを維持します。ローカルの spacer がその位置を xterm の保存済みバッファへ対応付けます
+- 約 0.55 秒静止すると指の下の文字を選択し、ドラッグで範囲を伸ばし、指を離すと選択を確定します
+- 常設 Copy ボタンは置きません。指を離した後だけ `Copy` を表示し、クリップボード書き込み失敗時は同じボタンを `Retry` に変えます
+- パネルを隠す、またはページをバックグラウンドへ移すと端末ストリームだけを購読解除し、prompt、TTS、status、audio の接続は維持します
+
+既定の Control Mode 経路は `capture-pane` をポーリングしません。購読または再同期時に checkpoint を 1 回送り、その後は sequence 付き `operator_terminal_data` 増分だけを送ります。標準の `DecompressionStream` gzip API を持つブラウザとは `gzip-base64` を交渉し、古いブラウザは自動的に通常の Base64 を使います。環境固有の問題を調べる一時退避として `MH_BRIDGE_TERMINAL_TRANSPORT=snapshot` を設定し、既存スタックを `./scripts/restart-operator-stack-in-place.sh` で再起動できます。`snapshot` は以前の full-tail ポーリングへ戻るため、通信量が大きくなります。
 
 `PTT JA` / `PTT EN` の文字起こしは、テキスト入力欄の末尾固定ではなく、現在のカーソル位置へ入ります。
 

@@ -1264,14 +1264,118 @@ body.ui-mode-pc .operator-btn.face-mode-toggle {
   border: 1px solid rgba(118, 226, 255, 0.22);
   border-radius: 10px;
   background: rgba(2, 8, 14, 0.7);
-  padding: 8px 16px 8px 8px;
+  position: relative;
+  padding: 8px;
   font-family: 'JetBrains Mono', 'Consolas', 'Roboto Mono', monospace;
   font-size: 0.78rem;
   line-height: 1.42;
   color: var(--operator-mirror-fg);
-  white-space: pre;
+  white-space: normal;
   overscroll-behavior: contain;
-  touch-action: pan-x pan-y;
+  touch-action: pan-x pan-y pinch-zoom;
+  scrollbar-gutter: stable;
+  overflow-anchor: none;
+}
+
+.operator-terminal-host {
+  min-width: max-content;
+}
+
+.operator-terminal-scroll-spacer {
+  display: none;
+  width: 1px;
+  height: 0;
+  pointer-events: none;
+}
+
+.operator-terminal-host .xterm {
+  padding-right: 8px;
+}
+
+.operator-terminal-host .xterm-viewport {
+  overscroll-behavior: contain;
+}
+
+.operator-mirror.operator-native-scroll-proxy .operator-terminal-host {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  will-change: transform;
+}
+
+.operator-mirror.operator-native-scroll-proxy .operator-terminal-scroll-spacer {
+  display: block;
+}
+
+@media (any-pointer: coarse) {
+  .operator-mirror,
+  .operator-mirror .xterm-accessibility-tree {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+.operator-terminal-copy-status {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 16px);
+  margin: 0;
+  border: 1px solid rgba(145, 255, 231, 0.48);
+  border-radius: 999px;
+  background: rgba(3, 18, 26, 0.94);
+  color: #eafffa;
+  padding: 6px 10px;
+  font-family: system-ui, sans-serif;
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1.2;
+  text-align: center;
+  pointer-events: none;
+}
+
+.operator-mirror.operator-native-scroll-proxy .operator-terminal-copy-status {
+  position: sticky;
+  z-index: 4;
+  top: calc(100% - 44px);
+  right: auto;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  margin: 0 auto -42px;
+}
+
+.operator-terminal-copy-status[data-mode='error'] {
+  border-color: rgba(255, 177, 153, 0.66);
+  color: #ffd9cd;
+}
+
+.operator-terminal-copy-retry {
+  min-height: 28px;
+  margin-left: 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  padding: 2px 9px;
+  font: inherit;
+  pointer-events: auto;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
 }
 
 .operator-esc,
