@@ -42,7 +42,7 @@ A face and operator companion app for coding agents.
 
 - **Operator input** — terminal direct prompt, browser PTT (JA/EN ASR), text fallback, desktop `Space`/`Shift+Space` hold-to-talk safety, key controls (`Esc`, `↑`, `Select`, `↓`)
 - **Interpreter stack** — an independent English-labelled mobile page with one WAV PTT, automatic source-language detection, a server-owned two-language session, spoken target overrides, Atom VAD turns, and four local startup presets
-- **Terminal mirror** — read-only tmux tail snapshots at 500ms change-only intervals; lines render at native width with horizontal scroll, and on touch devices you can pinch-to-zoom (anchored under your fingers) and double-tap to reset
+- **Terminal mirror** — read-only tmux Control Mode output batched at 500ms, rendered by xterm.js with local scrollback and visibility-based subscription; touch devices retain native vertical scrolling, pinch-to-zoom, and contextual long-press selection/copy
 - **Multi-agent** (experimental) — spawn/focus/delete helpers from desktop tiles or mobile list, permission presets, mission assignment and delivery, owner inbox. A background stuck-detector scans each helper's tmux pane and posts auto `blocked` reports to the owner inbox when a known CLI modal (approval prompt, model picker, usage-limit notice, survey) is visible, so the operator notices stalled helpers without polling. See [Multi-Agent Guide](doc/guides/multi-agent.md).
 - **M12 vision** — AtomS3R-M12 camera + diffusiongemma (vLLM) captioner, change-gated SQLite memory with tiered summaries, `GET /situation` digest injection, corrections, keyword watches, and Echo Base spoken alerts. See [M12 Vision Guide](doc/guides/m12-vision.md#english).
 - **MCP signaling** — `face.event` / `face.say` / `face.ping`, generic `media.play` / `media.stop` / `media.status` ([integration guide](doc/guides/generic-browser-media.md#english)), plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`)
@@ -93,9 +93,9 @@ flowchart LR
   TMUX --> C
   C -- Work logs / results --> TMUX
 
-  BR -- capture-pane (500ms, change-only) --> BR
-  BR -- operator_terminal_snapshot --> WS
-  WS --> FE
+  TMUX -- Control Mode output bytes --> BR
+  BR -- sequenced terminal reset/data --> WS
+  WS -- subscribed browser only --> FE
 
   C -- stdio tool calls --> MCP
   MCP -- WebSocket JSON --> WS
@@ -173,9 +173,9 @@ sequenceDiagram
 
   loop During work
     CX-->>TM: Progress/result logs
-    BR->>TM: capture-pane -e (500ms)
-    BR-->>FA: operator_terminal_snapshot
-    FA-->>FE: Terminal mirror update
+    TM-->>BR: Control Mode %output bytes
+    BR-->>FA: sequenced operator_terminal_data
+    FA-->>FE: subscribed xterm update
   end
 
   CX->>MCP: face_event / face_say / face_ping

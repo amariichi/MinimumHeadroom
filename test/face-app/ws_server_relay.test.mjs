@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { EventEmitter } from 'node:events';
+import { gunzipSync } from 'node:zlib';
 import {
+  armTerminalResetAfterDrain,
+  encodeTerminalPayloadForSubscription,
   receivedPayloadLogMessage,
   startFaceWebSocketServer
 } from '../../face-app/dist/ws_server.js';
@@ -106,6 +110,71 @@ test('Atom frame logs omit audio and sample only stream checkpoints', () => {
   }), /"seq":50/);
 });
 
+test('terminal frame logs omit output bytes and high-frequency acknowledgements', () => {
+  const reset = receivedPayloadLogMessage({
+    v: 1,
+    type: 'operator_terminal_reset',
+    session_id: 'default',
+    pane: '%7',
+    generation: 3,
+    seq: 10,
+    cols: 80,
+    rows: 24,
+    data_base64: 'secret-terminal-content'
+  });
+  assert.match(reset, /"type":"operator_terminal_reset"/u);
+  assert.match(reset, /"data_base64_chars":23/u);
+  assert.doesNotMatch(reset, /secret-terminal-content/u);
+
+  assert.equal(receivedPayloadLogMessage({
+    type: 'operator_terminal_data',
+    seq: 11,
+    data_base64: 'secret-terminal-content'
+  }), null);
+  assert.equal(receivedPayloadLogMessage({
+    type: 'operator_terminal_ack',
+    seq: 11
+  }), null);
+});
+
+test('terminal backpressure requests one reset after the socket drains', () => {
+  const socket = new EventEmitter();
+  socket.__mhTerminalNeedsReset = true;
+  let resetRequests = 0;
+
+  assert.equal(armTerminalResetAfterDrain(socket, () => {
+    resetRequests += 1;
+  }), true);
+  assert.equal(armTerminalResetAfterDrain(socket, () => {
+    resetRequests += 1;
+  }), false);
+  assert.equal(resetRequests, 0);
+
+  socket.emit('drain');
+  assert.equal(resetRequests, 1);
+  assert.equal(socket.__mhTerminalResetOnDrain, false);
+
+  socket.__mhTerminalNeedsReset = false;
+  assert.equal(armTerminalResetAfterDrain(socket, () => {
+    resetRequests += 1;
+  }), true);
+  socket.emit('drain');
+  assert.equal(resetRequests, 1);
+});
+
+test('terminal payload compression is negotiated and lossless', () => {
+  const raw = Buffer.from('spinner redraw '.repeat(200));
+  const payload = {
+    type: 'operator_terminal_data',
+    data_base64: raw.toString('base64')
+  };
+  const encoded = encodeTerminalPayloadForSubscription(payload, { dataEncoding: 'gzip-base64' });
+  assert.equal(encoded.data_encoding, 'gzip-base64');
+  assert.equal(encoded.data_uncompressed_bytes, raw.length);
+  assert.deepEqual(gunzipSync(Buffer.from(encoded.data_base64, 'base64')), raw);
+  assert.equal(encodeTerminalPayloadForSubscription(payload, { dataEncoding: 'base64' }), payload);
+});
+
 test('ws server serves static ui and relays payloads to display clients', async (t) => {
   const currentFile = fileURLToPath(import.meta.url);
   const currentDir = path.dirname(currentFile);
@@ -132,6 +201,17 @@ test('ws server serves static ui and relays payloads to display clients', async 
   assert.equal(pageResponse.status, 200);
   const pageText = await pageResponse.text();
   assert.match(pageText, /minimum headroom/i);
+
+  const xtermModuleResponse = await fetch(new URL('/vendor/xterm.mjs', server.httpUrl));
+  assert.equal(xtermModuleResponse.status, 200);
+  assert.match(xtermModuleResponse.headers.get('content-type'), /javascript/u);
+  assert.match(xtermModuleResponse.headers.get('cache-control'), /max-age=86400/u);
+  const xtermModuleText = await xtermModuleResponse.text();
+  assert.equal(xtermModuleText.includes('export{'), true);
+
+  const xtermCssResponse = await fetch(new URL('/vendor/xterm.css', server.httpUrl));
+  assert.equal(xtermCssResponse.status, 200);
+  assert.match(xtermCssResponse.headers.get('content-type'), /text\/css/u);
 
   const viewer = new WebSocket(server.url);
   const sender = new WebSocket(server.url);
@@ -172,6 +252,138 @@ test('ws server serves static ui and relays payloads to display clients', async 
 
   assert.equal(received.length, 1);
   assert.equal(received[0].session_id, 'relay#test');
+});
+
+test('ws server routes terminal streams only between subscribed browsers and the marked operator bridge', async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    relayPayloads: true,
+    log: silentLog
+  });
+
+  const bridge = new WebSocket(server.url, 'mh-operator-bridge-v1');
+  const viewer = new WebSocket(server.url);
+  const bystander = new WebSocket(server.url);
+  t.after(async () => {
+    try { bridge.close(); } catch {}
+    try { viewer.close(); } catch {}
+    try { bystander.close(); } catch {}
+    await server.stop();
+  });
+
+  await Promise.all([waitForOpen(bridge), waitForOpen(viewer), waitForOpen(bystander)]);
+  assert.equal(bridge.protocol, 'mh-operator-bridge-v1');
+
+  let bystanderTerminalMessages = 0;
+  bystander.addEventListener('message', (event) => {
+    try {
+      if (JSON.parse(event.data)?.type?.startsWith('operator_terminal_')) {
+        bystanderTerminalMessages += 1;
+      }
+    } catch {}
+  });
+
+  const subscribePromise = waitForMessage(bridge);
+  viewer.send(JSON.stringify({
+    v: 1,
+    type: 'operator_terminal_subscribe',
+    session_id: 'default',
+    data_encodings: ['gzip-base64', 'base64'],
+    ts: Date.now()
+  }));
+  const subscribe = await subscribePromise;
+  assert.equal(subscribe.type, 'operator_terminal_subscribe');
+  assert.match(subscribe.subscriber_id, /^terminal-\d+$/u);
+
+  const dataPromise = waitForMessage(viewer);
+  const terminalDelta = 'delta'.repeat(200);
+  bridge.send(JSON.stringify({
+    v: 1,
+    type: 'operator_terminal_data',
+    session_id: 'default',
+    pane: '%9',
+    generation: 2,
+    seq: 4,
+    data_base64: Buffer.from(terminalDelta).toString('base64')
+  }));
+  const data = await dataPromise;
+  assert.equal(data.type, 'operator_terminal_data');
+  assert.equal(data.data_encoding, 'gzip-base64');
+  assert.equal(
+    gunzipSync(Buffer.from(data.data_base64, 'base64')).toString('utf8'),
+    terminalDelta
+  );
+  await delay(40);
+  assert.equal(bystanderTerminalMessages, 0);
+
+  const ackPromise = waitForMessage(bridge);
+  viewer.send(JSON.stringify({
+    v: 1,
+    type: 'operator_terminal_ack',
+    session_id: 'default',
+    pane: '%9',
+    generation: 2,
+    seq: 4
+  }));
+  const ack = await ackPromise;
+  assert.equal(ack.type, 'operator_terminal_ack');
+  assert.equal(ack.subscriber_id, subscribe.subscriber_id);
+
+  const unsubscribePromise = waitForMessage(bridge);
+  viewer.close();
+  const unsubscribe = await unsubscribePromise;
+  assert.equal(unsubscribe.type, 'operator_terminal_unsubscribe');
+  assert.equal(unsubscribe.subscriber_id, subscribe.subscriber_id);
+});
+
+test('terminal subscriptions are replayed when an operator bridge reconnects, but terminal data is not replay-cached', async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    relayPayloads: true,
+    log: silentLog
+  });
+  const viewer = new WebSocket(server.url);
+  let bridge = null;
+  t.after(async () => {
+    try { viewer.close(); } catch {}
+    try { bridge?.close(); } catch {}
+    await server.stop();
+  });
+  await waitForOpen(viewer);
+  viewer.send(JSON.stringify({ type: 'operator_terminal_subscribe', session_id: 'default' }));
+  await delay(20);
+
+  bridge = new WebSocket(server.url, 'mh-operator-bridge-v1');
+  const replayedSubscribePromise = waitForMessage(bridge);
+  await waitForOpen(bridge);
+  const replayedSubscribe = await replayedSubscribePromise;
+  assert.equal(replayedSubscribe.type, 'operator_terminal_subscribe');
+
+  bridge.send(JSON.stringify({
+    type: 'operator_terminal_data',
+    session_id: 'default',
+    pane: '%9',
+    generation: 1,
+    seq: 1,
+    data_base64: Buffer.from('live-only').toString('base64')
+  }));
+  await waitForMessage(viewer);
+
+  const lateViewer = new WebSocket(server.url);
+  t.after(() => {
+    try { lateViewer.close(); } catch {}
+  });
+  let lateMessages = 0;
+  lateViewer.addEventListener('message', () => {
+    lateMessages += 1;
+  });
+  await waitForOpen(lateViewer);
+  await delay(60);
+  assert.equal(lateMessages, 0);
 });
 
 test('ws server replays latest replayable payloads to newly connected clients', async (t) => {

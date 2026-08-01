@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { isPlainShellCommand } from './tmux_shell.js';
+import { createOperatorTerminalTransport } from './operator_terminal_stream.js';
 
 const OPERATOR_PROMPT_STATES = new Set(['awaiting_input', 'awaiting_approval']);
 const OPERATOR_INPUT_KINDS = new Set(['text', 'choice_single', 'key']);
@@ -368,6 +369,10 @@ export function createOperatorBridgeRuntime(options = {}) {
   const tmuxController = options.tmuxController;
   const defaultRecoveryTmuxPane = asNonEmptyString(options.defaultRecoveryTmuxPane);
   const sendPayload = typeof options.sendPayload === 'function' ? options.sendPayload : () => false;
+  const terminalTransport = options.terminalTransport ?? null;
+  const terminalTransportMode = options.terminalTransportMode === 'control' && terminalTransport
+    ? 'control'
+    : 'snapshot';
 
   if (!tmuxController) {
     throw new Error('tmuxController is required');
@@ -659,6 +664,9 @@ export function createOperatorBridgeRuntime(options = {}) {
   }
 
   async function publishTerminalSnapshot(sessionId = defaultSessionId) {
+    if (terminalTransportMode === 'control') {
+      return false;
+    }
     const effectiveSessionId = normalizeSessionId(sessionId, defaultSessionId);
 
     try {
@@ -726,7 +734,11 @@ export function createOperatorBridgeRuntime(options = {}) {
       });
       emitRecoverResult(sessionId, true, null, tmuxController.pane ?? defaultRecoveryTmuxPane);
       emitState(sessionId);
-      await publishTerminalSnapshot(sessionId);
+      if (terminalTransportMode === 'control') {
+        await terminalTransport.setPane();
+      } else {
+        await publishTerminalSnapshot(sessionId);
+      }
     } catch (error) {
       const reason = asNonEmptyString(error?.reason) ?? 'recover_failed';
       updateSessionState(sessionId, {
@@ -768,7 +780,11 @@ export function createOperatorBridgeRuntime(options = {}) {
       });
       emitSetPaneResult(sessionId, true, pane, null, agentId);
       emitState(sessionId);
-      await publishTerminalSnapshot(sessionId);
+      if (terminalTransportMode === 'control') {
+        await terminalTransport.setPane();
+      } else {
+        await publishTerminalSnapshot(sessionId);
+      }
     } catch (error) {
       const reason = asNonEmptyString(error?.reason) ?? 'set_pane_failed';
       updateSessionState(sessionId, {
@@ -807,6 +823,26 @@ export function createOperatorBridgeRuntime(options = {}) {
         return;
       }
 
+      if (terminalTransportMode === 'control' && payload.type === 'operator_terminal_subscribe') {
+        await terminalTransport.handleSubscribe(payload);
+        return;
+      }
+
+      if (terminalTransportMode === 'control' && payload.type === 'operator_terminal_unsubscribe') {
+        await terminalTransport.handleUnsubscribe(payload);
+        return;
+      }
+
+      if (terminalTransportMode === 'control' && payload.type === 'operator_terminal_ack') {
+        await terminalTransport.handleAck(payload);
+        return;
+      }
+
+      if (terminalTransportMode === 'control' && payload.type === 'operator_terminal_resync') {
+        await terminalTransport.handleResync(payload);
+        return;
+      }
+
       if (payload.type === 'operator_response') {
         await handleOperatorResponse(payload);
       }
@@ -827,6 +863,12 @@ export function createOperatorBridgeRuntime(options = {}) {
     },
     getActiveRequest(sessionId = defaultSessionId) {
       return activeRequestBySession.get(normalizeSessionId(sessionId, defaultSessionId)) ?? null;
+    },
+    async disconnectTerminalSubscribers() {
+      await terminalTransport?.disconnectAll?.();
+    },
+    async shutdown() {
+      await terminalTransport?.shutdown?.();
     }
   };
 }
@@ -836,6 +878,7 @@ export function startOperatorBridge(options = {}) {
   const wsUrl = withAuthTokenUrl(baseWsUrl, options.authToken);
   const displayWsUrl = redactedUrl(wsUrl);
   const sessionId = normalizeSessionId(options.sessionId, 'default');
+  const terminalTransportMode = options.terminalTransport === 'snapshot' ? 'snapshot' : 'control';
   const mirrorIntervalMs = clampInteger(options.mirrorIntervalMs, 500, 200, 60_000);
   const reconnectMinMs = clampInteger(options.reconnectMinMs, 900, 200, 10_000);
   const reconnectMaxMs = clampInteger(options.reconnectMaxMs, 6000, reconnectMinMs, 60_000);
@@ -857,22 +900,40 @@ export function startOperatorBridge(options = {}) {
   let mirrorTimer = null;
   let reconnectAttempts = 0;
 
+  function sendPayload(payload) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      socket.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const terminalTransport = terminalTransportMode === 'control'
+    ? createOperatorTerminalTransport({
+        sessionId,
+        tmuxController,
+        sendPayload,
+        scrollback: options.terminalScrollback,
+        batchDelayMs: options.terminalBatchDelayMs,
+        batchMaxBytes: options.terminalBatchMaxBytes,
+        restartDelayMs: options.terminalRestartDelayMs,
+        tmuxTimeoutMs: options.tmuxTimeoutMs,
+        log
+      })
+    : null;
+
   const runtime = createOperatorBridgeRuntime({
     sessionId,
     tmuxController,
     defaultRecoveryTmuxPane: options.defaultRecoveryTmuxPane,
     mirrorLines: options.mirrorLines,
-    sendPayload(payload) {
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        return false;
-      }
-      try {
-        socket.send(JSON.stringify(payload));
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    terminalTransport,
+    terminalTransportMode,
+    sendPayload,
     log
   });
 
@@ -907,19 +968,21 @@ export function startOperatorBridge(options = {}) {
     runtime.setBridgeOnline(sessionId, true);
     runtime.setRecoveryMode(sessionId, false, null);
     runtime.emitState(sessionId);
-    void runtime.publishTerminalSnapshot(sessionId);
-
     clearMirrorTimer();
-    mirrorTimer = setInterval(() => {
-      if (stopped) {
-        return;
-      }
+    if (terminalTransportMode === 'snapshot') {
       void runtime.publishTerminalSnapshot(sessionId);
-    }, mirrorIntervalMs);
+      mirrorTimer = setInterval(() => {
+        if (stopped) {
+          return;
+        }
+        void runtime.publishTerminalSnapshot(sessionId);
+      }, mirrorIntervalMs);
+    }
   }
 
   function onDisconnected() {
     clearMirrorTimer();
+    void runtime.disconnectTerminalSubscribers();
     runtime.setBridgeOnline(sessionId, false);
     runtime.setRecoveryMode(sessionId, true, 'ws_disconnected');
     scheduleReconnect();
@@ -931,7 +994,7 @@ export function startOperatorBridge(options = {}) {
     }
 
     try {
-      socket = new WebSocket(wsUrl);
+      socket = new WebSocket(wsUrl, 'mh-operator-bridge-v1');
     } catch (error) {
       log.error(`[operator-bridge] websocket create failed: ${error.message}`);
       scheduleReconnect();
@@ -972,6 +1035,7 @@ export function startOperatorBridge(options = {}) {
       stopped = true;
       clearReconnectTimer();
       clearMirrorTimer();
+      await runtime.shutdown();
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.close();
       }
@@ -993,6 +1057,13 @@ export function loadBridgeOptionsFromEnv(env = process.env) {
     defaultRecoveryTmuxPane: asNonEmptyString(env.MH_BRIDGE_RECOVERY_TMUX_PANE) ?? tmuxPane,
     restartCommand: asNonEmptyString(env.MH_BRIDGE_RESTART_COMMAND) ?? 'codex resume --last',
     restartPreKeys: parseRestartPreKeys(env.MH_BRIDGE_RESTART_PRE_KEYS ?? 'C-u'),
+    terminalTransport: asNonEmptyString(env.MH_BRIDGE_TERMINAL_TRANSPORT)?.toLowerCase() === 'snapshot'
+      ? 'snapshot'
+      : 'control',
+    terminalScrollback: clampInteger(env.MH_BRIDGE_TERMINAL_SCROLLBACK, 5000, 100, 100_000),
+    terminalBatchDelayMs: clampInteger(env.MH_BRIDGE_TERMINAL_BATCH_DELAY_MS, 500, 1, 1000),
+    terminalBatchMaxBytes: clampInteger(env.MH_BRIDGE_TERMINAL_BATCH_MAX_BYTES, 16 * 1024, 256, 1024 * 1024),
+    terminalRestartDelayMs: clampInteger(env.MH_BRIDGE_TERMINAL_RESTART_DELAY_MS, 750, 100, 30_000),
     mirrorLines: clampInteger(env.MH_BRIDGE_MIRROR_LINES, 200, 10, 2000),
     mirrorIntervalMs: clampInteger(env.MH_BRIDGE_MIRROR_INTERVAL_MS, 500, 200, 60_000),
     tmuxTimeoutMs: clampInteger(env.MH_BRIDGE_TMUX_TIMEOUT_MS, 8000, 300, 120_000)
