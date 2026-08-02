@@ -1293,6 +1293,7 @@ body.ui-mode-pc .operator-btn.face-mode-toggle {
 }
 
 .operator-terminal-host .xterm-viewport {
+  background-color: transparent !important;
   overscroll-behavior: contain;
 }
 
@@ -1772,8 +1773,12 @@ body.ui-mode-mobile .media-player-button {
   }
 
   body.ui-mode-mobile .operator-mirror {
-    min-height: min(56vh, 520px);
-    max-height: min(64vh, 640px);
+    height: max(
+      min(56vh, 520px),
+      calc(var(--operator-terminal-render-height, 502px) + 18px)
+    );
+    min-height: 0;
+    max-height: none;
   }
 
   body.ui-mode-mobile .operator-ack {

@@ -14,7 +14,14 @@ class FakeElement extends EventTarget {
     this.dataset = {};
     this.textContent = '';
     this.rect = rect;
-    this.style = {};
+    this.style = {
+      setProperty(name, value) {
+        this[name] = value;
+      },
+      removeProperty(name) {
+        delete this[name];
+      }
+    };
     this.clientHeight = rect.height;
     this.scrollHeight = rect.height;
     this.scrollTop = 0;
@@ -166,6 +173,28 @@ test('browser terminal payload decoder inflates negotiated gzip bytes', async ()
     data_uncompressed_bytes: raw.length
   });
   assert.deepEqual(Buffer.from(decoded), raw);
+});
+
+test('terminal view publishes its rendered height and uses a transparent canvas', () => {
+  const root = new FakeElement();
+  const host = new FakeElement({ top: 0, bottom: 558, left: 0, width: 500, height: 558 });
+  const view = createOperatorTerminalView({
+    root,
+    host,
+    TerminalClass: FakeTerminal,
+    ResizeObserverClass: null
+  });
+
+  assert.equal(view.terminal.options.allowTransparency, true);
+  assert.equal(view.terminal.options.theme.background, 'rgba(2, 8, 14, 0)');
+  assert.equal(root.style['--operator-terminal-render-height'], '558px');
+
+  host.rect = { top: 0, bottom: 666, left: 0, width: 500, height: 666 };
+  view.setFontScale(1.2);
+  assert.equal(root.style['--operator-terminal-render-height'], '666px');
+
+  view.dispose();
+  assert.equal(root.style['--operator-terminal-render-height'], undefined);
 });
 
 test('pointer fallback selects across rows and release offers a contextual Copy action', async () => {

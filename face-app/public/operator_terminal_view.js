@@ -600,13 +600,14 @@ export function createOperatorTerminalView(options = {}) {
     disableStdin: true,
     cursorBlink: false,
     cursorStyle: 'block',
+    allowTransparency: true,
     fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
     fontSize: DEFAULT_FONT_SIZE,
     lineHeight: 1.18,
     convertEol: false,
     allowProposedApi: false,
     theme: {
-      background: '#02080e',
+      background: 'rgba(2, 8, 14, 0)',
       foreground: '#f2f8ff',
       cursor: '#91ffe7',
       selectionBackground: '#2b6175',
@@ -637,6 +638,31 @@ export function createOperatorTerminalView(options = {}) {
   let writeEpoch = 0;
   let writeQueue = Promise.resolve();
   let fontScale = 1;
+  let terminalHeightObserver = null;
+
+  function syncTerminalRenderedHeight() {
+    if (disposed) {
+      return;
+    }
+    const renderedHeight = Number(host.getBoundingClientRect?.().height);
+    if (!Number.isFinite(renderedHeight) || renderedHeight <= 0) {
+      return;
+    }
+    root.style?.setProperty?.(
+      '--operator-terminal-render-height',
+      `${Math.ceil(renderedHeight)}px`
+    );
+  }
+
+  syncTerminalRenderedHeight();
+  const ResizeObserverClass = options.ResizeObserverClass === undefined
+    ? globalThis.ResizeObserver
+    : options.ResizeObserverClass;
+  if (typeof ResizeObserverClass === 'function') {
+    terminalHeightObserver = new ResizeObserverClass(syncTerminalRenderedHeight);
+    terminalHeightObserver.observe(host);
+  }
+
   const useNativeScrollProxy = Boolean(
     scrollSpacer
     && (
@@ -756,6 +782,7 @@ export function createOperatorTerminalView(options = {}) {
       const followNativeScroll = useNativeScrollProxy && (reset || isNativeScrollNearBottom());
       await new Promise((resolve) => {
         terminal.write(bytes, () => {
+          syncTerminalRenderedHeight();
           syncNativeScrollSize({ followBottom: followNativeScroll });
           if (!disposed && epoch === writeEpoch && acknowledge) {
             emit('operator_terminal_ack', {
@@ -924,6 +951,7 @@ export function createOperatorTerminalView(options = {}) {
       fontScale = clamp(Number(nextScale) || 1, 0.6, 2.4);
       terminal.options.fontSize = DEFAULT_FONT_SIZE * fontScale;
       terminal.refresh?.(0, terminal.rows - 1);
+      syncTerminalRenderedHeight();
       syncNativeScrollSize({ followBottom: isNativeScrollNearBottom() });
       return fontScale;
     },
@@ -950,6 +978,9 @@ export function createOperatorTerminalView(options = {}) {
       disposed = true;
       subscribed = false;
       writeEpoch += 1;
+      terminalHeightObserver?.disconnect?.();
+      terminalHeightObserver = null;
+      root.style?.removeProperty?.('--operator-terminal-render-height');
       copyGesture.dispose();
       if (useNativeScrollProxy) {
         root.removeEventListener?.('scroll', handleNativeScroll);
