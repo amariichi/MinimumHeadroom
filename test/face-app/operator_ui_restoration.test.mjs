@@ -62,3 +62,16 @@ test('touch terminals use a native scroll spacer while xterm stays pinned in the
     /\.operator-mirror\.operator-native-scroll-proxy \.operator-terminal-host\s*\{[\s\S]*position:\s*sticky;[\s\S]*\.operator-mirror\.operator-native-scroll-proxy \.operator-terminal-scroll-spacer\s*\{[\s\S]*display:\s*block;/u
   );
 });
+
+test('wide mobile layouts fit the rendered terminal while narrow mobile sizing stays compact', async () => {
+  const styles = await readFile(path.join(repoRoot, 'face-app/public/styles.css'), 'utf8');
+  assert.match(
+    styles,
+    /body\.ui-mode-mobile \.operator-mirror\s*\{[\s\S]*min-height:\s*min\(38vh, 320px\);[\s\S]*max-height:\s*min\(44vh, 400px\);/u
+  );
+  assert.match(
+    styles,
+    /@media \(min-width: 701px\)\s*\{[\s\S]*body\.ui-mode-mobile \.operator-mirror\s*\{[\s\S]*height:\s*max\([\s\S]*--operator-terminal-render-height[\s\S]*min-height:\s*0;[\s\S]*max-height:\s*none;/u
+  );
+  assert.match(styles, /\.operator-terminal-host \.xterm-viewport\s*\{[\s\S]*background-color:\s*transparent !important;/u);
+});
