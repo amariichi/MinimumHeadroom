@@ -488,6 +488,60 @@ test('native touch scroll proxy maps outer momentum position into xterm history 
   assert.equal(spacer.style.height, '0px');
 });
 
+test('native touch scroll proxy reaches the final row when a wide frame has spare height', () => {
+  const root = new FakeElement({ top: 0, bottom: 120, left: 0, width: 200, height: 120 });
+  const host = new FakeElement({ top: 0, bottom: 100, left: 0, width: 200, height: 100 });
+  const spacer = new FakeElement();
+  const view = createOperatorTerminalView({
+    root,
+    host,
+    scrollSpacer: spacer,
+    TerminalClass: FakeTerminal,
+    useNativeScrollProxy: true,
+    ResizeObserverClass: null
+  });
+  view.terminal.resize(20, 5);
+  view.terminal.buffer.active.baseY = 20;
+  view.setFontScale(1);
+
+  assert.equal(spacer.style.height, '420px');
+
+  root.scrollHeight = 519.5;
+  root.scrollTop = 399.5;
+  root.dispatchEvent(new Event('scroll'));
+  assert.equal(view.terminal.buffer.active.viewportY, 20);
+  assert.equal(host.style.transform, '');
+
+  view.dispose();
+});
+
+test('native touch scroll proxy keeps the final physical rows reachable in a compact frame', () => {
+  const root = new FakeElement({ top: 0, bottom: 80, left: 0, width: 200, height: 80 });
+  const host = new FakeElement({ top: 0, bottom: 100, left: 0, width: 200, height: 100 });
+  const spacer = new FakeElement();
+  const view = createOperatorTerminalView({
+    root,
+    host,
+    scrollSpacer: spacer,
+    TerminalClass: FakeTerminal,
+    useNativeScrollProxy: true,
+    ResizeObserverClass: null
+  });
+  view.terminal.resize(20, 5);
+  view.terminal.buffer.active.baseY = 20;
+  view.setFontScale(1);
+
+  assert.equal(spacer.style.height, '400px');
+
+  root.scrollHeight = 500;
+  root.scrollTop = 420;
+  root.dispatchEvent(new Event('scroll'));
+  assert.equal(view.terminal.buffer.active.viewportY, 20);
+  assert.equal(host.style.transform, 'translateY(-20px)');
+
+  view.dispose();
+});
+
 test('terminal view subscribes only while visible, applies ordered writes, acks after parse, and requests one resync per gap', async () => {
   const sent = [];
   const view = createOperatorTerminalView({

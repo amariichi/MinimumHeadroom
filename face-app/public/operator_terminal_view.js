@@ -658,10 +658,6 @@ export function createOperatorTerminalView(options = {}) {
   const ResizeObserverClass = options.ResizeObserverClass === undefined
     ? globalThis.ResizeObserver
     : options.ResizeObserverClass;
-  if (typeof ResizeObserverClass === 'function') {
-    terminalHeightObserver = new ResizeObserverClass(syncTerminalRenderedHeight);
-    terminalHeightObserver.observe(host);
-  }
 
   const useNativeScrollProxy = Boolean(
     scrollSpacer
@@ -692,6 +688,18 @@ export function createOperatorTerminalView(options = {}) {
     return nativeScrollCellHeight;
   }
 
+  function measureNativeScrollViewportSlack() {
+    const rootStyle = globalThis.getComputedStyle?.(root);
+    const paddingTop = Number.parseFloat(rootStyle?.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(rootStyle?.paddingBottom) || 0;
+    const rootContentHeight = Math.max(
+      0,
+      (Number(root.clientHeight) || 0) - paddingTop - paddingBottom
+    );
+    const hostHeight = Number(host.getBoundingClientRect?.().height) || 0;
+    return Math.max(0, rootContentHeight - hostHeight);
+  }
+
   function isNativeScrollNearBottom() {
     if (!useNativeScrollProxy) {
       return false;
@@ -707,7 +715,11 @@ export function createOperatorTerminalView(options = {}) {
     const cellHeight = measureNativeScrollCellHeight();
     const baseY = Math.max(0, Number(terminal.buffer.active.baseY) || 0);
     const scrollTop = Math.max(0, Number(root.scrollTop) || 0);
-    const viewportY = clamp(Math.floor(scrollTop / cellHeight), 0, baseY);
+    const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+    const atScrollEnd = maxScrollTop - scrollTop <= Math.max(1, cellHeight * 0.1);
+    const viewportY = atScrollEnd
+      ? baseY
+      : clamp(Math.floor(scrollTop / cellHeight), 0, baseY);
     const remainder = Math.max(0, scrollTop - viewportY * cellHeight);
     syncingNativeScroll = true;
     terminal.scrollToLine(viewportY);
@@ -721,7 +733,8 @@ export function createOperatorTerminalView(options = {}) {
     }
     const cellHeight = measureNativeScrollCellHeight();
     const baseY = Math.max(0, Number(terminal.buffer.active.baseY) || 0);
-    scrollSpacer.style.height = `${baseY * cellHeight}px`;
+    const viewportSlack = measureNativeScrollViewportSlack();
+    scrollSpacer.style.height = `${baseY * cellHeight + viewportSlack}px`;
     if (followBottom) {
       root.scrollTop = root.scrollHeight;
     }
@@ -735,6 +748,18 @@ export function createOperatorTerminalView(options = {}) {
   if (useNativeScrollProxy) {
     root.classList?.add?.('operator-native-scroll-proxy');
     root.addEventListener?.('scroll', handleNativeScroll, { passive: true });
+  }
+
+  if (typeof ResizeObserverClass === 'function') {
+    terminalHeightObserver = new ResizeObserverClass(() => {
+      const followBottom = useNativeScrollProxy && isNativeScrollNearBottom();
+      syncTerminalRenderedHeight();
+      syncNativeScrollSize({ followBottom });
+    });
+    terminalHeightObserver.observe(host);
+    if (useNativeScrollProxy) {
+      terminalHeightObserver.observe(root);
+    }
   }
 
   function emit(type, extra = {}) {
