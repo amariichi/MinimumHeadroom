@@ -15,4 +15,4 @@ Do you want to proceed?
   6. No, and always deny 'minimum_headroom/agent_report' (Persist to settings.json)
 
   ↑/↓ Navigate · tab Amend · e edit command
-esc to cancel                                                                             Gemini 3.6 Flash (Medium)
+esc to cancel                                                                             Gemini 3.7 Flash (Medium)

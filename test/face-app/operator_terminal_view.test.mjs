@@ -470,13 +470,15 @@ test('native touch scroll proxy maps outer momentum position into xterm history 
     host,
     scrollSpacer: spacer,
     TerminalClass: FakeTerminal,
-    useNativeScrollProxy: true
+    useNativeScrollProxy: true,
+    useTouchEvents: true
   });
   view.terminal.resize(20, 5);
   view.terminal.buffer.active.baseY = 20;
   view.setFontScale(1);
 
   assert.equal(spacer.style.height, '400px');
+  root.dispatchEvent(new Event('touchstart'));
   root.scrollTop = 86;
   root.dispatchEvent(new Event('scroll'));
   assert.equal(view.terminal.buffer.active.viewportY, 4);
@@ -486,6 +488,45 @@ test('native touch scroll proxy maps outer momentum position into xterm history 
   view.dispose();
   assert.equal(host.style.transform, '');
   assert.equal(spacer.style.height, '0px');
+});
+
+test('native touch scroll proxy restores incidental layout jumps but preserves deliberate history scrolling', () => {
+  const root = new FakeElement({ top: 0, bottom: 100, left: 0, width: 200, height: 100 });
+  const host = new FakeElement({ top: 0, bottom: 100, left: 0, width: 200, height: 100 });
+  const spacer = new FakeElement();
+  root.scrollHeight = 500;
+  root.scrollTop = 400;
+  const view = createOperatorTerminalView({
+    root,
+    host,
+    scrollSpacer: spacer,
+    TerminalClass: FakeTerminal,
+    useNativeScrollProxy: true,
+    useTouchEvents: true,
+    ResizeObserverClass: null
+  });
+  view.terminal.resize(20, 5);
+  view.terminal.buffer.active.baseY = 20;
+  view.terminal.buffer.active.viewportY = 20;
+
+  root.scrollTop = 0;
+  root.dispatchEvent(new Event('scroll'));
+  assert.equal(root.scrollTop, root.scrollHeight);
+  assert.equal(view.terminal.buffer.active.viewportY, 20);
+  assert.equal(view.isNearBottom(), true);
+
+  root.dispatchEvent(new Event('touchstart'));
+  root.scrollTop = 0;
+  root.dispatchEvent(new Event('scroll'));
+  assert.equal(root.scrollTop, 0);
+  assert.equal(view.terminal.buffer.active.viewportY, 0);
+  assert.equal(view.isNearBottom(), false);
+
+  view.setFontScale(1.1);
+  assert.equal(root.scrollTop, 0);
+  assert.equal(view.terminal.buffer.active.viewportY, 0);
+
+  view.dispose();
 });
 
 test('native touch scroll proxy reaches the final row when a wide frame has spare height', () => {
