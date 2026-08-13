@@ -624,7 +624,8 @@ export function createOperatorTerminalView(options = {}) {
     retryButton: options.copyRetryButton,
     accessibleCopyButton: options.accessibleCopyButton,
     clipboard: options.clipboard,
-    documentRef: options.documentRef
+    documentRef: options.documentRef,
+    useTouchEvents: options.useTouchEvents
   });
   let sessionId = asNonEmptyString(options.sessionId) ?? DEFAULT_SESSION_ID;
   let pane = null;
@@ -674,6 +675,22 @@ export function createOperatorTerminalView(options = {}) {
   );
   let syncingNativeScroll = false;
   let nativeScrollCellHeight = 1;
+  let nativeAutoFollow = true;
+  let nativeScrollInteractionActive = false;
+  let nativeScrollContactActive = false;
+  let nativeScrollInteractionTimer = null;
+  let nativeFollowFrame = null;
+  const useNativeTouchEvents = options.useTouchEvents ?? (
+    typeof globalThis !== 'undefined' && typeof globalThis.TouchEvent === 'function'
+  );
+  const scheduleTimer = options.setTimer ?? globalThis.setTimeout.bind(globalThis);
+  const cancelTimer = options.clearTimer ?? globalThis.clearTimeout.bind(globalThis);
+  const requestFrame = options.requestFrame
+    ?? globalThis.requestAnimationFrame?.bind(globalThis)
+    ?? ((callback) => scheduleTimer(callback, 0));
+  const cancelFrame = options.cancelFrame
+    ?? globalThis.cancelAnimationFrame?.bind(globalThis)
+    ?? cancelTimer;
 
   function measureNativeScrollCellHeight() {
     const rowHeight = Number(host.querySelector?.('.xterm-rows > div')?.getBoundingClientRect?.().height);
@@ -708,6 +725,49 @@ export function createOperatorTerminalView(options = {}) {
     return remaining <= Math.max(2, measureNativeScrollCellHeight() * 1.5);
   }
 
+  function clearNativeScrollInteractionTimer() {
+    if (nativeScrollInteractionTimer !== null) {
+      cancelTimer(nativeScrollInteractionTimer);
+      nativeScrollInteractionTimer = null;
+    }
+  }
+
+  function settleNativeScrollInteractionSoon() {
+    clearNativeScrollInteractionTimer();
+    nativeScrollInteractionTimer = scheduleTimer(() => {
+      nativeScrollInteractionTimer = null;
+      if (!nativeScrollContactActive) {
+        nativeScrollInteractionActive = false;
+      }
+    }, 240);
+  }
+
+  function beginNativeScrollInteraction() {
+    if (!useNativeScrollProxy || disposed) {
+      return;
+    }
+    clearNativeScrollInteractionTimer();
+    nativeScrollContactActive = true;
+    nativeScrollInteractionActive = true;
+  }
+
+  function endNativeScrollInteraction() {
+    if (!useNativeScrollProxy || disposed) {
+      return;
+    }
+    nativeScrollContactActive = false;
+    settleNativeScrollInteractionSoon();
+  }
+
+  function handleNativeWheel() {
+    if (!useNativeScrollProxy || disposed) {
+      return;
+    }
+    nativeScrollInteractionActive = true;
+    nativeScrollContactActive = false;
+    settleNativeScrollInteractionSoon();
+  }
+
   function syncTerminalFromNativeScroll() {
     if (!useNativeScrollProxy || disposed) {
       return;
@@ -727,6 +787,24 @@ export function createOperatorTerminalView(options = {}) {
     host.style.transform = remainder > 0.01 ? `translateY(${-remainder}px)` : '';
   }
 
+  function applyNativeTailPosition() {
+    if (!useNativeScrollProxy || disposed || !nativeAutoFollow) {
+      return;
+    }
+    root.scrollTop = root.scrollHeight;
+    syncTerminalFromNativeScroll();
+  }
+
+  function scheduleNativeTailPosition() {
+    if (!useNativeScrollProxy || disposed || !nativeAutoFollow || nativeFollowFrame !== null) {
+      return;
+    }
+    nativeFollowFrame = requestFrame(() => {
+      nativeFollowFrame = null;
+      applyNativeTailPosition();
+    });
+  }
+
   function syncNativeScrollSize({ followBottom = false } = {}) {
     if (!useNativeScrollProxy || disposed) {
       return;
@@ -736,23 +814,49 @@ export function createOperatorTerminalView(options = {}) {
     const viewportSlack = measureNativeScrollViewportSlack();
     scrollSpacer.style.height = `${baseY * cellHeight + viewportSlack}px`;
     if (followBottom) {
-      root.scrollTop = root.scrollHeight;
+      nativeAutoFollow = true;
+      applyNativeTailPosition();
+      scheduleNativeTailPosition();
+      return;
     }
     syncTerminalFromNativeScroll();
   }
 
   function handleNativeScroll() {
+    const nearBottom = isNativeScrollNearBottom();
+    if (nativeScrollInteractionActive) {
+      nativeAutoFollow = nearBottom;
+      if (!nativeScrollContactActive) {
+        settleNativeScrollInteractionSoon();
+      }
+    } else if (nativeAutoFollow && !nearBottom) {
+      applyNativeTailPosition();
+      scheduleNativeTailPosition();
+      return;
+    } else if (nearBottom) {
+      nativeAutoFollow = true;
+    }
     syncTerminalFromNativeScroll();
   }
 
   if (useNativeScrollProxy) {
     root.classList?.add?.('operator-native-scroll-proxy');
     root.addEventListener?.('scroll', handleNativeScroll, { passive: true });
+    root.addEventListener?.('wheel', handleNativeWheel, { passive: true });
+    if (useNativeTouchEvents) {
+      root.addEventListener?.('touchstart', beginNativeScrollInteraction, { passive: true });
+      root.addEventListener?.('touchend', endNativeScrollInteraction, { passive: true });
+      root.addEventListener?.('touchcancel', endNativeScrollInteraction, { passive: true });
+    } else {
+      root.addEventListener?.('pointerdown', beginNativeScrollInteraction, { passive: true });
+      root.addEventListener?.('pointerup', endNativeScrollInteraction, { passive: true });
+      root.addEventListener?.('pointercancel', endNativeScrollInteraction, { passive: true });
+    }
   }
 
   if (typeof ResizeObserverClass === 'function') {
     terminalHeightObserver = new ResizeObserverClass(() => {
-      const followBottom = useNativeScrollProxy && isNativeScrollNearBottom();
+      const followBottom = useNativeScrollProxy && (nativeAutoFollow || isNativeScrollNearBottom());
       syncTerminalRenderedHeight();
       syncNativeScrollSize({ followBottom });
     });
@@ -804,7 +908,9 @@ export function createOperatorTerminalView(options = {}) {
         terminal.reset();
         terminal.resize(message.cols, message.rows);
       }
-      const followNativeScroll = useNativeScrollProxy && (reset || isNativeScrollNearBottom());
+      const followNativeScroll = useNativeScrollProxy && (
+        reset || nativeAutoFollow || isNativeScrollNearBottom()
+      );
       await new Promise((resolve) => {
         terminal.write(bytes, () => {
           syncTerminalRenderedHeight();
@@ -889,6 +995,11 @@ export function createOperatorTerminalView(options = {}) {
     if (!useNativeScrollProxy || syncingNativeScroll || disposed) {
       return;
     }
+    const buffer = terminal.buffer.active;
+    if (nativeAutoFollow && buffer.baseY - Number(viewportY) > 1) {
+      scheduleNativeTailPosition();
+      return;
+    }
     const cellHeight = measureNativeScrollCellHeight();
     root.scrollTop = Math.max(0, Number(viewportY) || 0) * cellHeight;
     syncTerminalFromNativeScroll();
@@ -959,6 +1070,10 @@ export function createOperatorTerminalView(options = {}) {
       if (useNativeScrollProxy) {
         root.scrollTop += Math.sign(direction) * Math.max(1, root.clientHeight);
         syncTerminalFromNativeScroll();
+        nativeAutoFollow = isNativeScrollNearBottom();
+        if (nativeAutoFollow) {
+          scheduleNativeTailPosition();
+        }
         return true;
       }
       terminal.scrollPages(direction);
@@ -966,18 +1081,20 @@ export function createOperatorTerminalView(options = {}) {
     },
     scrollToBottom() {
       if (useNativeScrollProxy) {
-        root.scrollTop = root.scrollHeight;
-        syncTerminalFromNativeScroll();
+        nativeAutoFollow = true;
+        applyNativeTailPosition();
+        scheduleNativeTailPosition();
         return;
       }
       terminal.scrollToBottom();
     },
     setFontScale(nextScale) {
+      const followBottom = useNativeScrollProxy && (nativeAutoFollow || isNativeScrollNearBottom());
       fontScale = clamp(Number(nextScale) || 1, 0.6, 2.4);
       terminal.options.fontSize = DEFAULT_FONT_SIZE * fontScale;
       terminal.refresh?.(0, terminal.rows - 1);
       syncTerminalRenderedHeight();
-      syncNativeScrollSize({ followBottom: isNativeScrollNearBottom() });
+      syncNativeScrollSize({ followBottom });
       return fontScale;
     },
     getFontScale() {
@@ -1005,10 +1122,25 @@ export function createOperatorTerminalView(options = {}) {
       writeEpoch += 1;
       terminalHeightObserver?.disconnect?.();
       terminalHeightObserver = null;
+      clearNativeScrollInteractionTimer();
+      if (nativeFollowFrame !== null) {
+        cancelFrame(nativeFollowFrame);
+        nativeFollowFrame = null;
+      }
       root.style?.removeProperty?.('--operator-terminal-render-height');
       copyGesture.dispose();
       if (useNativeScrollProxy) {
         root.removeEventListener?.('scroll', handleNativeScroll);
+        root.removeEventListener?.('wheel', handleNativeWheel);
+        if (useNativeTouchEvents) {
+          root.removeEventListener?.('touchstart', beginNativeScrollInteraction);
+          root.removeEventListener?.('touchend', endNativeScrollInteraction);
+          root.removeEventListener?.('touchcancel', endNativeScrollInteraction);
+        } else {
+          root.removeEventListener?.('pointerdown', beginNativeScrollInteraction);
+          root.removeEventListener?.('pointerup', endNativeScrollInteraction);
+          root.removeEventListener?.('pointercancel', endNativeScrollInteraction);
+        }
         root.classList?.remove?.('operator-native-scroll-proxy');
         host.style.transform = '';
         scrollSpacer.style.height = '0px';

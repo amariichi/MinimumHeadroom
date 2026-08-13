@@ -103,7 +103,7 @@ Run `agy models` to see the names available to the current account. The RMH
 launcher accepts an explicit name and passes it through to the interactive CLI:
 
     examples/rmh-voice-mode/start-rmh.sh --agent agy \
-      --model 'Gemini 3.6 Flash (Low)'
+      --model 'Gemini 3.7 Flash (Low)'
 
 The launcher deliberately leaves the model unset by default because the list is
 account-dependent and changes over time.
