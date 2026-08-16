@@ -3,10 +3,10 @@
 #  run-vllm-diffusiongemma.sh — serve nvidia/diffusiongemma-26B-A4B-it-NVFP4
 #  on an OpenAI-compatible endpoint (default http://127.0.0.1:8000/v1) for the
 #  vision-worker. Owned entirely by this repository (no dependency on any other
-#  repo). EXPERIMENTAL: needs an NVIDIA Blackwell/Hopper GPU + NVFP4.
+#  repo). Needs an NVIDIA Blackwell/Hopper GPU + NVFP4.
 #
 #  Backends:
-#    docker (default) — run the pinned pre-release vLLM image, start/stop/status.
+#    docker (default) — run the pinned stable vLLM image, start/stop/status.
 #    venv             — `vllm serve` from .venv-vllm-dgemma (documented fallback).
 #
 #  Usage:
@@ -24,14 +24,18 @@ BACKEND="${VLLM_DGEMMA_BACKEND:-docker}"
 NAME="${VLLM_DGEMMA_NAME:-dgemma}"
 PORT="${VLLM_DGEMMA_PORT:-8000}"
 MODEL="${VLLM_DGEMMA_MODEL:-nvidia/diffusiongemma-26B-A4B-it-NVFP4}"
-IMAGE="${VLLM_DGEMMA_IMAGE:-vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b}"
+IMAGE="${VLLM_DGEMMA_IMAGE:-vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967}"
 HF_CACHE="${HF_HOME:-${XDG_CACHE_HOME:-${HOME:-$ROOT_DIR}/.cache}/huggingface}"
 GPU_MEM_UTIL="${VLLM_DGEMMA_GPU_MEM_UTIL:-0.75}"
 MAX_MODEL_LEN="${VLLM_DGEMMA_MAX_MODEL_LEN:-8192}"
 MAX_NUM_SEQS="${VLLM_DGEMMA_MAX_NUM_SEQS:-4}"
-# CUDA-graph capture (the default, eager OFF) starts fine on the current pinned
-# image and is faster at inference; set VLLM_DGEMMA_ENFORCE_EAGER=1 only if a
-# future image regresses to the old startup hang that --enforce-eager worked around.
+# CUDA-graph capture (the default, eager OFF) is faster at inference and starts
+# fine on the pinned image. Set VLLM_DGEMMA_ENFORCE_EAGER=1 if you hit either the
+# old startup hang, or vLLM #51994 — DiffusionGemma's per-request causal flag can
+# freeze under FULL CUDA-graph replay and silently degrade output quality. That
+# report attributes the stale read to FlashAttention's dtype casting, so the
+# TRITON_ATTN backend used below should not be affected; --enforce-eager is the
+# escape hatch if generations start looking wrong for no visible reason.
 ENFORCE_EAGER="${VLLM_DGEMMA_ENFORCE_EAGER:-0}"
 EAGER_ARGS=()
 case "${ENFORCE_EAGER,,}" in

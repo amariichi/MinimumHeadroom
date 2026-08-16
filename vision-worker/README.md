@@ -79,7 +79,11 @@ OpenAI-compatible vision endpoint. That endpoint must accept image+text
 `/chat/completions` requests and return one JSON object with these fields:
 `is_text`, `ocr_full`, `overview`, `changed`, and `change_from_prev`.
 `VISION_GUIDED_DECODING=1` asks vLLM to enforce this schema with `guided_json`
-when the endpoint supports it. Runtime knobs such as `VLLM_DGEMMA_PORT`,
+when the endpoint supports it. **diffusiongemma does not**: a diffusion LM
+denoises a whole canvas in parallel, which the grammar FSM cannot drive, so vLLM
+rejects the request with HTTP 400. Leave it at `0` on the default backend; the
+worker already recovers the JSON object from free text. Runtime knobs such as
+`VLLM_DGEMMA_PORT`,
 `VLLM_DGEMMA_GPU_MEM_UTIL`, `VLLM_DGEMMA_MAX_MODEL_LEN`, and
 `VLLM_DGEMMA_BACKEND` are intentionally documented by
 `scripts/run-vllm-diffusiongemma.sh`, which is the source of truth for the
@@ -154,7 +158,7 @@ Deferred live smoke checklist for the next physical M12 pass:
 | `VISION_MODEL_BACKEND` | `mock` | `mock` or `diffusiongemma` |
 | `VISION_MODEL_URL` | `http://127.0.0.1:8000/v1` | OpenAI-compatible endpoint |
 | `VISION_MODEL_NAME` | `nvidia/diffusiongemma-26B-A4B-it-NVFP4` | model id |
-| `VISION_GUIDED_DECODING` | `0` | force JSON via vLLM guided decoding |
+| `VISION_GUIDED_DECODING` | `0` | force JSON via vLLM guided decoding (not supported by diffusiongemma) |
 | `VISION_CACHE_DIR` | `~/.cache/minimum-headroom/vision` | frame + DB storage |
 | `VISION_DB_PATH` | `<cache>/vision.db` | SQLite path |
 | `VISION_FRAME_DIR` | unset | replay source folder |
@@ -227,7 +231,10 @@ M12 カメラ、`vision-worker`、M12 警告スピーカーブリッジまでま
 `/chat/completions` を受け、`is_text`, `ocr_full`, `overview`, `changed`,
 `change_from_prev` を持つ JSON オブジェクトを返す必要があります。
 `VISION_GUIDED_DECODING=1` は、対応する vLLM endpoint に `guided_json` でこの
-スキーマを強制するための設定です。
+スキーマを強制するための設定です。**diffusiongemma は非対応**で、拡散 LM は
+canvas 全体を並列に denoise するため文法 FSM を駆動できず、vLLM が HTTP 400 で
+拒否します。既定バックエンドでは `0` のままにしてください（worker は自由文から
+JSON を復元します）。
 
 ### フル M12 視覚スタック
 
@@ -252,7 +259,7 @@ M12 カメラ、`vision-worker`、M12 警告スピーカーブリッジまでま
 | `VISION_MODEL_BACKEND` | `mock` | `mock` または `diffusiongemma` |
 | `VISION_MODEL_URL` | `http://127.0.0.1:8000/v1` | OpenAI 互換 endpoint |
 | `VISION_MODEL_NAME` | `nvidia/diffusiongemma-26B-A4B-it-NVFP4` | モデル ID |
-| `VISION_GUIDED_DECODING` | `0` | vLLM guided JSON decoding を使う |
+| `VISION_GUIDED_DECODING` | `0` | vLLM guided JSON decoding を使う（diffusiongemma は非対応） |
 | `VISION_CAMERA_URL` | unset/`auto` | M12 `/snapshot` URL。`run-vision-stack.sh` が自動発見可能 |
 | `VISION_CAMERA_REDISCOVER_AFTER_FAILURES` | `5` | 連続失敗後にカメラ URL を再探索する回数 |
 | `VISION_CACHE_DIR` | `~/.cache/minimum-headroom/vision` | フレームと SQLite DB の保存先 |

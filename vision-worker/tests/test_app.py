@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from vision_worker.records import Observation
-from vision_worker.summarize import Summarizer, consolidate_closed_bands
+from vision_worker.summarize import (
+    TIER_BUCKETS,
+    Summarizer,
+    bucket_start,
+    consolidate_closed_bands,
+)
 
 UTC = timezone.utc
 
@@ -477,9 +483,28 @@ def test_situation_read_consolidates_when_loop_is_off(tmp_path, monkeypatch):
     """Look-only usage (Mode A): with the perception loop stopped there is no
     idle callback, so /situation reads must take over summary consolidation —
     otherwise closed bands never get cached LLM summaries."""
+    # Hold the summarization thread inside the LLM call. /situation schedules the
+    # job and then decides `pending_llm` a moment later, so an unblocked job can
+    # cache its result first and flip the flag to False for reasons that have
+    # nothing to do with the idle gating under test (it wins that race easily
+    # whenever the model endpoint refuses the connection outright).
+    release = threading.Event()
+
+    def _blocking_llm(self, changes):
+        release.wait(timeout=5.0)
+        return "LLMによる要約"
+
+    monkeypatch.setattr(Summarizer, "_summarize_llm", _blocking_llm)
+
     client = _client(tmp_path, monkeypatch)
     db = client.app.state.db
-    old = datetime(2026, 7, 6, 13, 22, tzinfo=UTC)  # long-closed T1 band
+    # Anchor to the live clock. /situation only reports the newest
+    # SITUATION_SUMMARY_BANDS[1] closed T1 bands, so a fixed calendar date stops
+    # being visible the moment real time moves past that window. Placing the
+    # record inside the newest closed band leaves two more bands of slack, so a
+    # bucket rollover between here and the request below cannot flake the test.
+    band_start = bucket_start(datetime.now(UTC), TIER_BUCKETS[1]) - TIER_BUCKETS[1]
+    old = band_start + timedelta(minutes=2)
     _insert_change_at(db, old.isoformat(), "男性が立っている", "男性が画面に現れた")
 
     body = client.get("/situation").json()
@@ -490,10 +515,11 @@ def test_situation_read_consolidates_when_loop_is_off(tmp_path, monkeypatch):
     # (pending), not silently skipped as it was when idle required observing.
     assert any(s["pending_llm"] for s in body["summaries"])
     # The scheduled background job caches the band summary shortly after.
+    release.set()
     deadline = time.time() + 3.0
     cached = None
     while time.time() < deadline:
-        cached = db.get_summary(1, "2026-07-06T13:20:00+00:00")
+        cached = db.get_summary(1, band_start.isoformat())
         if cached:
             break
         time.sleep(0.05)

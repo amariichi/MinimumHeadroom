@@ -343,11 +343,15 @@ class DiffusionGemmaClient:
                 ],
             }
         ]
+        # No "temperature": a diffusion model denoises a whole canvas per step on a
+        # fixed temperature schedule, so vLLM rejects any per-request temperature
+        # other than 1.0 (HTTP 400 since v0.25.0; older pre-release builds accepted
+        # and silently ignored it). Same for guided_json below — the grammar FSM
+        # needs left-to-right sampling, so structured outputs are refused too.
         payload: dict = {
             "model": self.model_name,
             "messages": messages,
             "max_tokens": 1024,
-            "temperature": 0,
         }
         if self.guided:
             payload["guided_json"] = RESPONSE_SCHEMA

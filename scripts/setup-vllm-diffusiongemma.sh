@@ -4,9 +4,9 @@
 #
 #  Owned entirely by this repository (no dependency on any other repo).
 #  Two backends:
-#    docker (default) — pull the pinned pre-release vLLM image.
-#    venv             — create a virtualenv and install vLLM (requires a build
-#                       with diffusion_gemma support; documented fallback).
+#    docker (default) — pull the pinned stable vLLM release image.
+#    venv             — create a virtualenv and install vLLM (needs >= v0.25.0
+#                       for diffusion_gemma; documented fallback).
 #
 #  Idempotent: re-running pulls/reuses without side effects.
 #  Usage:
@@ -18,19 +18,21 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 BACKEND="${VLLM_DGEMMA_BACKEND:-docker}"
-# Pinned by digest for reproducibility. PRE-RELEASE / experimental image
-# (upstream tag: vllm/vllm-openai:gemma). Refresh the digest when a newer
-# pre-release is published. Requires an NVIDIA Blackwell/Hopper GPU + NVFP4.
-IMAGE="${VLLM_DGEMMA_IMAGE:-vllm/vllm-openai@sha256:9c719fc0c869092c7d0533f8357d6985a38d5ff03b20ffb6a4620c2b4806dd4b}"
+# Pinned by digest for reproducibility. Stable upstream release
+# (vllm/vllm-openai:v0.27.1, 2026-08-11). diffusion_gemma has been in mainline
+# vLLM since v0.25.0, so the old vllm/vllm-openai:gemma pre-release image (frozen
+# at 2026-06-10) is no longer needed. Refresh the digest when upgrading vLLM.
+# Requires an NVIDIA Blackwell/Hopper GPU + NVFP4.
+IMAGE="${VLLM_DGEMMA_IMAGE:-vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967}"
 VENV_DIR="${VLLM_DGEMMA_VENV_DIR:-$ROOT_DIR/.venv-vllm-dgemma}"
 
 usage() {
   cat <<'EOF'
 Usage: ./scripts/setup-vllm-diffusiongemma.sh [--backend docker|venv]
 
-  --backend docker   Pull the pinned pre-release vLLM image (default).
+  --backend docker   Pull the pinned stable vLLM release image (default).
   --backend venv     Create .venv-vllm-dgemma and install vLLM (fallback;
-                     needs a vLLM build that supports diffusion_gemma).
+                     needs vLLM >= v0.25.0 for diffusion_gemma).
   -h, --help         Show this help.
 EOF
 }
@@ -61,9 +63,9 @@ case "$BACKEND" in
     "$VENV_DIR/bin/python" -m pip install --upgrade pip
     echo "[setup-vllm-diffusiongemma] installing vLLM into $VENV_DIR"
     "$VENV_DIR/bin/pip" install --upgrade vllm
-    echo "[setup-vllm-diffusiongemma] NOTE: the venv backend only works if the"
-    echo "  installed vLLM build supports 'diffusion_gemma'. Until mainline vLLM"
-    echo "  includes it, prefer '--backend docker' with the pinned pre-release image."
+    echo "[setup-vllm-diffusiongemma] NOTE: 'diffusion_gemma' needs vLLM >= v0.25.0."
+    echo "  The venv build must also provide working NVFP4 (modelopt_fp4) kernels for"
+    echo "  your GPU; '--backend docker' with the pinned image is the tested path."
     ;;
   *)
     echo "[setup-vllm-diffusiongemma] unknown backend: $BACKEND (expected docker|venv)" >&2
