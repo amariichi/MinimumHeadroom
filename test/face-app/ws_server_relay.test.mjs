@@ -9,6 +9,7 @@ import { gunzipSync } from 'node:zlib';
 import {
   armTerminalResetAfterDrain,
   encodeTerminalPayloadForSubscription,
+  planTerminalDataDelivery,
   receivedPayloadLogMessage,
   startFaceWebSocketServer
 } from '../../face-app/dist/ws_server.js';
@@ -160,6 +161,30 @@ test('terminal backpressure requests one reset after the socket drains', () => {
   }), true);
   socket.emit('drain');
   assert.equal(resetRequests, 1);
+});
+
+test('a latched terminal socket asks for a reset as soon as its buffer drains', () => {
+  const highWater = 256 * 1024;
+  const socket = new EventEmitter();
+  socket.writableLength = 0;
+  socket.__mhTerminalNeedsReset = false;
+
+  assert.equal(planTerminalDataDelivery(socket, highWater), 'send');
+
+  socket.writableLength = highWater + 1;
+  assert.equal(planTerminalDataDelivery(socket, highWater), 'latch');
+
+  socket.__mhTerminalNeedsReset = true;
+  assert.equal(planTerminalDataDelivery(socket, highWater), 'suppress');
+
+  // The socket caught up without ever emitting 'drain'. Before this fix the
+  // mirror stayed dark until the user switched panes; now the next data frame
+  // triggers a fresh reset request instead.
+  socket.writableLength = 1024;
+  assert.equal(planTerminalDataDelivery(socket, highWater), 'resync');
+
+  socket.__mhTerminalNeedsReset = false;
+  assert.equal(planTerminalDataDelivery(socket, highWater), 'send');
 });
 
 test('terminal payload compression is negotiated and lossless', () => {

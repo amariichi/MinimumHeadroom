@@ -46,6 +46,7 @@ class FakeTerminal {
     this.selectedLines = [];
     this.selectedRanges = [];
     this.cellWidths = new Map();
+    this.lines = [];
     this.buffer = {
       active: {
         viewportY: 0,
@@ -54,10 +55,18 @@ class FakeTerminal {
         getLine: (row) => ({
           getCell: (col) => ({
             getWidth: () => this.cellWidths.get(`${row}:${col}`) ?? 1
-          })
+          }),
+          translateToString: (trimRight) => {
+            const text = this.lines[row] ?? '';
+            return trimRight ? text.replace(/\s+$/u, '') : text;
+          }
         })
       }
     };
+  }
+
+  setLines(lines) {
+    this.lines = [...lines];
   }
 
   open(host) {
@@ -511,7 +520,9 @@ test('native touch scroll proxy restores incidental layout jumps but preserves d
 
   root.scrollTop = 0;
   root.dispatchEvent(new Event('scroll'));
-  assert.equal(root.scrollTop, root.scrollHeight);
+  // The tail is the largest offset the element can actually hold; a real
+  // element clamps an over-large assignment to exactly this value.
+  assert.equal(root.scrollTop, root.scrollHeight - root.clientHeight);
   assert.equal(view.terminal.buffer.active.viewportY, 20);
   assert.equal(view.isNearBottom(), true);
 
@@ -525,6 +536,38 @@ test('native touch scroll proxy restores incidental layout jumps but preserves d
   view.setFontScale(1.1);
   assert.equal(root.scrollTop, 0);
   assert.equal(view.terminal.buffer.active.viewportY, 0);
+
+  view.dispose();
+});
+
+test('native touch scroll proxy follows the last written row, not the blank grid bottom', () => {
+  const root = new FakeElement({ top: 0, bottom: 100, left: 0, width: 200, height: 100 });
+  const host = new FakeElement({ top: 0, bottom: 200, left: 0, width: 200, height: 200 });
+  const spacer = new FakeElement();
+  root.scrollHeight = 200;
+  const view = createOperatorTerminalView({
+    root,
+    host,
+    scrollSpacer: spacer,
+    TerminalClass: FakeTerminal,
+    useNativeScrollProxy: true,
+    ResizeObserverClass: null
+  });
+  // A freshly started shell: 10 rows tall, two lines of output, cursor on row 1.
+  view.terminal.resize(20, 10);
+  view.terminal.buffer.active.baseY = 0;
+  view.terminal.buffer.active.cursorY = 1;
+  view.terminal.setLines(['user@host:/tmp$ cd /tmp', 'user@host:/tmp$']);
+
+  view.scrollToBottom();
+  assert.equal(root.scrollTop, 0, 'a two-line pane must stay at the top instead of scrolling to blank rows');
+  assert.equal(view.isNearBottom(), true);
+
+  // The same screen once output fills it: following now reaches the real bottom.
+  view.terminal.buffer.active.cursorY = 9;
+  view.terminal.setLines(Array.from({ length: 10 }, (_, index) => `line ${index}`));
+  view.scrollToBottom();
+  assert.equal(root.scrollTop, root.scrollHeight - root.clientHeight);
 
   view.dispose();
 });

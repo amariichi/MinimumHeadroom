@@ -161,6 +161,29 @@ function parseOutputNotification(line, extended = false) {
   };
 }
 
+export function parseCursorReply(value) {
+  const text = (Buffer.isBuffer(value) ? value.toString('utf8') : String(value ?? '')).trim();
+  const match = /^(\d+),(\d+)$/u.exec(text);
+  if (!match) {
+    return null;
+  }
+  const x = Number.parseInt(match[1], 10);
+  const y = Number.parseInt(match[2], 10);
+  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+    return null;
+  }
+  return { x, y };
+}
+
+// CUP ("cursor position") places the cursor at an absolute row and column of
+// the screen; both are 1-based in the escape sequence and 0-based in tmux.
+export function cursorRestoreSequence(cursor) {
+  if (!cursor || !Number.isSafeInteger(cursor.x) || !Number.isSafeInteger(cursor.y)) {
+    return null;
+  }
+  return `\u001b[${Math.max(0, cursor.y) + 1};${Math.max(0, cursor.x) + 1}H`;
+}
+
 function parseBoundary(line, prefix) {
   const text = line.toString('utf8');
   if (!text.startsWith(prefix)) {
@@ -453,18 +476,38 @@ export function createTmuxControlModeClient(options = {}) {
   }
 
   function requestCommand(command, onComplete = null) {
+    return requestCommandBatch([{ command, onComplete }])[0];
+  }
+
+  // tmux answers every command with its own %begin/%end block, even when the
+  // commands arrive on one line separated by ';'. Writing the whole batch in a
+  // single stdin write still matters: the tmux server reads and runs the batch
+  // before it pumps pane output again, so no %output can be interleaved
+  // between the commands. That is what makes a capture and a cursor query
+  // describe the same instant.
+  function requestCommandBatch(entries) {
     if (!process || process.killed || process.stdin.destroyed) {
-      return Promise.reject(terminalError('tmux_control_offline', 'tmux Control Mode client is not running'));
+      const offline = terminalError('tmux_control_offline', 'tmux Control Mode client is not running');
+      return entries.map(() => Promise.reject(offline));
     }
-    return new Promise((resolve, reject) => {
-      commandQueue.push({ command, onComplete, resolve, reject });
-      try {
-        process.stdin.write(`${command}\n`);
-      } catch (error) {
-        commandQueue.pop();
-        reject(terminalError('tmux_control_write_failed', error.message, error));
+    const pending = [];
+    const promises = entries.map((entry) => new Promise((resolve, reject) => {
+      pending.push({ command: entry.command, onComplete: entry.onComplete ?? null, resolve, reject });
+    }));
+    commandQueue.push(...pending);
+    try {
+      process.stdin.write(`${entries.map((entry) => entry.command).join('\n')}\n`);
+    } catch (error) {
+      const failure = terminalError('tmux_control_write_failed', error.message, error);
+      for (const entry of pending) {
+        const index = commandQueue.indexOf(entry);
+        if (index >= 0) {
+          commandQueue.splice(index, 1);
+        }
+        entry.reject(failure);
       }
-    });
+    }
+    return promises;
   }
 
   async function start() {
@@ -568,6 +611,58 @@ export function createTmuxControlModeClient(options = {}) {
       );
       return response.data;
     },
+    // capture-pane replays as plain text, so the seeded copy always ends with
+    // the cursor after the last captured line. On a pane whose content does not
+    // fill the screen that is many rows below where tmux actually holds the
+    // cursor, and every later byte then lands on the wrong row. Ask tmux for
+    // the real cursor in the same write so the caller can restore it.
+    async capturePaneWithCursor(scrollback = 5000, onComplete = null) {
+      await start();
+      const lineCount = clampInteger(scrollback, 5000, 1, 100_000);
+      let capture = Buffer.alloc(0);
+      let cursor = null;
+      let delivered = false;
+
+      function deliver() {
+        if (delivered) {
+          return;
+        }
+        delivered = true;
+        onComplete?.(capture, cursor);
+      }
+
+      const [capturePromise, cursorPromise] = requestCommandBatch([
+        {
+          command: `capture-pane -p -e -S -${lineCount} -t ${paneInfo.pane}`,
+          onComplete(data) {
+            capture = data;
+          }
+        },
+        {
+          // The format string must be quoted: unquoted, tmux treats the leading
+          // '#' as a comment and silently answers with its default status line
+          // instead of the cursor position.
+          command: `display-message -p -t ${paneInfo.pane} "#{cursor_x},#{cursor_y}"`,
+          onComplete(data) {
+            cursor = parseCursorReply(data);
+            // Runs synchronously while the control stream is still inside this
+            // response, so the caller seeds its copy before any later %output.
+            deliver();
+          }
+        }
+      ]);
+
+      await capturePromise;
+      try {
+        await cursorPromise;
+      } catch (error) {
+        // A cursor query failure must not take the whole stream down; seed
+        // without the restore and let the next reset correct the position.
+        log.warn(`[operator-terminal] cursor query failed: ${error.message}`);
+        deliver();
+      }
+      return { capture, cursor };
+    },
     async stop() {
       stopping = true;
       if (!process) {
@@ -614,6 +709,8 @@ export function createOperatorTerminalTransport(options = {}) {
     : (stateOptions) => createHeadlessTerminalState(stateOptions);
   const subscribers = new Set();
   const acknowledgedBySubscriber = new Map();
+  const pendingResetSubscribers = new Set();
+  let pendingBroadcastReset = false;
   let client = null;
   let state = null;
   let pane = null;
@@ -696,6 +793,8 @@ export function createOperatorTerminalTransport(options = {}) {
     batcher.discard();
     deferredBatches = [];
     hasReset = false;
+    pendingResetSubscribers.clear();
+    pendingBroadcastReset = false;
     if (restartTimer !== null) {
       clearTimeout(restartTimer);
       restartTimer = null;
@@ -750,10 +849,20 @@ export function createOperatorTerminalTransport(options = {}) {
       cols = info.cols;
       rows = info.rows;
       let nextState = null;
-      await nextClient.capturePane(scrollback, (capture) => {
+      const capturePaneWithCursor = typeof nextClient.capturePaneWithCursor === 'function'
+        ? nextClient.capturePaneWithCursor.bind(nextClient)
+        : (limit, onComplete) => nextClient.capturePane(limit, (capture) => onComplete(capture, null));
+      await capturePaneWithCursor(scrollback, (capture, cursor) => {
         nextState = createState({ cols, rows, scrollback });
         state = nextState;
-        void nextState.resetFromCapture(capture).catch((error) => {
+        // The capture replays as text, which parks the cursor after the last
+        // captured line. Restoring tmux's real cursor keeps every later byte on
+        // the row it belongs to instead of drifting down the screen.
+        const restore = cursorRestoreSequence(cursor);
+        const seed = restore
+          ? Buffer.concat([Buffer.from(capture), Buffer.from(restore, 'utf8')])
+          : capture;
+        void nextState.resetFromCapture(seed).catch((error) => {
           log.warn(`[operator-terminal] capture seed failed: ${error.message}`);
         });
       });
@@ -775,9 +884,40 @@ export function createOperatorTerminalTransport(options = {}) {
     }
   }
 
+  // One stalled browser can produce a burst of reset requests: every delayed
+  // acknowledgement it sends carries an old generation, and each of those would
+  // otherwise queue its own full-screen refresh. Any reset already on the way
+  // satisfies all of them, so collapse the burst into the pending one.
+  function clearPendingReset(subscriberId) {
+    if (subscriberId === null) {
+      pendingBroadcastReset = false;
+      // A broadcast refresh reaches every subscriber, so any per-subscriber
+      // request that was suppressed by it is now satisfied too.
+      pendingResetSubscribers.clear();
+      return;
+    }
+    pendingResetSubscribers.delete(subscriberId);
+  }
+
+  function hasPendingResetFor(subscriberId) {
+    if (pendingBroadcastReset) {
+      return true;
+    }
+    return subscriberId !== null && pendingResetSubscribers.has(subscriberId);
+  }
+
   function queueReset(subscriberId = null) {
+    if (hasPendingResetFor(subscriberId)) {
+      return resetQueue;
+    }
+    if (subscriberId === null) {
+      pendingBroadcastReset = true;
+    } else {
+      pendingResetSubscribers.add(subscriberId);
+    }
     resetQueue = resetQueue.then(async () => {
       if (closed || subscribers.size === 0) {
+        clearPendingReset(subscriberId);
         return false;
       }
       await startStream();
@@ -802,12 +942,16 @@ export function createOperatorTerminalTransport(options = {}) {
         scrollback,
         data_base64: Buffer.from(serialized, 'utf8').toString('base64')
       });
+      // Cleared only after the refresh is on the wire, so requests that arrive
+      // while it is being produced are answered by it instead of stacking up.
+      clearPendingReset(subscriberId);
       hasReset = true;
       deliveryPaused = false;
       resumeDeferredBatches();
       batcher.flush();
       return true;
     }).catch((error) => {
+      clearPendingReset(subscriberId);
       deliveryPaused = false;
       log.warn(`[operator-terminal] reset failed: ${error.message}`);
       emit({
@@ -850,6 +994,7 @@ export function createOperatorTerminalTransport(options = {}) {
       }
       subscribers.delete(subscriberId);
       acknowledgedBySubscriber.delete(subscriberId);
+      pendingResetSubscribers.delete(subscriberId);
       if (subscribers.size === 0) {
         await stopStream();
       }
