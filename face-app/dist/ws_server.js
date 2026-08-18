@@ -18,6 +18,9 @@ const TERMINAL_STREAM_MESSAGE_TYPES = new Set([
   'operator_terminal_error'
 ]);
 
+// Shortest gap between two reset requests made on one socket's behalf.
+const TERMINAL_RESYNC_RETRY_MS = 1000;
+
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
@@ -123,6 +126,27 @@ export function armTerminalResetAfterDrain(socket, requestReset) {
     }
   });
   return true;
+}
+
+// Decides what to do with one terminal data frame for one socket.
+//
+//   'send'    deliver it
+//   'latch'   the write buffer is over the limit: stop sending output and wait
+//             for a full-screen reset to replace what this socket will miss
+//   'suppress' already latched and still behind: drop silently
+//   'resync'  already latched but the buffer has drained: ask for the reset now
+//
+// The 'resync' case exists because the socket 'drain' event is not a reliable
+// wake-up. A socket can fall behind, catch up quietly, and never emit 'drain',
+// which used to leave the mirror latched off forever - the terminal simply
+// stopped updating until the user switched panes.
+export function planTerminalDataDelivery(socket, highWaterBytes) {
+  const buffered = Number(socket?.writableLength ?? 0);
+  const overHighWater = Number.isFinite(buffered) && buffered > highWaterBytes;
+  if (socket?.__mhTerminalNeedsReset === true) {
+    return overHighWater ? 'suppress' : 'resync';
+  }
+  return overHighWater ? 'latch' : 'send';
 }
 
 export function encodeTerminalPayloadForSubscription(payload, subscription) {
@@ -671,9 +695,9 @@ export async function startFaceWebSocketServer(options = {}) {
       if (targetSubscriberId && targetSubscriberId !== socket.__mhTerminalSubscriberId) {
         return false;
       }
-      if (payload.type === 'operator_terminal_data' && socket.__mhTerminalNeedsReset === true) {
-        return false;
-      }
+      // Whether a latched socket may receive this data frame is decided by
+      // planTerminalDataDelivery in broadcastPayload, which can also turn the
+      // latch back off; this function only answers "is this frame for you".
       return true;
     }
     if (TERMINAL_CLIENT_MESSAGE_TYPES.has(payload?.type)) {
@@ -790,6 +814,7 @@ export async function startFaceWebSocketServer(options = {}) {
       }
       socket.__mhTerminalSubscription = { sessionId, dataEncoding };
       socket.__mhTerminalNeedsReset = false;
+      socket.__mhTerminalResyncRequestedAt = 0;
       sendToOperatorBridges(terminalControlPayload(socket, payload));
       return true;
     }
@@ -810,6 +835,25 @@ export async function startFaceWebSocketServer(options = {}) {
     }
     sendToOperatorBridges(outgoing);
     return true;
+  }
+
+  // Asks the operator bridge for a fresh full-screen reset on this socket's
+  // behalf. Rate limited because the trigger is "a terminal data frame arrived",
+  // which on a busy pane happens twice a second.
+  function requestTerminalResync(socket, reason) {
+    if (!sockets.has(socket) || !socket.__mhTerminalSubscription) {
+      return false;
+    }
+    const now = Date.now();
+    const lastRequestedAt = Number(socket.__mhTerminalResyncRequestedAt ?? 0);
+    if (Number.isFinite(lastRequestedAt) && now - lastRequestedAt < TERMINAL_RESYNC_RETRY_MS) {
+      return false;
+    }
+    socket.__mhTerminalResyncRequestedAt = now;
+    return sendToOperatorBridges(terminalControlPayload(socket, {
+      type: 'operator_terminal_resync',
+      reason
+    }));
   }
 
   function replayTerminalSubscriptionsToBridge(bridgeSocket) {
@@ -857,21 +901,20 @@ export async function startFaceWebSocketServer(options = {}) {
         if (!shouldSendPayloadToSocket(peer, payload)) {
           continue;
         }
-        if (
-          payload?.type === 'operator_terminal_data'
-          && Number(peer.writableLength ?? 0) > terminalSocketHighWaterBytes
-        ) {
-          peer.__mhTerminalNeedsReset = true;
-          armTerminalResetAfterDrain(peer, () => {
-            if (!sockets.has(peer) || !peer.__mhTerminalSubscription) {
-              return;
-            }
-            sendToOperatorBridges(terminalControlPayload(peer, {
-              type: 'operator_terminal_resync',
-              reason: 'socket_backpressure'
-            }));
-          });
-          continue;
+        if (payload?.type === 'operator_terminal_data') {
+          const decision = planTerminalDataDelivery(peer, terminalSocketHighWaterBytes);
+          if (decision === 'latch') {
+            peer.__mhTerminalNeedsReset = true;
+            armTerminalResetAfterDrain(peer, () => requestTerminalResync(peer, 'socket_backpressure'));
+            continue;
+          }
+          if (decision === 'resync') {
+            requestTerminalResync(peer, 'socket_backpressure_drained');
+            continue;
+          }
+          if (decision === 'suppress') {
+            continue;
+          }
         }
         let frame = plainFrame;
         if (
@@ -890,6 +933,7 @@ export async function startFaceWebSocketServer(options = {}) {
         const sent = safeSocketWrite(peer, frame);
         if (sent && payload?.type === 'operator_terminal_reset') {
           peer.__mhTerminalNeedsReset = false;
+          peer.__mhTerminalResyncRequestedAt = 0;
         }
       }
       // Fire the Atom TTS dispatch hook on every tts_audio / tts_audio_ref
@@ -1025,6 +1069,7 @@ export async function startFaceWebSocketServer(options = {}) {
     socket.__mhTerminalSubscription = null;
     socket.__mhTerminalNeedsReset = false;
     socket.__mhTerminalResetOnDrain = false;
+    socket.__mhTerminalResyncRequestedAt = 0;
     sockets.add(socket);
     replayCachedPayloads(socket);
     if (operatorBridgeClient) {

@@ -8,7 +8,9 @@ import {
   createTerminalOutputBatcher,
   createTmuxControlModeClient,
   createTmuxControlParser,
-  decodeTmuxControlOutput
+  cursorRestoreSequence,
+  decodeTmuxControlOutput,
+  parseCursorReply
 } from '../../face-app/dist/operator_terminal_stream.js';
 
 const execFileAsync = promisify(execFile);
@@ -152,6 +154,93 @@ test('Control Mode client captures and then emits exact live pane bytes on a pri
   );
 });
 
+test('cursor replies parse into a one-based absolute position sequence', () => {
+  assert.deepEqual(parseCursorReply(Buffer.from('2,27')), { x: 2, y: 27 });
+  assert.deepEqual(parseCursorReply(' 0,0 \n'), { x: 0, y: 0 });
+  assert.equal(parseCursorReply('no such pane'), null);
+  assert.equal(parseCursorReply(''), null);
+  assert.equal(cursorRestoreSequence({ x: 2, y: 27 }), '[28;3H');
+  assert.equal(cursorRestoreSequence(null), null);
+});
+
+test('Control Mode capture restores the real pane cursor instead of the last captured row', async (t) => {
+  const socketName = `mh-cursor-test-${process.pid}-${Date.now()}`;
+  const sessionName = 'mh-cursor-probe';
+  let client = null;
+
+  t.after(async () => {
+    try {
+      await client?.stop();
+    } catch {}
+    try {
+      await execFileAsync('tmux', ['-L', socketName, 'kill-server']);
+    } catch {}
+  });
+
+  // A 6-row pane holding only two lines: exactly the shape of a freshly
+  // started helper pane, where the cursor sits far above the last screen row.
+  await execFileAsync('tmux', [
+    '-L', socketName,
+    '-f', '/dev/null',
+    'new-session', '-d', '-s', sessionName, '-x', '40', '-y', '6', 'sh'
+  ]);
+  await execFileAsync('tmux', [
+    '-L', socketName,
+    'send-keys', '-t', `${sessionName}:0.0`, '-l', "printf 'top\\n'"
+  ]);
+  await execFileAsync('tmux', ['-L', socketName, 'send-keys', '-t', `${sessionName}:0.0`, 'Enter']);
+  await delay(400);
+
+  const cursorProbe = await execFileAsync('tmux', [
+    '-L', socketName,
+    'display-message', '-p', '-t', `${sessionName}:0.0`, '#{cursor_y}'
+  ]);
+  const paneCursorRow = Number.parseInt(cursorProbe.stdout.trim(), 10);
+  assert.ok(paneCursorRow < 5, `expected the pane cursor above the last row, got ${paneCursorRow}`);
+
+  client = createTmuxControlModeClient({
+    pane: `${sessionName}:0.0`,
+    tmuxArgs: ['-L', socketName],
+    log: silentLog
+  });
+  await client.start();
+
+  let seeded = null;
+  const { cursor } = await client.capturePaneWithCursor(20, (capture, paneCursor) => {
+    seeded = { capture, paneCursor };
+  });
+  assert.ok(seeded, 'the capture callback must run');
+  assert.deepEqual(cursor, seeded.paneCursor);
+  assert.equal(cursor.y, paneCursorRow);
+
+  // Replaying the capture alone parks the cursor on the last captured row;
+  // appending the restore sequence puts it back where tmux holds it, so the
+  // next byte of live output lands on the right row.
+  const state = createHeadlessTerminalState({ cols: 40, rows: 6, scrollback: 20 });
+  await state.resetFromCapture(
+    Buffer.concat([Buffer.from(seeded.capture), Buffer.from(cursorRestoreSequence(cursor), 'utf8')])
+  );
+  await state.write(Buffer.from('LIVE'));
+  const checkpoint = await state.serialize();
+  await state.dispose();
+
+  const rows = checkpoint.split('\r\n');
+  assert.equal(
+    rows.findIndex((row) => row.includes('LIVE')),
+    paneCursorRow,
+    `live output must land on row ${paneCursorRow}: ${JSON.stringify(rows)}`
+  );
+
+  // Same seed without the restore: this is the old behaviour, and it puts live
+  // output on the last captured row, 4 rows below where the pane really is.
+  const drifting = createHeadlessTerminalState({ cols: 40, rows: 6, scrollback: 20 });
+  await drifting.resetFromCapture(Buffer.from(seeded.capture));
+  await drifting.write(Buffer.from('LIVE'));
+  const driftedRows = (await drifting.serialize()).split('\r\n');
+  await drifting.dispose();
+  assert.equal(driftedRows.findIndex((row) => row.includes('LIVE')), 5);
+});
+
 test('terminal transport starts on subscribe, sequences deltas, targets reset, and stops at zero subscribers', async () => {
   const payloads = [];
   const clients = [];
@@ -234,5 +323,78 @@ test('terminal transport starts on subscribe, sequences deltas, targets reset, a
   await transport.handleUnsubscribe({ subscriber_id: 'browser-1' });
   assert.equal(clients[0].stopped, true);
   assert.equal(transport.getState().subscriberCount, 0);
+  await transport.shutdown();
+});
+
+test('a burst of stale acknowledgements collapses into a single reset', async () => {
+  const payloads = [];
+
+  const transport = createOperatorTerminalTransport({
+    sessionId: 's1',
+    tmuxController: { pane: 'demo:0.0' },
+    createClient: (options) => ({
+      async start() {
+        return { pane: '%9', session: 'demo', cols: 40, rows: 8 };
+      },
+      async capturePaneWithCursor(_scrollback, onComplete) {
+        const capture = Buffer.from('seed');
+        onComplete(capture, { x: 0, y: 0 });
+        return { capture, cursor: { x: 0, y: 0 } };
+      },
+      emit(data) {
+        options.onOutput(Buffer.from(data));
+      },
+      async stop() {}
+    }),
+    createState: () => {
+      let content = '';
+      return {
+        async resetFromCapture(data) {
+          content = Buffer.from(data).toString('utf8');
+        },
+        async write(data) {
+          content += Buffer.from(data).toString('utf8');
+        },
+        async serialize() {
+          return content;
+        },
+        async dispose() {}
+      };
+    },
+    batchDelayMs: 2,
+    batchMaxBytes: 1024,
+    sendPayload(payload) {
+      payloads.push(payload);
+      return true;
+    },
+    now: () => 123
+  });
+
+  await transport.handleSubscribe({ subscriber_id: 'browser-1' });
+  const resetsAfterSubscribe = payloads.filter((payload) => payload.type === 'operator_terminal_reset').length;
+
+  // A browser that stalled and caught up acknowledges a batch of frames at
+  // once, every one of them carrying a generation the bridge has moved past.
+  // Each of those used to queue its own full-screen refresh.
+  const staleAcks = Array.from({ length: 10 }, () => transport.handleAck({
+    subscriber_id: 'browser-1',
+    generation: 999,
+    seq: 1
+  }));
+  await Promise.all(staleAcks);
+  await delay(10);
+
+  const resets = payloads.filter((payload) => payload.type === 'operator_terminal_reset').length;
+  assert.equal(resets - resetsAfterSubscribe, 1, `expected one coalesced reset, got ${resets - resetsAfterSubscribe}`);
+
+  // A later desync still gets served: coalescing only suppresses duplicates of
+  // a refresh that has not been sent yet.
+  await transport.handleResync({ subscriber_id: 'browser-1' });
+  await delay(10);
+  assert.equal(
+    payloads.filter((payload) => payload.type === 'operator_terminal_reset').length - resetsAfterSubscribe,
+    2
+  );
+
   await transport.shutdown();
 });

@@ -717,11 +717,52 @@ export function createOperatorTerminalView(options = {}) {
     return Math.max(0, rootContentHeight - hostHeight);
   }
 
+  // The bottom-most row that actually carries something. A pane whose output
+  // does not fill the screen (a freshly started shell, for example) leaves the
+  // rows below the cursor blank, and following the grid bottom would park the
+  // viewport on that blank space with the real content scrolled out of sight.
+  function measureNativeContentBottomRow() {
+    const buffer = terminal.buffer?.active;
+    const lastRow = Math.max(0, terminal.rows - 1);
+    if (!buffer || typeof buffer.getLine !== 'function') {
+      return lastRow;
+    }
+    const baseY = Math.max(0, Number(buffer.baseY) || 0);
+    const cursorRow = Number.isFinite(buffer.cursorY) ? Math.max(0, Math.min(lastRow, buffer.cursorY)) : null;
+    let lastFilledRow = null;
+    for (let row = lastRow; row >= 0; row -= 1) {
+      const line = buffer.getLine(baseY + row);
+      if (typeof line?.translateToString !== 'function') {
+        // Unknown buffer shape: keep the historical "follow the grid" behaviour.
+        return lastRow;
+      }
+      if (line.translateToString(true).trim() !== '') {
+        lastFilledRow = row;
+        break;
+      }
+    }
+    if (cursorRow === null && lastFilledRow === null) {
+      return lastRow;
+    }
+    return Math.max(cursorRow ?? 0, lastFilledRow ?? 0);
+  }
+
+  function computeNativeTailScrollTop() {
+    if (!useNativeScrollProxy) {
+      return 0;
+    }
+    const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+    const cellHeight = measureNativeScrollCellHeight();
+    const baseY = Math.max(0, Number(terminal.buffer.active.baseY) || 0);
+    const contentBottomPx = (baseY + measureNativeContentBottomRow() + 1) * cellHeight;
+    return Math.max(0, Math.min(maxScrollTop, Math.ceil(contentBottomPx - root.clientHeight)));
+  }
+
   function isNativeScrollNearBottom() {
     if (!useNativeScrollProxy) {
       return false;
     }
-    const remaining = Math.max(0, root.scrollHeight - root.clientHeight - root.scrollTop);
+    const remaining = Math.max(0, computeNativeTailScrollTop() - root.scrollTop);
     return remaining <= Math.max(2, measureNativeScrollCellHeight() * 1.5);
   }
 
@@ -791,7 +832,7 @@ export function createOperatorTerminalView(options = {}) {
     if (!useNativeScrollProxy || disposed || !nativeAutoFollow) {
       return;
     }
-    root.scrollTop = root.scrollHeight;
+    root.scrollTop = computeNativeTailScrollTop();
     syncTerminalFromNativeScroll();
   }
 
