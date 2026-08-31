@@ -875,9 +875,13 @@ export function createOperatorBridgeRuntime(options = {}) {
 
 export function startOperatorBridge(options = {}) {
   const baseWsUrl = asNonEmptyString(options.wsUrl) ?? 'ws://127.0.0.1:8765/ws';
-  const wsUrl = withAuthTokenUrl(baseWsUrl, options.authToken);
-  const displayWsUrl = redactedUrl(wsUrl);
   const sessionId = normalizeSessionId(options.sessionId, 'default');
+  const wsUrl = (() => {
+    const url = new URL(withAuthTokenUrl(baseWsUrl, options.authToken));
+    url.searchParams.set('operator_session_id', sessionId);
+    return url.toString();
+  })();
+  const displayWsUrl = redactedUrl(wsUrl);
   const terminalTransportMode = options.terminalTransport === 'snapshot' ? 'snapshot' : 'control';
   const mirrorIntervalMs = clampInteger(options.mirrorIntervalMs, 500, 200, 60_000);
   const reconnectMinMs = clampInteger(options.reconnectMinMs, 900, 200, 10_000);

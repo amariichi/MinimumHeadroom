@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.27.1';
+const SERVER_VERSION = '1.28.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_AUTH_TOKEN = (() => {
@@ -30,6 +30,17 @@ const VISION_BASE_URL = (() => {
   const raw = process.env.VISION_BASE_URL;
   const value = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : 'http://127.0.0.1:8095';
   return value.replace(/\/+$/, '');
+})();
+const MAX_ATOM_SPEAKER_VOLUME = 200;
+const MAX_ATOM_VOLUME_PERCENT = 100;
+const DEFAULT_ATOM_VOLUME_PERCENTAGE_POINTS = 5;
+const FACE_ATOM_DEVICE_ID = (() => {
+  const raw = process.env.ATOM_HEADROOM_DEVICE_ID;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : 'atom-headroom-1';
+})();
+const M12_ATOM_DEVICE_ID = (() => {
+  const raw = process.env.MH_M12_DEVICE_ID;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : 'atom-headroom-m12';
 })();
 const TOOL_NAME_STYLE = (process.env.MCP_TOOL_NAME_STYLE ?? 'dot').toLowerCase() === 'underscore' ? 'underscore' : 'dot';
 const DEFAULT_SAY_TTL_MS = (() => {
@@ -153,6 +164,50 @@ const BASE_TOOL_DEFINITIONS = [
         session_id: { type: ['string', 'null'] },
         runtime: { type: ['string', 'null'], enum: ['claude', 'codex', 'antigravity', null] },
         meta: { type: 'object' }
+      }
+    }
+  },
+  {
+    name: 'atom.volume.get',
+    description: 'Read the current hardware speaker volume percentage for exactly one physical Atom. Use target="face" for the LCD face AtomS3R and target="m12" for the camera AtomS3R-M12. The model-facing result is an integer from 0 to 100 percent.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['target'],
+      properties: {
+        target: { type: 'string', enum: ['face', 'm12'] }
+      }
+    }
+  },
+  {
+    name: 'atom.volume.set',
+    description: 'Set an exact temporary hardware speaker volume percentage for one physical Atom. Use target="face" or target="m12" and volume_percent 0..100; 0 is mute. The saved reboot baseline is never changed.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['target', 'volume_percent'],
+      properties: {
+        target: { type: 'string', enum: ['face', 'm12'] },
+        volume_percent: { type: 'integer', minimum: 0, maximum: MAX_ATOM_VOLUME_PERCENT }
+      }
+    }
+  },
+  {
+    name: 'atom.volume.adjust',
+    description: 'Raise or lower one physical Atom speaker by percentage points. Use target="face" or target="m12", direction="up" or "down", and optional percentage_points 1..100 (default 5). The result is safely clamped to 0..100 percent and remains temporary until reboot.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['target', 'direction'],
+      properties: {
+        target: { type: 'string', enum: ['face', 'm12'] },
+        direction: { type: 'string', enum: ['up', 'down'] },
+        percentage_points: {
+          type: 'integer',
+          minimum: 1,
+          maximum: MAX_ATOM_VOLUME_PERCENT,
+          default: DEFAULT_ATOM_VOLUME_PERCENTAGE_POINTS
+        }
       }
     }
   },
@@ -497,6 +552,15 @@ function canonicalizeToolName(toolName) {
   if (toolName === 'face_hook') {
     return 'face.hook';
   }
+  if (toolName === 'atom_volume_get') {
+    return 'atom.volume.get';
+  }
+  if (toolName === 'atom_volume_set') {
+    return 'atom.volume.set';
+  }
+  if (toolName === 'atom_volume_adjust') {
+    return 'atom.volume.adjust';
+  }
   if (toolName === 'media_play') {
     return 'media.play';
   }
@@ -616,6 +680,62 @@ function optionalInteger(source, key, fallback) {
     throw new Error(`${key} must be an integer when provided`);
   }
   return value;
+}
+
+function rejectUnknownFields(args, supported, scope) {
+  const unknown = Object.keys(args).find((key) => !supported.has(key));
+  if (unknown) {
+    throw new Error(`unsupported ${scope} field: ${unknown}`);
+  }
+}
+
+function normalizeAtomVolumeTarget(args) {
+  const target = requireString(args, 'target').trim();
+  if (target !== 'face' && target !== 'm12') {
+    throw new Error('target must be one of: face, m12');
+  }
+  return target;
+}
+
+function normalizeAtomVolumeGetPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  rejectUnknownFields(args, new Set(['target']), 'atom.volume.get');
+  return { target: normalizeAtomVolumeTarget(args) };
+}
+
+function normalizeAtomVolumeSetPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  rejectUnknownFields(args, new Set(['target', 'volume_percent']), 'atom.volume.set');
+  const volumePercent = optionalInteger(args, 'volume_percent', null);
+  if (volumePercent === null || volumePercent < 0 || volumePercent > MAX_ATOM_VOLUME_PERCENT) {
+    throw new Error(`volume_percent must be an integer between 0 and ${MAX_ATOM_VOLUME_PERCENT}`);
+  }
+  return {
+    target: normalizeAtomVolumeTarget(args),
+    volumePercent
+  };
+}
+
+function normalizeAtomVolumeAdjustPayload(rawArguments) {
+  const args = requireObject(rawArguments ?? {}, 'arguments');
+  rejectUnknownFields(args, new Set(['target', 'direction', 'percentage_points']), 'atom.volume.adjust');
+  const direction = requireString(args, 'direction').trim();
+  if (direction !== 'up' && direction !== 'down') {
+    throw new Error('direction must be one of: up, down');
+  }
+  const percentagePoints = optionalInteger(
+    args,
+    'percentage_points',
+    DEFAULT_ATOM_VOLUME_PERCENTAGE_POINTS
+  );
+  if (percentagePoints < 1 || percentagePoints > MAX_ATOM_VOLUME_PERCENT) {
+    throw new Error(`percentage_points must be an integer between 1 and ${MAX_ATOM_VOLUME_PERCENT}`);
+  }
+  return {
+    target: normalizeAtomVolumeTarget(args),
+    direction,
+    percentagePoints
+  };
 }
 
 function normalizeMediaPlayPayload(rawArguments) {
@@ -796,6 +916,169 @@ async function callFaceHttp(pathname, options = {}) {
   });
   const payload = await response.json().catch(() => null);
   return { response, payload, url: url.toString() };
+}
+
+function atomVolumeTargetInfo(target) {
+  if (target === 'face') {
+    return {
+      target,
+      label: 'face Atom',
+      deviceId: FACE_ATOM_DEVICE_ID
+    };
+  }
+  return {
+    target: 'm12',
+    label: 'M12',
+    deviceId: M12_ATOM_DEVICE_ID
+  };
+}
+
+function rawAtomVolumeToPercent(rawVolume) {
+  return clamp(Math.round(rawVolume / 2), 0, MAX_ATOM_VOLUME_PERCENT);
+}
+
+function atomVolumePercentToRaw(volumePercent) {
+  return clamp(volumePercent * 2, 0, MAX_ATOM_SPEAKER_VOLUME);
+}
+
+function createAtomVolumeToolError(reason, message, details = {}) {
+  const error = new Error(message);
+  error.reason = reason;
+  error.details = details;
+  return error;
+}
+
+async function readAtomVolumeState(target) {
+  const targetInfo = atomVolumeTargetInfo(target);
+  const { response, payload, url } = await callFaceHttp('/api/atom/volume');
+  if (!response.ok || payload?.ok !== true) {
+    const apiError = typeof payload?.error === 'string' ? payload.error : `http_${response.status}`;
+    throw createAtomVolumeToolError(
+      'atom_volume_service_unavailable',
+      `could not read connected Atom devices (${apiError})`,
+      { target, device_id: targetInfo.deviceId, http: url, status: response.status, api_error: apiError }
+    );
+  }
+
+  const devices = Array.isArray(payload?.devices) ? payload.devices : [];
+  const connectedDeviceIds = devices
+    .map((device) => typeof device?.deviceId === 'string' ? device.deviceId : null)
+    .filter(Boolean);
+  const device = devices.find((candidate) => candidate?.deviceId === targetInfo.deviceId);
+  if (!device) {
+    throw createAtomVolumeToolError(
+      'atom_target_not_connected',
+      `${targetInfo.label} is not connected as device_id=${targetInfo.deviceId}`,
+      {
+        target,
+        device_id: targetInfo.deviceId,
+        connected_device_ids: connectedDeviceIds,
+        http: url,
+        status: response.status
+      }
+    );
+  }
+
+  const speakerVolume = device.speakerVolume;
+  if (
+    device.volumeControl !== true
+    || !Number.isInteger(speakerVolume)
+    || speakerVolume < 0
+    || speakerVolume > MAX_ATOM_SPEAKER_VOLUME
+  ) {
+    throw createAtomVolumeToolError(
+      'atom_volume_unavailable',
+      `${targetInfo.label} does not expose controllable speaker volume; update its firmware`,
+      {
+        target,
+        device_id: targetInfo.deviceId,
+        connected_device_ids: connectedDeviceIds,
+        http: url,
+        status: response.status
+      }
+    );
+  }
+
+  return {
+    ...targetInfo,
+    speakerVolume,
+    source: typeof device.source === 'string' ? device.source : null,
+    http: url
+  };
+}
+
+async function setAtomVolumeState(current, requestedVolume) {
+  if (current.speakerVolume === requestedVolume) {
+    return {
+      ...current,
+      previousSpeakerVolume: current.speakerVolume,
+      speakerVolume: current.speakerVolume,
+      persistent: false,
+      unchanged: true,
+      setHttp: null
+    };
+  }
+
+  const { response, payload, url } = await callFaceHttp('/api/atom/volume', {
+    method: 'POST',
+    body: {
+      deviceId: current.deviceId,
+      volume: requestedVolume
+    }
+  });
+  if (!response.ok || payload?.ok !== true) {
+    const apiError = typeof payload?.error === 'string' ? payload.error : `http_${response.status}`;
+    throw createAtomVolumeToolError(
+      apiError,
+      `failed to set ${current.label} speaker volume (${apiError})`,
+      {
+        target: current.target,
+        device_id: current.deviceId,
+        requested_raw_volume: requestedVolume,
+        http: url,
+        status: response.status,
+        api_error: apiError
+      }
+    );
+  }
+  if (payload.deviceId !== current.deviceId || payload.speakerVolume !== requestedVolume) {
+    throw createAtomVolumeToolError(
+      'atom_volume_confirmation_mismatch',
+      `${current.label} returned a mismatched volume confirmation`,
+      {
+        target: current.target,
+        device_id: current.deviceId,
+        requested_raw_volume: requestedVolume,
+        confirmed_device_id: payload?.deviceId ?? null,
+        confirmed_volume: payload?.speakerVolume ?? null,
+        http: url,
+        status: response.status
+      }
+    );
+  }
+
+  return {
+    ...current,
+    previousSpeakerVolume: current.speakerVolume,
+    speakerVolume: payload.speakerVolume,
+    persistent: false,
+    unchanged: false,
+    setHttp: url
+  };
+}
+
+function atomVolumeToolFailure(toolName, error, target = null) {
+  const reason = typeof error?.reason === 'string' ? error.reason : 'invalid_arguments';
+  const details = isObject(error?.details) ? error.details : {};
+  return toolTextResult(`${toolName} failed: ${error.message}`, {
+    isError: true,
+    structuredContent: {
+      ok: false,
+      reason,
+      target: details.target ?? target,
+      ...details
+    }
+  });
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 2000) {
@@ -1542,6 +1825,116 @@ async function handleToolCall(params) {
         isError: true,
         structuredContent: { ok: false, ws: FACE_WS_DISPLAY_URL, ...faceIdentityStructured(error.faceIdentity) }
       });
+    }
+  }
+
+  if (toolName === 'atom.volume.get') {
+    let target = null;
+    try {
+      const input = normalizeAtomVolumeGetPayload(rawArguments);
+      target = input.target;
+      const state = await readAtomVolumeState(target);
+      return toolTextResult(
+        `${state.label} speaker volume=${rawAtomVolumeToPercent(state.speakerVolume)}%`
+        + ` (raw ${state.speakerVolume}, temporary runtime level)`,
+        {
+          structuredContent: {
+            ok: true,
+            target: state.target,
+            device_id: state.deviceId,
+            volume_percent: rawAtomVolumeToPercent(state.speakerVolume),
+            raw_volume: state.speakerVolume,
+            persistent: false,
+            source: state.source,
+            http: state.http
+          }
+        }
+      );
+    } catch (error) {
+      return atomVolumeToolFailure('atom.volume.get', error, target);
+    }
+  }
+
+  if (toolName === 'atom.volume.set') {
+    let target = null;
+    try {
+      const input = normalizeAtomVolumeSetPayload(rawArguments);
+      target = input.target;
+      const current = await readAtomVolumeState(target);
+      const requestedRawVolume = atomVolumePercentToRaw(input.volumePercent);
+      const result = await setAtomVolumeState(current, requestedRawVolume);
+      return toolTextResult(
+        `${result.label} speaker volume ${rawAtomVolumeToPercent(result.previousSpeakerVolume)}%`
+        + ` -> ${rawAtomVolumeToPercent(result.speakerVolume)}%`
+        + ` (raw ${result.previousSpeakerVolume} -> ${result.speakerVolume})`
+        + `${result.unchanged ? ' (already set)' : ''} (temporary until reboot)`,
+        {
+          structuredContent: {
+            ok: true,
+            target: result.target,
+            device_id: result.deviceId,
+            requested_volume_percent: input.volumePercent,
+            previous_volume_percent: rawAtomVolumeToPercent(result.previousSpeakerVolume),
+            volume_percent: rawAtomVolumeToPercent(result.speakerVolume),
+            previous_raw_volume: result.previousSpeakerVolume,
+            raw_volume: result.speakerVolume,
+            persistent: false,
+            unchanged: result.unchanged,
+            source: result.source,
+            config_http: result.http,
+            set_http: result.setHttp
+          }
+        }
+      );
+    } catch (error) {
+      return atomVolumeToolFailure('atom.volume.set', error, target);
+    }
+  }
+
+  if (toolName === 'atom.volume.adjust') {
+    let target = null;
+    try {
+      const input = normalizeAtomVolumeAdjustPayload(rawArguments);
+      target = input.target;
+      const current = await readAtomVolumeState(target);
+      const currentPercent = rawAtomVolumeToPercent(current.speakerVolume);
+      const signedPercentagePoints = input.direction === 'up'
+        ? input.percentagePoints
+        : -input.percentagePoints;
+      const rawRequestedPercent = currentPercent + signedPercentagePoints;
+      const requestedPercent = clamp(rawRequestedPercent, 0, MAX_ATOM_VOLUME_PERCENT);
+      const requestedRawVolume = atomVolumePercentToRaw(requestedPercent);
+      const clamped = requestedPercent !== rawRequestedPercent;
+      const result = await setAtomVolumeState(current, requestedRawVolume);
+      return toolTextResult(
+        `${result.label} speaker volume ${rawAtomVolumeToPercent(result.previousSpeakerVolume)}%`
+        + ` -> ${rawAtomVolumeToPercent(result.speakerVolume)}%`
+        + ` (${input.direction} ${input.percentagePoints} percentage points${clamped ? ', clamped' : ''};`
+        + ` raw ${result.previousSpeakerVolume} -> ${result.speakerVolume})`
+        + `${result.unchanged ? ' (unchanged)' : ''} (temporary until reboot)`,
+        {
+          structuredContent: {
+            ok: true,
+            target: result.target,
+            device_id: result.deviceId,
+            direction: input.direction,
+            percentage_points: input.percentagePoints,
+            requested_volume_percent: requestedPercent,
+            previous_volume_percent: rawAtomVolumeToPercent(result.previousSpeakerVolume),
+            volume_percent: rawAtomVolumeToPercent(result.speakerVolume),
+            previous_raw_volume: result.previousSpeakerVolume,
+            raw_volume: result.speakerVolume,
+            persistent: false,
+            clamped,
+            unchanged: result.unchanged,
+            source: result.source,
+            config_http: result.http,
+            set_http: result.setHttp
+          }
+        }
+      );
+    } catch (error) {
+      return atomVolumeToolFailure('atom.volume.adjust', error, target);
     }
   }
 

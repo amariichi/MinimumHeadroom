@@ -9,6 +9,7 @@ import {
   createRmsVadBackend,
   createSileroVadBackend
 } from './atom_audio_vad_bridge.js';
+import { createAtomVolumeApi } from './atom_volume_api.js';
 import { createInterpreterApi } from './interpreter_api.js';
 import { createInterpreterAtomVolumeController } from './interpreter_atom_volume.js';
 import { createAtomEndpointRegistry } from './interpreter_audio_route.js';
@@ -208,6 +209,13 @@ const atomVolumeController = createInterpreterAtomVolumeController({
   sendPayload(socket, payload) {
     return liveServer?.sendToSocket(socket, payload) ?? false;
   }
+});
+const atomVolumeApi = createAtomVolumeApi({
+  registry: atomRegistry,
+  setVolume(input) {
+    return atomVolumeController.setVolume(input);
+  },
+  log: console
 });
 
 const ttsAudioStore = createTtsAudioStore({
@@ -487,6 +495,9 @@ liveServer = await startFaceWebSocketServer({
   },
   async onHttpRequest(request, response) {
     if (await runtimeModeApi.handleHttpRequest(request, response)) {
+      return true;
+    }
+    if (await atomVolumeApi.handleHttpRequest(request, response)) {
       return true;
     }
     if (ttsAudioStore.handleHttpRequest(request, response)) {

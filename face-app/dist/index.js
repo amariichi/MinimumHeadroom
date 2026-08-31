@@ -15,6 +15,9 @@ import {
   createRmsVadBackend,
   createSileroVadBackend
 } from './atom_audio_vad_bridge.js';
+import { createAtomEndpointRegistry } from './interpreter_audio_route.js';
+import { createInterpreterAtomVolumeController } from './interpreter_atom_volume.js';
+import { createAtomVolumeApi } from './atom_volume_api.js';
 import { createAgentRuntimeStateStore } from './agent_runtime_state.js';
 import { createAgentLifecycleApi, createAgentLifecycleRuntime } from './agent_lifecycle.js';
 import { createAgentAssignmentStateStore } from './agent_assignment_state.js';
@@ -229,6 +232,21 @@ const ownerInboxState = createOwnerInboxStateStore({
 });
 ownerInboxState.load();
 let liveServer = null;
+const atomRegistry = createAtomEndpointRegistry();
+const atomVolumeController = createInterpreterAtomVolumeController({
+  registry: atomRegistry,
+  timeoutMs: Number.parseInt(process.env.MH_ATOM_VOLUME_TIMEOUT_MS ?? '3000', 10),
+  sendPayload(socket, payload) {
+    return liveServer?.sendToSocket(socket, payload) ?? false;
+  }
+});
+const atomVolumeApi = createAtomVolumeApi({
+  registry: atomRegistry,
+  setVolume(input) {
+    return atomVolumeController.setVolume(input);
+  },
+  log: console
+});
 const mediaAllowedEndpoints = parseMediaAllowedEndpoints(process.env.MH_MEDIA_ALLOWED_ENDPOINTS, { log: console });
 const mediaController = createMediaController({
   allowedEndpoints: mediaAllowedEndpoints,
@@ -557,7 +575,27 @@ const server = await startFaceWebSocketServer({
       : 'atom-headroom';
     atomAudioVadBridge.resetSession(sessionId, { reason: 'tts_dispatch' });
   },
-  onPayload(payload) {
+  onPayload(payload, context) {
+    if (payload?.type === 'atom_volume_result') {
+      atomVolumeController.handlePayload(payload, context);
+      return { relay: false };
+    }
+    if (payload?.type === 'atom_endpoint_state') {
+      if (context?.isAtomBridge) {
+        atomRegistry.observeBridgeState(payload, context);
+      } else if (context?.isAtom) {
+        atomRegistry.observeDirectState(payload, context);
+      }
+      return { relay: false };
+    }
+    if (payload?.type === 'atom_audio_frame') {
+      atomRegistry.observeDirectFrame({
+        socket: context?.socket,
+        deviceId: payload.device_id,
+        sessionId: payload.session_id
+      });
+    }
+
     const atomVadDirective = atomAudioVadBridge.handlePayload(payload);
     if (atomVadDirective) {
       return atomVadDirective;
@@ -602,6 +640,10 @@ const server = await startFaceWebSocketServer({
         server.broadcast(toSayResultPayload(sayPayload, { accepted: false, spoken: false }, 'controller_error'));
       });
   },
+  onClientClose(context) {
+    atomVolumeController.failSocket(context?.socket);
+    atomRegistry.forgetSocket(context?.socket);
+  },
   async onHttpRequest(request, response) {
     const parsedUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
     if (parsedUrl.pathname === '/healthz') {
@@ -617,6 +659,9 @@ const server = await startFaceWebSocketServer({
         service: 'operator',
         profile: operatorProfile
       });
+      return true;
+    }
+    if (await atomVolumeApi.handleHttpRequest(request, response)) {
       return true;
     }
     if (await runtimeModeApi.handleHttpRequest(request, response)) {
@@ -828,6 +873,7 @@ async function shutdown(signal) {
     }
     audioFocusController.close();
     mediaController.close();
+    atomVolumeController.dispose();
     if (operatorRealtimeAsrProxy) {
       await operatorRealtimeAsrProxy.closeAll();
     }

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import {
@@ -241,6 +243,39 @@ test('Control Mode capture restores the real pane cursor instead of the last cap
   assert.equal(driftedRows.findIndex((row) => row.includes('LIVE')), 5);
 });
 
+test('Control Mode cursor capture settles every failed command after the client exits', async () => {
+  let child = null;
+  const client = createTmuxControlModeClient({
+    pane: 'demo:0.0',
+    runCommand: async () => ({ stdout: '%9\tdemo\t40\t8\n' }),
+    spawnProcess() {
+      child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = new PassThrough();
+      child.killed = false;
+      child.kill = () => {
+        child.killed = true;
+      };
+      queueMicrotask(() => child.stdout.write('%session-changed $0 demo\n'));
+      return child;
+    },
+    log: silentLog
+  });
+
+  await client.start();
+  child.emit('close', 0, null);
+
+  await assert.rejects(
+    client.capturePaneWithCursor(20),
+    (error) => error?.reason === 'tmux_control_offline'
+  );
+  // Give Node a turn to surface any sibling command rejection that the method
+  // failed to observe. Under --unhandled-rejections=strict that would stop the
+  // Operator stack, which is the live failure this test guards against.
+  await delay(10);
+});
+
 test('terminal transport starts on subscribe, sequences deltas, targets reset, and stops at zero subscribers', async () => {
   const payloads = [];
   const clients = [];
@@ -323,6 +358,69 @@ test('terminal transport starts on subscribe, sequences deltas, targets reset, a
   await transport.handleUnsubscribe({ subscriber_id: 'browser-1' });
   assert.equal(clients[0].stopped, true);
   assert.equal(transport.getState().subscriberCount, 0);
+  await transport.shutdown();
+});
+
+test('terminal transport serializes bridge takeover subscriptions with an in-flight start', async () => {
+  const clients = [];
+  let releaseFirstStart = null;
+
+  const transport = createOperatorTerminalTransport({
+    sessionId: 's1',
+    tmuxController: { pane: 'demo:0.0' },
+    createClient: () => {
+      const index = clients.length;
+      const fake = {
+        stopped: false,
+        async start() {
+          if (index === 0) {
+            await new Promise((resolve) => {
+              releaseFirstStart = resolve;
+            });
+          }
+          return { pane: '%9', session: 'demo', cols: 40, rows: 8 };
+        },
+        async capturePane(_scrollback, onComplete) {
+          const capture = Buffer.from(`seed-${index}`);
+          onComplete(capture);
+          return capture;
+        },
+        async stop() {
+          this.stopped = true;
+        }
+      };
+      clients.push(fake);
+      return fake;
+    },
+    createState: () => ({
+      async resetFromCapture() {},
+      async write() {},
+      async serialize() { return ''; },
+      async dispose() {}
+    }),
+    sendPayload() { return true; },
+    log: silentLog
+  });
+
+  const firstSubscribe = transport.handleSubscribe({ subscriber_id: 'browser-1' });
+  while (!releaseFirstStart) {
+    await delay(1);
+  }
+  const unsubscribe = transport.handleUnsubscribe({ subscriber_id: 'browser-1' });
+  const secondSubscribe = transport.handleSubscribe({ subscriber_id: 'browser-1' });
+  await delay(10);
+  const clientsStartedBeforeFirstCompleted = clients.length;
+  releaseFirstStart();
+
+  const results = await Promise.allSettled([firstSubscribe, unsubscribe, secondSubscribe]);
+  assert.equal(
+    clientsStartedBeforeFirstCompleted,
+    1,
+    'unsubscribe/resubscribe must wait until the original Control Mode start completes'
+  );
+  assert.equal(results.every((result) => result.status === 'fulfilled'), true);
+  assert.equal(clients.length, 2);
+  assert.equal(clients[0].stopped, true);
   await transport.shutdown();
 });
 

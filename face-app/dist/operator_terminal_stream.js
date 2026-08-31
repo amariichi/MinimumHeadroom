@@ -652,13 +652,21 @@ export function createTmuxControlModeClient(options = {}) {
         }
       ]);
 
-      await capturePromise;
-      try {
-        await cursorPromise;
-      } catch (error) {
+      const [captureResult, cursorResult] = await Promise.allSettled([
+        capturePromise,
+        cursorPromise
+      ]);
+      if (captureResult.status === 'rejected') {
+        // requestCommandBatch creates one promise per tmux command. Observe the
+        // cursor result before rethrowing the capture failure so a simultaneous
+        // Control Mode shutdown cannot leave a sibling rejection unhandled and
+        // terminate the whole Operator stack.
+        throw captureResult.reason;
+      }
+      if (cursorResult.status === 'rejected') {
         // A cursor query failure must not take the whole stream down; seed
         // without the restore and let the next reset correct the position.
-        log.warn(`[operator-terminal] cursor query failed: ${error.message}`);
+        log.warn(`[operator-terminal] cursor query failed: ${cursorResult.reason.message}`);
         deliver();
       }
       return { capture, cursor };
@@ -719,6 +727,7 @@ export function createOperatorTerminalTransport(options = {}) {
   let generation = 0;
   let sequence = 0;
   let startPromise = null;
+  let lifecycleQueue = Promise.resolve();
   let resetQueue = Promise.resolve();
   let deliveryPaused = true;
   let stoppingClient = false;
@@ -726,6 +735,14 @@ export function createOperatorTerminalTransport(options = {}) {
   let restartTimer = null;
   let hasReset = false;
   let deferredBatches = [];
+
+  function enqueueLifecycle(operation) {
+    const pending = lifecycleQueue.then(operation);
+    // Keep the internal tail usable after a failed operation while returning
+    // the original rejection to the caller that owns that operation.
+    lifecycleQueue = pending.catch(() => {});
+    return pending;
+  }
 
   function emit(payload) {
     return sendPayload({ v: 1, ts: now(), session_id: sessionId, ...payload });
@@ -976,29 +993,33 @@ export function createOperatorTerminalTransport(options = {}) {
   }
 
   return {
-    async handleSubscribe(payload = {}) {
-      const subscriberId = asNonEmptyString(payload.subscriber_id);
-      if (!subscriberId) {
-        return false;
-      }
-      subscribers.add(subscriberId);
-      acknowledgedBySubscriber.set(subscriberId, 0);
-      await startStream();
-      await queueReset(subscriberId);
-      return true;
+    handleSubscribe(payload = {}) {
+      return enqueueLifecycle(async () => {
+        const subscriberId = asNonEmptyString(payload.subscriber_id);
+        if (!subscriberId) {
+          return false;
+        }
+        subscribers.add(subscriberId);
+        acknowledgedBySubscriber.set(subscriberId, 0);
+        await startStream();
+        await queueReset(subscriberId);
+        return true;
+      });
     },
-    async handleUnsubscribe(payload = {}) {
-      const subscriberId = asNonEmptyString(payload.subscriber_id);
-      if (!subscriberId) {
-        return false;
-      }
-      subscribers.delete(subscriberId);
-      acknowledgedBySubscriber.delete(subscriberId);
-      pendingResetSubscribers.delete(subscriberId);
-      if (subscribers.size === 0) {
-        await stopStream();
-      }
-      return true;
+    handleUnsubscribe(payload = {}) {
+      return enqueueLifecycle(async () => {
+        const subscriberId = asNonEmptyString(payload.subscriber_id);
+        if (!subscriberId) {
+          return false;
+        }
+        subscribers.delete(subscriberId);
+        acknowledgedBySubscriber.delete(subscriberId);
+        pendingResetSubscribers.delete(subscriberId);
+        if (subscribers.size === 0) {
+          await stopStream();
+        }
+        return true;
+      });
     },
     async handleAck(payload = {}) {
       const subscriberId = asNonEmptyString(payload.subscriber_id);
@@ -1022,23 +1043,29 @@ export function createOperatorTerminalTransport(options = {}) {
       }
       return queueReset(subscriberId);
     },
-    async setPane() {
-      if (subscribers.size === 0) {
-        return false;
-      }
-      return restartStream();
+    setPane() {
+      return enqueueLifecycle(async () => {
+        if (subscribers.size === 0) {
+          return false;
+        }
+        return restartStream();
+      });
     },
-    async disconnectAll() {
-      subscribers.clear();
-      acknowledgedBySubscriber.clear();
-      await stopStream();
+    disconnectAll() {
+      return enqueueLifecycle(async () => {
+        subscribers.clear();
+        acknowledgedBySubscriber.clear();
+        await stopStream();
+      });
     },
-    async shutdown() {
-      closed = true;
-      subscribers.clear();
-      acknowledgedBySubscriber.clear();
-      batcher.close();
-      await stopStream();
+    shutdown() {
+      return enqueueLifecycle(async () => {
+        closed = true;
+        subscribers.clear();
+        acknowledgedBySubscriber.clear();
+        batcher.close();
+        await stopStream();
+      });
     },
     getState() {
       return {

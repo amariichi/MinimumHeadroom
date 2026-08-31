@@ -130,6 +130,48 @@ test('face-app e2e serves operator UI config and dashboard markup', async () => 
     const html = await htmlResponse.text();
     assert.match(html, /id="agent-dashboard"/);
     assert.match(html, /id="operator-agent-list"/);
+
+    const volumeResponse = await fetch(`${baseUrl}/api/atom/volume`, {
+      method: 'GET'
+    });
+    assert.equal(volumeResponse.ok, true);
+    const volumePayload = await volumeResponse.json();
+    assert.deepEqual(volumePayload, {
+      ok: true,
+      connected: false,
+      endpoint: 'browser',
+      devices: []
+    });
+
+    const browserSocket = new WebSocket(`${baseUrl.replace(/^http/u, 'ws')}/ws`);
+    await new Promise((resolve, reject) => {
+      browserSocket.addEventListener('open', resolve, { once: true });
+      browserSocket.addEventListener('error', reject, { once: true });
+    });
+    try {
+      browserSocket.send(JSON.stringify({
+        type: 'atom_endpoint_state',
+        connected: true,
+        device_id: 'browser-spoof',
+        audio_input: true,
+        audio_output: true,
+        playback_codecs: ['pcm16_wav'],
+        speaker_volume: 200,
+        volume_control: true
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const afterSpoofResponse = await fetch(`${baseUrl}/api/atom/volume`, {
+        method: 'GET'
+      });
+      assert.deepEqual(await afterSpoofResponse.json(), {
+        ok: true,
+        connected: false,
+        endpoint: 'browser',
+        devices: []
+      });
+    } finally {
+      browserSocket.close();
+    }
   } finally {
     await stopChild(child);
     fs.rmSync(stateRoot, { recursive: true, force: true });
