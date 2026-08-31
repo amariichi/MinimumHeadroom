@@ -194,8 +194,25 @@ message. When compatible firmware is connected, the Interpreter phone UI shows
 one compact speaker/value control in the route strip. Tap it to open the 0–200
 slider, ±8 controls, and Mute/Indoor/Outdoor presets. Changes travel through the
 authenticated same-origin Interpreter API and remain temporary until reboot.
+
+The common Face App exposes the authenticated `GET/POST /api/atom/volume`
+control path in both operator and Interpreter modes. The coding-agent MCP
+server wraps it as three target-safe tools. `atom.volume.get` reads the live value, `atom.volume.set`
+sets an exact `volume_percent` from 0–100, and `atom.volume.adjust` applies `up`
+or `down` with optional `percentage_points` (default 5, clamped at 0% and 100%).
+The MCP result reports both the model-facing percentage and the diagnostic raw
+0–200 value; the MCP converts percentages to raw firmware units by multiplying
+by two before calling the Face App. Every call requires
+`target: "face"` or `target: "m12"`; the server maps that semantic target to
+`ATOM_HEADROOM_DEVICE_ID` or `MH_M12_DEVICE_ID`, so a model cannot choose an
+arbitrary connected device or URL. With `MCP_TOOL_NAME_STYLE=underscore`, the
+published names are `atom_volume_get`, `atom_volume_set`, and
+`atom_volume_adjust`. All three report `persistent: false`; use USB
+provisioning when the saved reboot baseline must change.
+
 There is deliberately no broad voice intent, so translated speech about
-“volume” cannot be mistaken for a device command.
+“volume” cannot be mistaken for a device command. A conversational coding agent
+must deliberately select one of the target-safe MCP tools.
 
 ### How the VAD pipeline works
 
@@ -572,6 +589,21 @@ runtime endpointと`speaker_volume` health fieldには更新済みfirmwareが必
 Mute/Indoor/Outdoorを開きます。操作は認証済みsame-origin Interpreter APIから接続中Atomへ
 渡し、NVSを変更しません。翻訳本文に含まれる「音量」をdevice commandと誤認しないよう、
 広い音声intentは追加していません。
+
+共通Face Appはoperator modeとInterpreter modeの両方で、認証付き
+`GET/POST /api/atom/volume`を公開します。coding agent向けMCP serverは、この確認応答付き
+制御経路を3つのtarget-safe toolとして包みます。`atom.volume.get`は現在値を読み、
+`atom.volume.set`は`volume_percent`で0〜100%の絶対値を設定し、
+`atom.volume.adjust`は`up`または`down`へ`percentage_points`だけ変更します（省略時5、
+0%と100%でclamp）。MCP resultはmodel向け百分率と診断用raw 0〜200値の両方を返し、
+MCPが百分率を2倍したfirmware値へ変換してからFace Appへ送ります。どのcallでも`target: "face"`または
+`target: "m12"`が必須です。server側で
+`ATOM_HEADROOM_DEVICE_ID`または`MH_M12_DEVICE_ID`へ変換するため、modelが任意の接続deviceや
+URLを選ぶことはできません。`MCP_TOOL_NAME_STYLE=underscore`時の公開名は
+`atom_volume_get`、`atom_volume_set`、`atom_volume_adjust`です。すべて
+`persistent: false`を返し、保存baselineの変更には従来どおりUSB provisioningを使います。
+翻訳中の単語だけでは発火せず、対話agentがtarget-safe MCP toolを明示的に選んだ場合だけ
+操作されます。
 
 ### VAD パイプラインの仕組み
 

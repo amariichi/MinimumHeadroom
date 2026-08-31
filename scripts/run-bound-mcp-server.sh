@@ -117,6 +117,24 @@ if [[ -z "${MH_FACE_AUTH_TOKEN:-}" ]]; then
   fi
 fi
 
+# Volume MCP tools accept semantic targets (face/m12) and resolve them to the
+# provisioned firmware ids here. Preserve explicit/inherited values first, then
+# use the same shared env file as the auth token.
+for key in ATOM_HEADROOM_DEVICE_ID MH_M12_DEVICE_ID; do
+  current_value="${!key-}"
+  if [[ -n "$current_value" ]]; then
+    export "$key"
+    continue
+  fi
+  if value="$(inherit_from_parent_chain "$key" 2>/dev/null)" && [[ -n "$value" ]]; then
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  elif value="$(read_env_file_var "$MH_FACE_ENV_FILE" "$key" 2>/dev/null)" && [[ -n "$value" ]]; then
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  fi
+done
+
 NODE_BIN="${MH_NODE_BIN:-}"
 if [[ -z "$NODE_BIN" ]]; then
   NODE_BIN="$(command -v node || true)"
@@ -153,6 +171,12 @@ if [[ -n "${MH_FACE_AGENT_ID:-}" ]]; then
 fi
 if [[ -n "${MH_FACE_AGENT_LABEL:-}" ]]; then
   env_args+=("MH_FACE_AGENT_LABEL=$MH_FACE_AGENT_LABEL")
+fi
+if [[ -n "${ATOM_HEADROOM_DEVICE_ID:-}" ]]; then
+  env_args+=("ATOM_HEADROOM_DEVICE_ID=$ATOM_HEADROOM_DEVICE_ID")
+fi
+if [[ -n "${MH_M12_DEVICE_ID:-}" ]]; then
+  env_args+=("MH_M12_DEVICE_ID=$MH_M12_DEVICE_ID")
 fi
 
 exec env "${env_args[@]}" "$NODE_BIN" mcp-server/dist/index.js

@@ -591,6 +591,8 @@ export async function startFaceWebSocketServer(options = {}) {
 
   const sockets = new Set();
   const replayablePayloads = new Map();
+  const operatorBridgesBySession = new Map();
+  const activeOperatorBridgeBySession = new Map();
   let nextTerminalSubscriberId = 1;
 
   function websocketProtocolSet(header) {
@@ -682,6 +684,11 @@ export async function startFaceWebSocketServer(options = {}) {
   }
 
   function shouldSendPayloadToSocket(socket, payload) {
+    if (payload?.type === 'operator_response') {
+      const sessionId = asNonEmptyString(payload.session_id) ?? 'default';
+      return isOperatorBridgeSocket(socket)
+        && activeOperatorBridgeBySession.get(sessionId) === socket;
+    }
     if (TERMINAL_STREAM_MESSAGE_TYPES.has(payload?.type)) {
       const subscription = socket?.__mhTerminalSubscription;
       if (!isTerminalBrowserSocket(socket) || !subscription) {
@@ -776,14 +783,17 @@ export async function startFaceWebSocketServer(options = {}) {
     }
   }
 
+  function operatorBridgeSessionId(socket) {
+    return asNonEmptyString(socket?.__mhOperatorBridgeSessionId) ?? 'default';
+  }
+
   function sendToOperatorBridges(payload) {
-    let sent = false;
-    for (const peer of sockets) {
-      if (isOperatorBridgeSocket(peer)) {
-        sent = sendPayloadToSocket(peer, payload) || sent;
-      }
+    const sessionId = asNonEmptyString(payload?.session_id) ?? 'default';
+    const activeBridge = activeOperatorBridgeBySession.get(sessionId);
+    if (!activeBridge || !sockets.has(activeBridge)) {
+      return false;
     }
-    return sent;
+    return sendPayloadToSocket(activeBridge, payload);
   }
 
   function terminalControlPayload(socket, payload, subscription = socket.__mhTerminalSubscription) {
@@ -857,14 +867,89 @@ export async function startFaceWebSocketServer(options = {}) {
   }
 
   function replayTerminalSubscriptionsToBridge(bridgeSocket) {
+    const bridgeSessionId = operatorBridgeSessionId(bridgeSocket);
     for (const peer of sockets) {
-      if (!isTerminalBrowserSocket(peer) || !peer.__mhTerminalSubscription) {
+      if (
+        !isTerminalBrowserSocket(peer)
+        || !peer.__mhTerminalSubscription
+        || peer.__mhTerminalSubscription.sessionId !== bridgeSessionId
+      ) {
         continue;
       }
       sendPayloadToSocket(bridgeSocket, terminalControlPayload(peer, {
         type: 'operator_terminal_subscribe'
       }));
     }
+  }
+
+  function unsubscribeTerminalSubscriptionsFromBridge(bridgeSocket) {
+    const bridgeSessionId = operatorBridgeSessionId(bridgeSocket);
+    for (const peer of sockets) {
+      if (
+        !isTerminalBrowserSocket(peer)
+        || !peer.__mhTerminalSubscription
+        || peer.__mhTerminalSubscription.sessionId !== bridgeSessionId
+      ) {
+        continue;
+      }
+      sendPayloadToSocket(bridgeSocket, terminalControlPayload(peer, {
+        type: 'operator_terminal_unsubscribe'
+      }));
+    }
+  }
+
+  function activateOperatorBridge(bridgeSocket) {
+    if (!bridgeSocket || !sockets.has(bridgeSocket) || !isOperatorBridgeSocket(bridgeSocket)) {
+      return false;
+    }
+    const sessionId = operatorBridgeSessionId(bridgeSocket);
+    const previous = activeOperatorBridgeBySession.get(sessionId);
+    if (previous === bridgeSocket) {
+      return true;
+    }
+    if (previous && sockets.has(previous)) {
+      unsubscribeTerminalSubscriptionsFromBridge(previous);
+    }
+    activeOperatorBridgeBySession.set(sessionId, bridgeSocket);
+    replayTerminalSubscriptionsToBridge(bridgeSocket);
+    return true;
+  }
+
+  function registerOperatorBridge(bridgeSocket, sessionId) {
+    const normalizedSessionId = asNonEmptyString(sessionId) ?? 'default';
+    bridgeSocket.__mhOperatorBridgeSessionId = normalizedSessionId;
+    const candidates = operatorBridgesBySession.get(normalizedSessionId) ?? new Set();
+    candidates.add(bridgeSocket);
+    operatorBridgesBySession.set(normalizedSessionId, candidates);
+    activateOperatorBridge(bridgeSocket);
+  }
+
+  function unregisterOperatorBridge(bridgeSocket) {
+    const sessionId = operatorBridgeSessionId(bridgeSocket);
+    const candidates = operatorBridgesBySession.get(sessionId);
+    candidates?.delete(bridgeSocket);
+    if (candidates?.size === 0) {
+      operatorBridgesBySession.delete(sessionId);
+    }
+    if (activeOperatorBridgeBySession.get(sessionId) !== bridgeSocket) {
+      return;
+    }
+    activeOperatorBridgeBySession.delete(sessionId);
+    const standby = candidates
+      ? [...candidates].reverse().find((candidate) => sockets.has(candidate))
+      : null;
+    if (standby) {
+      activateOperatorBridge(standby);
+    }
+  }
+
+  function isActiveOperatorBridgePayload(socket, payload) {
+    if (!isOperatorBridgeSocket(socket)) {
+      return true;
+    }
+    const sessionId = asNonEmptyString(payload?.session_id) ?? operatorBridgeSessionId(socket);
+    return sessionId === operatorBridgeSessionId(socket)
+      && activeOperatorBridgeBySession.get(sessionId) === socket;
   }
 
   function replayCachedPayloads(socket) {
@@ -1064,6 +1149,9 @@ export async function startFaceWebSocketServer(options = {}) {
     socket.__mhAudioFocusObserver = audioFocusObserver;
     socket.__mhAtomBridgeClient = atomBridgeClient;
     socket.__mhOperatorBridge = operatorBridgeClient;
+    socket.__mhOperatorBridgeSessionId = operatorBridgeClient
+      ? (asNonEmptyString(parsedUrl.searchParams.get('operator_session_id')) ?? 'default')
+      : null;
     socket.__mhTerminalSubscriberId = `terminal-${nextTerminalSubscriberId}`;
     nextTerminalSubscriberId += 1;
     socket.__mhTerminalSubscription = null;
@@ -1073,7 +1161,7 @@ export async function startFaceWebSocketServer(options = {}) {
     sockets.add(socket);
     replayCachedPayloads(socket);
     if (operatorBridgeClient) {
-      replayTerminalSubscriptionsToBridge(socket);
+      registerOperatorBridge(socket, socket.__mhOperatorBridgeSessionId);
     }
     const state = { buffer: Buffer.alloc(0) };
 
@@ -1088,6 +1176,9 @@ export async function startFaceWebSocketServer(options = {}) {
           }
           try {
             const payload = JSON.parse(text);
+            if (!isActiveOperatorBridgePayload(socket, payload)) {
+              return;
+            }
             const receivedLogMessage = receivedPayloadLogMessage(payload);
             if (receivedLogMessage !== null) {
               log.info(`[face-app] received ${receivedLogMessage}`);
@@ -1142,6 +1233,9 @@ export async function startFaceWebSocketServer(options = {}) {
         }));
       }
       sockets.delete(socket);
+      if (isOperatorBridgeSocket(socket)) {
+        unregisterOperatorBridge(socket);
+      }
       if (onClientClose) {
         try {
           onClientClose({

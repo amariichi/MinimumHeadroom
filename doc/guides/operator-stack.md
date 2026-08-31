@@ -265,6 +265,13 @@ In the full operator stack:
 
 The default Control Mode path does not poll `capture-pane`. It uses one checkpoint on subscribe or resynchronization, followed by sequenced `operator_terminal_data` increments. A browser with the standard `DecompressionStream` gzip API negotiates `gzip-base64` payloads; older browsers automatically stay on plain Base64. To diagnose an environment-specific Control Mode problem, temporarily set `MH_BRIDGE_TERMINAL_TRANSPORT=snapshot` and restart the existing stack with `./scripts/restart-operator-stack-in-place.sh`. Snapshot mode restores the old full-tail polling behavior and therefore uses substantially more network data.
 
+The Face App elects one active operator bridge for each `session_id`. If an old
+bridge process survives a restart, it remains a standby but is unsubscribed
+from tmux streaming and its terminal frames are ignored. This prevents one ANSI
+redraw from appearing as several repeated prompt blocks or blank-line groups.
+When the active bridge disconnects, the newest connected standby is promoted
+and receives a fresh checkpoint subscription automatically.
+
 `PTT JA` and `PTT EN` insert recognized text at the current caret position in the text fallback input, not only at the end of the draft.
 
 Multi-agent control now follows one simple model:
@@ -722,6 +729,12 @@ Voxtral リアルタイム ASR のみ（ハイブリッド構成より VRAM を�
 - パネルを隠す、またはページをバックグラウンドへ移すと端末ストリームだけを購読解除し、prompt、TTS、status、audio の接続は維持します
 
 既定の Control Mode 経路は `capture-pane` をポーリングしません。購読または再同期時に checkpoint を 1 回送り、その後は sequence 付き `operator_terminal_data` 増分だけを送ります。標準の `DecompressionStream` gzip API を持つブラウザとは `gzip-base64` を交渉し、古いブラウザは自動的に通常の Base64 を使います。環境固有の問題を調べる一時退避として `MH_BRIDGE_TERMINAL_TRANSPORT=snapshot` を設定し、既存スタックを `./scripts/restart-operator-stack-in-place.sh` で再起動できます。`snapshot` は以前の full-tail ポーリングへ戻るため、通信量が大きくなります。
+
+Face Appは`session_id`ごとにactive operator bridgeを1本だけ選びます。restart後に古い
+bridge processが残ってもstandbyとして接続を維持するだけで、tmux streamからunsubscribe
+され、そのterminal frameは破棄されます。これにより、1回のANSI再描画が複数のprompt blockや
+空行群として重複表示されません。active bridgeが切断された場合は、接続中の最新standbyを
+昇格し、checkpoint購読を自動的に再送します。
 
 `PTT JA` / `PTT EN` の文字起こしは、テキスト入力欄の末尾固定ではなく、現在のカーソル位置へ入ります。
 

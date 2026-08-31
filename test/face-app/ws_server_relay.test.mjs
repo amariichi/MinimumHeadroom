@@ -411,6 +411,101 @@ test('terminal subscriptions are replayed when an operator bridge reconnects, bu
   assert.equal(lateMessages, 0);
 });
 
+test('one active operator bridge per session prevents duplicate terminal publishers and promotes a standby', async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    relayPayloads: true,
+    log: silentLog
+  });
+  const bridgeUrl = new URL(server.url);
+  bridgeUrl.searchParams.set('operator_session_id', 'default');
+  const bridgeOne = new WebSocket(bridgeUrl, 'mh-operator-bridge-v1');
+  const viewer = new WebSocket(server.url);
+  let bridgeTwo = null;
+  t.after(async () => {
+    try { bridgeOne.close(); } catch {}
+    try { bridgeTwo?.close(); } catch {}
+    try { viewer.close(); } catch {}
+    await server.stop();
+  });
+  await Promise.all([waitForOpen(bridgeOne), waitForOpen(viewer)]);
+
+  const firstSubscribePromise = waitForMessage(bridgeOne);
+  viewer.send(JSON.stringify({ type: 'operator_terminal_subscribe', session_id: 'default' }));
+  const firstSubscribe = await firstSubscribePromise;
+  assert.equal(firstSubscribe.type, 'operator_terminal_subscribe');
+
+  const oldBridgeUnsubscribePromise = waitForMessage(bridgeOne);
+  bridgeTwo = new WebSocket(bridgeUrl, 'mh-operator-bridge-v1');
+  const promotedSubscribePromise = waitForMessage(bridgeTwo);
+  await waitForOpen(bridgeTwo);
+  const [oldBridgeUnsubscribe, promotedSubscribe] = await Promise.all([
+    oldBridgeUnsubscribePromise,
+    promotedSubscribePromise
+  ]);
+  assert.equal(oldBridgeUnsubscribe.type, 'operator_terminal_unsubscribe');
+  assert.equal(oldBridgeUnsubscribe.subscriber_id, firstSubscribe.subscriber_id);
+  assert.equal(promotedSubscribe.type, 'operator_terminal_subscribe');
+  assert.equal(promotedSubscribe.subscriber_id, firstSubscribe.subscriber_id);
+
+  let oldBridgeResponses = 0;
+  let activeBridgeResponses = 0;
+  bridgeOne.addEventListener('message', (event) => {
+    try {
+      if (JSON.parse(event.data)?.type === 'operator_response') oldBridgeResponses += 1;
+    } catch {}
+  });
+  bridgeTwo.addEventListener('message', (event) => {
+    try {
+      if (JSON.parse(event.data)?.type === 'operator_response') activeBridgeResponses += 1;
+    } catch {}
+  });
+  viewer.send(JSON.stringify({
+    type: 'operator_response',
+    session_id: 'default',
+    response_kind: 'text',
+    value: 'submit once'
+  }));
+  await waitForCondition(() => activeBridgeResponses === 1);
+  await delay(40);
+  assert.equal(oldBridgeResponses, 0, 'one mobile response must reach only the active bridge');
+
+  const terminalMessages = [];
+  viewer.addEventListener('message', (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload?.type === 'operator_terminal_data') terminalMessages.push(payload);
+    } catch {}
+  });
+  const terminalFrame = {
+    type: 'operator_terminal_data',
+    session_id: 'default',
+    pane: '%9',
+    generation: 1,
+    seq: 1,
+    data_base64: Buffer.from('one redraw only').toString('base64')
+  };
+  bridgeOne.send(JSON.stringify(terminalFrame));
+  await delay(50);
+  assert.equal(terminalMessages.length, 0, 'inactive bridge output must be ignored');
+
+  bridgeTwo.send(JSON.stringify(terminalFrame));
+  await waitForCondition(() => terminalMessages.length === 1);
+  assert.equal(Buffer.from(terminalMessages[0].data_base64, 'base64').toString('utf8'), 'one redraw only');
+
+  const standbySubscribePromise = waitForMessage(bridgeOne);
+  bridgeTwo.close();
+  const standbySubscribe = await standbySubscribePromise;
+  assert.equal(standbySubscribe.type, 'operator_terminal_subscribe');
+  assert.equal(standbySubscribe.subscriber_id, firstSubscribe.subscriber_id);
+
+  bridgeOne.send(JSON.stringify({ ...terminalFrame, seq: 2 }));
+  await waitForCondition(() => terminalMessages.length === 2);
+  assert.equal(terminalMessages.length, 2);
+});
+
 test('ws server replays latest replayable payloads to newly connected clients', async (t) => {
   const received = [];
   const server = await startFaceWebSocketServer({
