@@ -864,3 +864,87 @@ test('Atom audio VAD bridge receive-gap timer ignores idle/too-short sessions', 
   await bridge.drain();
   assert.equal(fetches.length, 0);
 });
+
+test('Atom audio VAD bridge adopts a restarted device stream instead of dropping every frame', async () => {
+  const fetches = [];
+  const operatorResponses = [];
+  const notices = [];
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    thresholdRms: 0.01,
+    endSilenceMs: 200,
+    minSpeechMs: 50,
+    onOperatorResponse: (payload) => operatorResponses.push(payload),
+    log: { info: (line) => notices.push(line), warn: () => {}, error: () => {} },
+    fetchImpl: async (url, options) => {
+      fetches.push({ url: String(url), options });
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ text: 'おはよう', language: 'ja', confidence: 0.9 });
+        }
+      };
+    }
+  });
+
+  // The device has been up for a while: both counters are well advanced.
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 900, generation: 37 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 901, generation: 37 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 902, generation: 37 }));
+  await bridge.drain();
+  assert.equal(fetches.length, 1, 'the pre-restart utterance still submits normally');
+
+  // Reflash or power cycle: the firmware restarts both counters from zero.
+  // Every frame is below the stored generation floor, but seq regressed too,
+  // so this is a new stream rather than stale audio.
+  const first = bridge.handlePayload(
+    audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 1, generation: 1 })
+  );
+  assert.equal(first.accepted, true, 'a restarted device must not be treated as stale');
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3200 }), { seq: 2, generation: 1 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 3, generation: 1 }));
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 0 }), { seq: 4, generation: 1 }));
+  await bridge.drain();
+
+  assert.equal(fetches.length, 2, 'speech after the restart reaches ASR');
+  assert.equal(operatorResponses.length, 2);
+  assert.equal(operatorResponses.at(-1).value, 'おはよう');
+  assert.ok(
+    notices.some((line) => line.includes('device restart detected')),
+    'the adopted restart is reported once so the transition is visible in the log'
+  );
+});
+
+test('Atom audio VAD bridge still drops stale frames when only the generation regressed', async () => {
+  const warnings = [];
+  const bridge = createAtomAudioVadBridge({
+    asrBaseUrl: 'http://127.0.0.1:8091',
+    thresholdRms: 0.01,
+    endSilenceMs: 200,
+    minSpeechMs: 50,
+    log: { info: () => {}, warn: (line) => warnings.push(line), error: () => {} },
+    fetchImpl: async () => {
+      throw new Error('ASR must not be called for stale frames');
+    }
+  });
+
+  bridge.handlePayload(audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 10, generation: 9 }));
+  await bridge.drain();
+
+  // seq keeps climbing, so the device is the same one: a lower generation is
+  // genuinely retired audio and must still be discarded.
+  const stale = bridge.handlePayload(
+    audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 11, generation: 8 })
+  );
+  assert.equal(stale.accepted, false);
+  assert.equal(stale.reason, 'stale_generation');
+
+  const stillStale = bridge.handlePayload(
+    audioPayload(pcmFrame({ samples: 1600, amplitude: 3000 }), { seq: 12, generation: 8 })
+  );
+  assert.equal(stillStale.accepted, false);
+  assert.equal(warnings.length, 1, 'a burst of stale frames logs once, not once per frame');
+
+  await bridge.drain();
+});

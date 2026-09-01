@@ -341,8 +341,12 @@ export function createAtomAudioVadBridge(options = {}) {
         lastFrameAtMs: 0,
         // Highest generation seen so far. Frames with a lower generation are
         // stale (from a capture session the device has already retired) and
-        // must be dropped. A higher generation resets in-flight state.
+        // must be dropped, unless seq regressed too — see handlePayload. A
+        // higher generation resets in-flight state.
         generation: 0,
+        // Generation floor that a stale-frame warning was already logged for,
+        // so a burst of stale frames produces one line rather than hundreds.
+        staleGenerationNoticedFor: null,
         // Epoch is bumped on every external reset (explicit resetSession,
         // higher-generation frame). Async backend results that captured an
         // older epoch are discarded on apply, so an in-flight Silero call
@@ -639,13 +643,41 @@ export function createAtomAudioVadBridge(options = {}) {
     // has moved on without us, so we discard partial buffers before
     // accepting the new frame.
     const frameGeneration = Number.isFinite(payload.generation) ? Math.floor(payload.generation) : null;
+    const frameSeq = Number.isFinite(payload.seq) ? Math.floor(payload.seq) : null;
     if (frameGeneration !== null) {
       if (frameGeneration < session.generation) {
-        return { relay: false, accepted: false, reason: 'stale_generation' };
-      }
-      if (frameGeneration > session.generation) {
+        // A device reboot (a reflash, a power cycle) restarts both counters
+        // from zero, so the stored floor would reject every frame the device
+        // sends until its generation happens to climb back past the old
+        // value. That looks like "hands-free is dead" for several minutes and
+        // then fixes itself, with nothing in the log to explain either half.
+        // Both counters only ever increase while the device stays up — seq is
+        // not reset by a generation bump — so a simultaneous regression is a
+        // restart, and the new numbering is the one to believe.
+        if (frameSeq !== null && frameSeq < session.seq) {
+          log.info(
+            `[face-app] Atom VAD device restart detected (session=${session.id} generation ${session.generation} -> ${frameGeneration}, seq ${session.seq} -> ${frameSeq}); adopting the new stream`
+          );
+          clearSessionBuffers(session);
+          session.generation = frameGeneration;
+          session.seq = frameSeq;
+          session.staleGenerationNoticedFor = null;
+          session.epoch += 1;
+        } else {
+          // Log once per floor so a silent drop is at least visible in the
+          // stack log; a genuine stale frame arrives in bursts.
+          if (session.staleGenerationNoticedFor !== session.generation) {
+            session.staleGenerationNoticedFor = session.generation;
+            log.warn(
+              `[face-app] Atom VAD dropping frames from generation ${frameGeneration} (session=${session.id} expects >= ${session.generation})`
+            );
+          }
+          return { relay: false, accepted: false, reason: 'stale_generation' };
+        }
+      } else if (frameGeneration > session.generation) {
         clearSessionBuffers(session);
         session.generation = frameGeneration;
+        session.staleGenerationNoticedFor = null;
         // Higher generation is an external reset: any in-flight async
         // backend work for the older generation must be discarded on apply.
         session.epoch += 1;
