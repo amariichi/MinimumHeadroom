@@ -985,3 +985,88 @@ test("ws server can expose a separate clean document route", async (t) => {
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "interpreter");
 });
+
+test('device-stamped operator responses reach the operator bridge exactly once', async (t) => {
+  const server = await startFaceWebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    path: '/ws',
+    relayPayloads: true,
+    log: silentLog
+  });
+  const defaultBridgeUrl = new URL(server.url);
+  defaultBridgeUrl.searchParams.set('operator_session_id', 'default');
+  const helperBridgeUrl = new URL(server.url);
+  helperBridgeUrl.searchParams.set('operator_session_id', 'helper-1');
+
+  const defaultBridge = new WebSocket(defaultBridgeUrl, 'mh-operator-bridge-v1');
+  const device = new WebSocket(server.url);
+  let helperBridge = null;
+  t.after(async () => {
+    try { defaultBridge.close(); } catch {}
+    try { helperBridge?.close(); } catch {}
+    try { device.close(); } catch {}
+    await server.stop();
+  });
+  await Promise.all([waitForOpen(defaultBridge), waitForOpen(device)]);
+
+  const defaultBridgeResponses = [];
+  defaultBridge.addEventListener('message', (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload?.type === 'operator_response') defaultBridgeResponses.push(payload);
+    } catch {}
+  });
+
+  // The AtomS3R firmware stamps its own device id as the operator session,
+  // so this never matches the bridge's MH_BRIDGE_SESSION_ID.
+  device.send(JSON.stringify({
+    v: 1,
+    type: 'operator_response',
+    session_id: 'atom-headroom-1',
+    request_id: null,
+    response_kind: 'text',
+    value: 'こんにちは。',
+    source: 'atom'
+  }));
+  await waitForCondition(() => defaultBridgeResponses.length === 1);
+  await delay(40);
+  assert.equal(defaultBridgeResponses.length, 1, 'device speech must reach the bridge once');
+  assert.equal(defaultBridgeResponses[0].value, 'こんにちは。');
+
+  helperBridge = new WebSocket(helperBridgeUrl, 'mh-operator-bridge-v1');
+  await waitForOpen(helperBridge);
+  const helperBridgeResponses = [];
+  helperBridge.addEventListener('message', (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload?.type === 'operator_response') helperBridgeResponses.push(payload);
+    } catch {}
+  });
+
+  device.send(JSON.stringify({
+    v: 1,
+    type: 'operator_response',
+    session_id: 'atom-headroom-1',
+    request_id: null,
+    response_kind: 'text',
+    value: 'second utterance',
+    source: 'atom'
+  }));
+  await waitForCondition(() => defaultBridgeResponses.length === 2);
+  await delay(40);
+  assert.equal(helperBridgeResponses.length, 0, 'an unmatched session must not fan out to every bridge');
+
+  device.send(JSON.stringify({
+    v: 1,
+    type: 'operator_response',
+    session_id: 'helper-1',
+    request_id: null,
+    response_kind: 'text',
+    value: 'helper only',
+    source: 'ui'
+  }));
+  await waitForCondition(() => helperBridgeResponses.length === 1);
+  await delay(40);
+  assert.equal(defaultBridgeResponses.length, 2, 'an exact session match must stay on its own bridge');
+});
