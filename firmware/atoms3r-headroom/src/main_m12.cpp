@@ -8,7 +8,6 @@
 // helpers are intentionally duplicated from main.cpp; they are stable and small.
 #ifdef HEADROOM_M12
 
-#include <ESPmDNS.h>
 #include <M5Unified.h>
 #include <WiFi.h>
 
@@ -16,6 +15,7 @@
 #include "headroom_audio.h"
 #include "headroom_camera.h"
 #include "headroom_continuous_vad.h"
+#include "headroom_face_endpoint.h"
 #include "headroom_ingress_server.h"
 #include "headroom_serial_provision.h"
 #include "headroom_settings.h"
@@ -39,6 +39,46 @@ HeadroomFaceState faceState;
 
 bool setupMode = false;
 bool wifiConnected = false;
+
+// Face-app endpoint recovery, identical in policy to main.cpp: after the
+// WebSocket has been down for kFaceEndpointDownMs, re-resolve the provisioned
+// mDNS name and restart only when a *different* address answers a TCP probe.
+// The camera path keeps working over HTTP while the WebSocket is down, which is
+// exactly why a wedged endpoint here can go unnoticed for a long time.
+constexpr uint32_t kFaceEndpointDownMs = 60000;
+constexpr uint32_t kFaceEndpointRecheckMs = 60000;
+String faceEndpointHost;
+uint32_t faceEndpointDownSinceMs = 0;
+uint32_t faceEndpointCheckedMs = 0;
+
+void recoverFaceEndpointIfMoved(uint32_t nowMs) {
+  if (transport.connected()) {
+    faceEndpointDownSinceMs = 0;
+    return;
+  }
+  if (faceEndpointDownSinceMs == 0) {
+    faceEndpointDownSinceMs = nowMs;
+    return;
+  }
+  if (nowMs - faceEndpointDownSinceMs < kFaceEndpointDownMs) {
+    return;
+  }
+  if (faceEndpointCheckedMs != 0 && nowMs - faceEndpointCheckedMs < kFaceEndpointRecheckMs) {
+    return;
+  }
+  faceEndpointCheckedMs = nowMs;
+
+  HeadroomSettingsData probe = settings.data();
+  FaceEndpointSelection selection = resolveFaceEndpoint(probe);
+  if (!selection.resolved || selection.host == faceEndpointHost) {
+    return;
+  }
+  Serial.printf("face endpoint moved: %s -> %s; restarting to re-apply\n", faceEndpointHost.c_str(),
+                selection.host.c_str());
+  Serial.flush();
+  delay(50);
+  ESP.restart();
+}
 
 // Before-playback callback: routes through the VAD state machine so it enters
 // Cooldown on the next update() tick (calling stop() directly skips the gate).
@@ -86,56 +126,6 @@ bool connectWifi(const HeadroomSettingsData& data, uint32_t timeoutMs) {
   Serial.println("all wifi slots failed; starting setup portal");
   WiFi.disconnect(true);
   return false;
-}
-
-// Swap only the host portion of a "scheme://host[:port][/path]" URL.
-String replaceUrlHost(const String& url, const String& newHost) {
-  int schemeEnd = url.indexOf("://");
-  if (schemeEnd < 0) {
-    return url;
-  }
-  int authStart = schemeEnd + 3;
-  int pathStart = url.indexOf('/', authStart);
-  String authority = pathStart >= 0 ? url.substring(authStart, pathStart) : url.substring(authStart);
-  String rest = pathStart >= 0 ? url.substring(pathStart) : String();
-  int portStart = authority.indexOf(':');
-  String portPart = portStart >= 0 ? authority.substring(portStart) : String();  // keeps leading ':'
-  return url.substring(0, authStart) + newHost + portPart + rest;
-}
-
-// Resolve a provisioned mDNS host once at boot and rewrite the host in the
-// server URLs to the PC's current LAN IP. On failure the static URLs are kept
-// (off-LAN, those should be a stable Tailscale IP). Mutates the caller's copy
-// only; the provisioned mdns_host in NVS is never overwritten.
-void resolveMdnsHost(HeadroomSettingsData& data) {
-  if (data.mdnsHost.length() == 0) {
-    return;
-  }
-  String host = data.mdnsHost;
-  host.trim();
-  if (host.endsWith(".local")) {
-    host = host.substring(0, host.length() - 6);  // queryHost() appends .local itself
-  }
-  if (host.length() == 0) {
-    return;
-  }
-  if (!MDNS.begin(data.deviceId.c_str())) {
-    Serial.println("mdns: MDNS.begin failed; keeping static ws_url/http_base");
-    return;
-  }
-  IPAddress ip = MDNS.queryHost(host, 2000);
-  if (static_cast<uint32_t>(ip) == 0) {
-    Serial.printf("mdns: resolve failed for %s.local; keeping static ws_url/http_base\n", host.c_str());
-    return;
-  }
-  String ipStr = ip.toString();
-  Serial.printf("mdns: %s.local -> %s\n", host.c_str(), ipStr.c_str());
-  if (data.faceWsUrl.length() > 0) {
-    data.faceWsUrl = replaceUrlHost(data.faceWsUrl, ipStr);
-  }
-  if (data.faceHttpBase.length() > 0) {
-    data.faceHttpBase = replaceUrlHost(data.faceHttpBase, ipStr);
-  }
 }
 
 void startSetupPortal() {
@@ -199,7 +189,7 @@ void setup() {
   // Mutable per-boot copy so an mDNS-resolved PC IP can be folded into the
   // server URLs before any subsystem captures them.
   HeadroomSettingsData runtimeData = data;
-  resolveMdnsHost(runtimeData);
+  faceEndpointHost = resolveFaceEndpoint(runtimeData).host;
   audio.setHttpBase(runtimeData.faceHttpBase);
   faceState.expression = HeadroomExpression::Thinking;
   faceState.connected = true;
@@ -230,6 +220,7 @@ void loop() {
     ingressServer.loop();
     transport.loop();
     faceState.connected = transport.connected() || ingressServer.recentlyActive(10000);
+    recoverFaceEndpointIfMoved(millis());
   }
 }
 
