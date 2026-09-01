@@ -143,7 +143,17 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
 boot and rewrite the host in `--ws-url`/`--http-base`, so a DHCP change needs no
 re-provisioning; it falls back to the static URLs when mDNS can't resolve (e.g.
 off-LAN — keep those pointed at a stable address such as a Tailscale IP).
-`--mdns-host ""` disables it. Read current state by sending `RMHCFG?` over the
+`--mdns-host ""` disables it. The PC needs an mDNS responder for this (on Ubuntu,
+`avahi-daemon`); without one the device stays on the static URLs.
+
+One PC usually publishes several addresses under one `.local` name — the LAN
+address plus VPN (Tailscale) and container-bridge addresses — so the device asks
+for every answer, prefers one on its own subnet, and opens a throwaway TCP
+connection to the port before adopting it. An address that cannot be reached is
+skipped instead of silently wedging the device. If the WebSocket then stays down
+for a minute, the device re-resolves, and restarts only when a *different*
+address passes the probe, so a PC that is merely switched off never causes a
+restart loop. Read current state by sending `RMHCFG?` over the
 serial port (115200, raw).
 
 The host opens the USB CDC device once and sends harmless `RMHCFG?` probes until
@@ -393,9 +403,13 @@ model.
   adds routed subnets, e.g. a travel router's LAN, so it self-heals as the device
   roams). mDNS does not cross subnets, so keep the static `ws_url`/`http_base`
   fallback pointed at a stable address (e.g. a Tailscale IP) for off-LAN use. If
-  the audio WS still goes dark, check from the PC with
-  `ss -tn state established | grep :8765 | grep -v 127.0.0.1` (no peer = audio WS
-  down) and re-provision `--ws-url`/`--http-base` as a manual fallback. Remote
+  the audio WS still goes dark, ask the device which address it settled on with
+  `curl http://<device-ip>/health` (`ws_connected` and `face_ws_url`), and check
+  from the PC with `ss -tan | grep :8765 | grep -v 127.0.0.1`: no peer at all
+  means the device is aiming somewhere else, while rows stuck in `SYN-RECV` mean
+  it is aiming here but the reply never gets back — typically a PC with two
+  interfaces on one subnet, where the answer leaves by the wrong one. Re-provision
+  `--ws-url`/`--http-base` as a manual fallback. Remote
   (Tailscale) use also needs an ACL grant for the device→PC WS — see the
   [Tailscale travel-router guide](tailscale-travel-router-setup.md).
 - **TTS plays as white noise / radio static** when your speech and TTS collide —
@@ -543,7 +557,15 @@ node scripts/atoms3r-provision.mjs --port /dev/ttyACM0 \
 を渡すと、デバイスは起動時に PC の現在の IP を解決し、`--ws-url` と `--http-base` のホストを
 書き換えます。そのため、DHCP で IP が変わっても再設定は不要です。屋外などで mDNS を解決
 できない場合は静的 URL を使うため、そちらには Tailscale IP などの安定したアドレスを設定して
-ください。`--mdns-host ""` で無効にできます。現在値を確認するには、115200 baud の
+ください。`--mdns-host ""` で無効にできます。PC 側に mDNS レスポンダ（Ubuntu なら
+`avahi-daemon`）が必要で、無ければデバイスは静的 URL のままになります。
+
+1 台の PC が 1 つの `.local` 名に対して複数のアドレス（LAN のほか Tailscale や
+コンテナブリッジ）を広告することが多いため、デバイスは**すべての回答を集め、自分と同じ
+サブネットのものを優先し、採用前に対象ポートへ TCP 接続して疎通を確認**します。届かない
+アドレスは黙って掴まずにスキップします。その後 WebSocket が 1 分以上切れたままなら再解決し、
+**別のアドレスが疎通確認を通ったときだけ**再起動するので、PC の電源が落ちているだけの
+状況で再起動を繰り返すことはありません。現在値を確認するには、115200 baud の
 未加工シリアル接続で `RMHCFG?` を送信します。
 
 hostはUSB CDC deviceを一度だけopenし、副作用のない`RMHCFG?`をAtomから
@@ -777,8 +799,11 @@ PC→AtomのSupertonic再生（44.1 kHz）は、10秒ならPCM16が約882 kB、�
 
   mDNS はサブネットを越えないため、屋外用の静的な `ws_url` / `http_base` には、Tailscale IP
   などの安定したフォールバック先を設定してください。それでも音声 WebSocket が切れる場合は、
-  PC 側で `ss -tn state established | grep :8765 | grep -v 127.0.0.1` を実行します。接続相手が
-  表示されなければ切断中です。手動で復旧するには、`--ws-url` / `--http-base` を指定して
+  まずデバイス自身にどのアドレスを掴んだか聞きます（`curl http://<デバイスIP>/health` の
+  `ws_connected` と `face_ws_url`）。PC 側では `ss -tan | grep :8765 | grep -v 127.0.0.1` を見て、**行が 1 つも
+  無ければ**デバイスは別のアドレスを向いており、**`SYN-RECV` のまま並ぶ**ならこちらを向いて
+  いるのに応答が返っていません（PC が同一サブネットに 2 つの I/F を持ち、応答が別の I/F から
+  出ている典型例）。手動で復旧するには、`--ws-url` / `--http-base` を指定して
   再プロビジョニングします。Tailscale 経由では Atom → PC の WebSocket を許可する ACL も
   必要です。詳しくは[Tailscale トラベルルーター手順](tailscale-travel-router-setup.md)を参照して
   ください。
