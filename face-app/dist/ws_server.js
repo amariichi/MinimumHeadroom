@@ -593,6 +593,7 @@ export async function startFaceWebSocketServer(options = {}) {
   const replayablePayloads = new Map();
   const operatorBridgesBySession = new Map();
   const activeOperatorBridgeBySession = new Map();
+  const noticedOperatorResponseSessions = new Set();
   let nextTerminalSubscriberId = 1;
 
   function websocketProtocolSet(header) {
@@ -683,11 +684,39 @@ export async function startFaceWebSocketServer(options = {}) {
       : isDirectAtomSocket(socket);
   }
 
+  // Devices stamp their own identity as the operator session: the AtomS3R
+  // firmware sends session_id=<device_id> (for example "atom-headroom-1"),
+  // while the operator bridge registers under MH_BRIDGE_SESSION_ID, which
+  // defaults to "default". Route by exact session whenever a bridge claims
+  // it, and otherwise fall back to an unambiguous bridge so device speech
+  // still reaches the pane. The fallback never picks more than one bridge,
+  // so a single response is still delivered exactly once.
+  function resolveOperatorResponseBridge(sessionId) {
+    const exact = activeOperatorBridgeBySession.get(sessionId);
+    if (exact) {
+      return exact;
+    }
+    const fallback = activeOperatorBridgeBySession.get('default')
+      ?? (activeOperatorBridgeBySession.size === 1
+        ? [...activeOperatorBridgeBySession.values()][0]
+        : null);
+    const noticeKey = `${sessionId}:${fallback ? 'fallback' : 'unrouted'}`;
+    if (!noticedOperatorResponseSessions.has(noticeKey)) {
+      noticedOperatorResponseSessions.add(noticeKey);
+      log.info(
+        fallback
+          ? `[face-app] operator_response session '${sessionId}' has no bridge; routing to '${operatorBridgeSessionId(fallback)}'`
+          : `[face-app] operator_response session '${sessionId}' dropped: no operator bridge to route to`
+      );
+    }
+    return fallback;
+  }
+
   function shouldSendPayloadToSocket(socket, payload) {
     if (payload?.type === 'operator_response') {
       const sessionId = asNonEmptyString(payload.session_id) ?? 'default';
       return isOperatorBridgeSocket(socket)
-        && activeOperatorBridgeBySession.get(sessionId) === socket;
+        && resolveOperatorResponseBridge(sessionId) === socket;
     }
     if (TERMINAL_STREAM_MESSAGE_TYPES.has(payload?.type)) {
       const subscription = socket?.__mhTerminalSubscription;
