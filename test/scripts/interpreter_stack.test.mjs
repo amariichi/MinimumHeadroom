@@ -129,7 +129,7 @@ test('deprecated light-cloud dry-run resolves to local Nemotron, Gemma, and Supe
   assert.match(result.stdout, /intent=gemma4 translation=gemma4/u);
   assert.match(result.stdout, /tts=supertonic/);
   assert.doesNotMatch(result.stdout, /tts=qwen3/);
-  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /agy-gemini|gemini-3\.6/u);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /agy-gemini|gemini-3\.\d/u);
   assert.match(result.stdout, /atom_tts_codec=auto/);
 });
 

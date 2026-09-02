@@ -10,4 +10,4 @@ Antigravity CLI requires permission to read, edit, and execute files here.
   No, exit
 
   ↑/↓ Navigate · enter Confirm
-                                                                                          Gemini 3.7 Flash (Medium)
+                                                                                          Gemini 3.8 Flash (Medium)
