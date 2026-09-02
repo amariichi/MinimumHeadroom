@@ -1,10 +1,10 @@
       ▄▀▀▄        Antigravity CLI 1.0.1
      ▀▀▀▀▀▀       user@example.com (Google AI Pro)
-    ▀▀▀▀▀▀▀▀      Gemini 3.7 Flash (Medium)
+    ▀▀▀▀▀▀▀▀      Gemini 3.8 Flash (Medium)
    ▄▀▀    ▀▀▄     ~/github/minimum-headroom/.agent/worktrees/helper-1
   ▄▀▀      ▀▀▄
 
 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 >
 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-? for shortcuts                                                                           Gemini 3.7 Flash (Medium)
+? for shortcuts                                                                           Gemini 3.8 Flash (Medium)

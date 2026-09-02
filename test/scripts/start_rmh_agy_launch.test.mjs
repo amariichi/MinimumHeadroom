@@ -56,7 +56,7 @@ appendFileSync(process.env.RMH_FAKE_AGY_CALLS, JSON.stringify(process.argv.slice
   await writeFile(sharedVision, 'canonical atoms3r-vision\n', 'utf8');
 
   const result = await runLauncher(
-    ['--agent', 'agy', '--model', 'Gemini 3.7 Flash (Low)'],
+    ['--agent', 'agy', '--model', 'Gemini 3.8 Flash (Low)'],
     {
       HOME: fakeHome,
       PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH}`,
@@ -98,7 +98,7 @@ appendFileSync(process.env.RMH_FAKE_AGY_CALLS, JSON.stringify(process.argv.slice
 
     const calls = (await readFile(callsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(calls.some((argv) => argv[0] === 'plugin' && argv[1] === 'install'), true);
-    assert.deepEqual(calls.at(-1), ['--model', 'Gemini 3.7 Flash (Low)']);
+    assert.deepEqual(calls.at(-1), ['--model', 'Gemini 3.8 Flash (Low)']);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

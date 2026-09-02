@@ -571,9 +571,9 @@ test('agy JSON client uses non-TTY stdin print mode without exposing the prompt 
   });
   const result = await client.run('private transcript');
   assert.deepEqual(result, { translation: 'Hello' });
-  assert.equal(client.model, 'gemini-3.7-flash-low');
+  assert.equal(client.model, 'gemini-3.8-flash-low');
   assert.equal(calls[0].command, '/fixture/agy');
-  assert.deepEqual(calls[0].args.slice(0, 2), ['--model', 'gemini-3.7-flash-low']);
+  assert.deepEqual(calls[0].args.slice(0, 2), ['--model', 'gemini-3.8-flash-low']);
   assert.equal(calls[0].args.includes('--print'), false);
   assert.equal(calls[0].args.includes('private transcript'), false);
   assert.equal(calls[0].prompt, 'private transcript');
