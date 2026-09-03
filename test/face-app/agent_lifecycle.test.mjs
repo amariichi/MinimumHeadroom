@@ -2368,3 +2368,138 @@ test('pane_send_key caps key count at 32', async () => {
 
   cleanup(repoRoot);
 });
+
+test('agent lifecycle runtime refuses to inject into an Antigravity trust prompt', async () => {
+  // The modal takes arrow keys and Enter only, so a mission typed into it is
+  // discarded and the trailing Enter answers it — a delivery that destroys the
+  // text while reporting success. The detector existed but matched only the
+  // wording "do you trust this folder?".
+  let pastedContent = null;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    pastedContent = content;
+  });
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
+      if (command === 'tmux' && args[0] === 'display-message') {
+        if (args[4] === '#{pane_current_command}') {
+          return { stdout: 'agy\n', stderr: '', code: 0 };
+        }
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return {
+          stdout: [
+            'Accessing workspace:',
+            '',
+            '/home/user/repo/.agent/worktrees/helper-1',
+            '',
+            'Do you trust the contents of this project?',
+            '',
+            'Antigravity CLI requires permission to read, edit, and execute files here.',
+            '',
+            '> Yes, I trust this folder',
+            '  No, exit',
+            ''
+          ].join('\n'),
+          stderr: '',
+          code: 0
+        };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-agy-trust',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%91',
+    agent_cmd: 'agy --model gemini-3.8-flash-low',
+    source_repo_path: repoRoot
+  });
+
+  await assert.rejects(
+    () => runtime.injectAgent('agent-agy-trust', { text: 'Mission text', submit: true }),
+    (error) => /startup blocked/i.test(String(error?.message ?? ''))
+  );
+  assert.equal(pastedContent, null, 'nothing may be typed into a modal');
+
+  cleanup(repoRoot);
+});
+
+test('agent lifecycle runtime does not mistake echoed transcript for a buffered submit', async () => {
+  // A CLI echoes what it accepted, so the tail of the injected text reappears
+  // above the prompt as soon as the submit succeeds. Treating that as "still
+  // buffered" fired on every injection and sent stray Enters into an agent that
+  // had already started working.
+  let pastedContent = null;
+  let extraEnters = 0;
+  const pasteIntercept = createPasteInterceptor((content) => {
+    pastedContent = content;
+  });
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      const intercepted = pasteIntercept(command, args);
+      if (intercepted) {
+        return intercepted;
+      }
+      if (command === 'tmux' && args[0] === 'send-keys' && args.includes('C-m')) {
+        extraEnters += 1;
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'display-message') {
+        if (args[4] === '#{pane_current_command}') {
+          return { stdout: 'codex\n', stderr: '', code: 0 };
+        }
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'capture-pane') {
+        return {
+          stdout: [
+            '  Mission line one',
+            '  Mission line two',
+            '  Begin now.',
+            '',
+            '• Working (3s • esc to interrupt)',
+            '',
+            '› ',
+            '  gpt-5.6 · ~/repo'
+          ].join('\n'),
+          stderr: '',
+          code: 0
+        };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+
+  await runtime.addAgent({
+    id: 'agent-echo-tail',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%92',
+    agent_cmd: 'codex',
+    source_repo_path: repoRoot
+  });
+
+  const result = await runtime.injectAgent('agent-echo-tail', {
+    text: 'Mission line one\nMission line two\nBegin now.',
+    submit: true,
+    wait_for_ready: false,
+    rescue_submit_if_buffered: true
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.injection.rescue_submit.buffered_still_visible, false);
+  assert.equal(result.injection.rescue_submit.attempt_count, 0);
+  // Exactly the one intended submit. Before the fix this was three: the
+  // submit plus two rescue Enters fired at an agent already working.
+  assert.equal(extraEnters, 1, 'a submitted mission must not be re-entered');
+  assert.ok(pastedContent.includes('Begin now.'));
+
+  cleanup(repoRoot);
+});
