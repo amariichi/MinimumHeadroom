@@ -1319,8 +1319,20 @@ export function createAgentLifecycleRuntime(options = {}) {
     if (normalizedLines.length === 0) {
       return false;
     }
-    const trailingWindow = normalizedLines.slice(-Math.max(8, needles.length * 4));
-    return needles.some((needle) => trailingWindow.some((line) => line.includes(needle)));
+    // Search the input box, not the transcript. A CLI echoes what it accepted,
+    // so the needles taken from the injected text reappear above the prompt the
+    // moment the submit succeeds — which made this report "still buffered" on
+    // every injection, and then sent stray Enters into an agent that had
+    // already started working. Everything at or below the last prompt marker is
+    // the input; everything above it is history.
+    const promptIndex = normalizedLines.reduce(
+      (found, line, index) => (/^[>›❯]/.test(line.trimStart()) ? index : found),
+      -1
+    );
+    const window = promptIndex >= 0
+      ? normalizedLines.slice(promptIndex)
+      : normalizedLines.slice(-3);
+    return needles.some((needle) => window.some((line) => line.includes(needle)));
   }
 
   async function maybeRescueBufferedSubmit(paneId, text, input = {}) {
@@ -1400,7 +1412,13 @@ export function createAgentLifecycleRuntime(options = {}) {
 
   function detectStartupBlocker(cleanedLines) {
     const joined = cleanedLines.join('\n');
-    if (/do you trust (this )?folder\?/i.test(joined) || /trust folder/i.test(joined)) {
+    // Match the question, not one CLI's phrasing of it. This was written
+    // against "do you trust this folder?" and missed Antigravity's "Do you
+    // trust the contents of this project?", so a 4 KB mission was typed into a
+    // modal that accepts only arrow keys and Enter. The text was discarded and
+    // the trailing Enter answered the modal, leaving an idle prompt and a
+    // delivery that reported success.
+    if (/\bdo you trust\b/i.test(joined) || /\btrust (this )?(folder|project|workspace|directory)\b/i.test(joined)) {
       return {
         reason: 'trust_prompt',
         message: 'startup blocked: trust prompt'
@@ -1422,7 +1440,13 @@ export function createAgentLifecycleRuntime(options = {}) {
     const hasCodexStatus = cleanedLines.some((line) => /gpt-[\w.-]+/i.test(line) && /left/i.test(line));
     const hasAntigravityCommand = /\bagy(?:\s|$)/i.test(joined) || /\bantigravity(?:\s|$)/i.test(joined);
     const hasAntigravityBanner = cleanedLines.some((line) => /Antigravity CLI|AGY CLI/i.test(line));
-    const hasAntigravityPrompt = cleanedLines.some((line) => /Type your message(?: or @path\/to\/file)?|How can I help|What would you like/i.test(line));
+    // Current Antigravity draws a bordered empty input and a "? for shortcuts"
+    // hint rather than any of the older placeholder strings, so those alone
+    // never matched and readiness fell back to the weakest signal, silence.
+    const hasAntigravityPrompt = cleanedLines.some((line) => (
+      /Type your message(?: or @path\/to\/file)?|How can I help|What would you like/i.test(line)
+      || /\?\s*for shortcuts/i.test(line)
+    ));
     const hasGenericPrompt = cleanedLines.some((line) => {
       const trimmed = line.trim();
       return trimmed === '>' || trimmed === '›';
