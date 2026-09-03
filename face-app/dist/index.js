@@ -25,6 +25,7 @@ import { createAgentAssignmentApi } from './agent_assignment_api.js';
 import { createOwnerInboxStateStore } from './owner_inbox_state.js';
 import { createOwnerInboxApi } from './owner_inbox_api.js';
 import { createHookBridge } from './hook_bridge.js';
+import { createOwnerInboxNotifier } from './owner_inbox_notifier.js';
 import { createHelperStuckDetector } from './helper_stuck_detector.js';
 import { createMediaController, parseMediaAllowedEndpoints } from './media_controller.js';
 import { createMediaProxy } from './media_proxy.js';
@@ -330,6 +331,12 @@ const agentAssignmentApi = createAgentAssignmentApi({
   store: agentAssignmentState,
   lifecycleRuntime: agentLifecycleRuntime
 });
+const ownerInboxNotifierEnabled = (process.env.MH_OWNER_INBOX_NOTIFY ?? '1') !== '0'
+  && (process.env.MH_OWNER_INBOX_NOTIFY ?? '').toLowerCase() !== 'off';
+const ownerInboxNotifier = createOwnerInboxNotifier({
+  enabled: ownerInboxNotifierEnabled,
+  log: console
+});
 const ownerInboxApi = createOwnerInboxApi({
   store: ownerInboxState,
   async onSubmitReport({ result }) {
@@ -337,6 +344,18 @@ const ownerInboxApi = createOwnerInboxApi({
       return;
     }
     agentAssignmentState.noteReport(result.report);
+    // Say it out loud rather than leaving the owner to poll. Failures here must
+    // not fail the report: the report is already stored, and losing the
+    // announcement is much cheaper than losing the report.
+    try {
+      await ownerInboxNotifier.notify({
+        report: result.report,
+        server,
+        ttsController
+      });
+    } catch (error) {
+      console.warn(`[face-app] owner inbox notify failed: ${error.message}`);
+    }
   }
 });
 const hookBridge = createHookBridge({ log: console });
