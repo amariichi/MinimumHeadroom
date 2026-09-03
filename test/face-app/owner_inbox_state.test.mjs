@@ -478,3 +478,89 @@ test('owner inbox store rejects late reports when assignment and mission were al
 
   cleanup(rootDir);
 });
+
+test('owner inbox store supersedes an identical repeat instead of stacking it', () => {
+  // A helper parked on a CLI feedback survey re-sent the same blocked report
+  // every thirty seconds. Twenty-two copies, each carrying a whole pane dump as
+  // detail, buried the done report the owner was waiting for.
+  const { rootDir, statePath } = createTempStatePath('mh-owner-inbox-repeat-');
+  const store = createOwnerInboxStateStore({ statePath, now: createClock(), log: quietLog });
+  store.load();
+
+  const repeat = (reportId) => store.submitReport({
+    stream_id: 'operator-default',
+    mission_id: 'helper-mission',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'helper-1',
+    kind: 'blocked',
+    summary: 'helper paused on CLI feedback survey',
+    detail: 'How is the CLI experience so far?',
+    report_id: reportId
+  });
+
+  repeat('rpt-1');
+  repeat('rpt-2');
+  repeat('rpt-3');
+
+  const listed = store.listReports({ owner_agent_id: '__operator__', stream_id: 'operator-default' });
+  const unresolved = listed.filter((report) => report.lifecycle_state === 'delivered_to_inbox');
+  assert.equal(unresolved.length, 1, 'only the latest copy stays unresolved');
+  assert.equal(unresolved[0].report_id, 'rpt-3');
+
+  const all = store.listReports({
+    owner_agent_id: '__operator__',
+    stream_id: 'operator-default',
+    include_resolved: true
+  });
+  const superseded = all.filter((report) => report.lifecycle_state === 'superseded');
+  assert.deepEqual(superseded.map((report) => report.report_id), ['rpt-1', 'rpt-2']);
+
+  fs.rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('owner inbox store keeps a different report from the same helper', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-owner-inbox-distinct-');
+  const store = createOwnerInboxStateStore({ statePath, now: createClock(), log: quietLog });
+  store.load();
+
+  const base = {
+    stream_id: 'operator-default',
+    mission_id: 'helper-mission',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'helper-1'
+  };
+  store.submitReport({ ...base, kind: 'progress', summary: 'Mission accepted', report_id: 'rpt-a' });
+  store.submitReport({ ...base, kind: 'done', summary: 'Finished', report_id: 'rpt-b' });
+
+  const listed = store.listReports({ owner_agent_id: '__operator__', stream_id: 'operator-default' });
+  assert.equal(listed.length, 2, 'a genuinely new report must not supersede the old one');
+
+  fs.rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('owner inbox summary carries a reference per agent, not a third copy of the body', () => {
+  const { rootDir, statePath } = createTempStatePath('mh-owner-inbox-summary-size-');
+  const store = createOwnerInboxStateStore({ statePath, now: createClock(), log: quietLog });
+  store.load();
+
+  const detail = 'x'.repeat(4096);
+  store.submitReport({
+    stream_id: 'operator-default',
+    mission_id: 'helper-mission',
+    owner_agent_id: '__operator__',
+    from_agent_id: 'helper-1',
+    kind: 'done',
+    summary: 'Finished',
+    detail,
+    report_id: 'rpt-big'
+  });
+
+  const listed = store.getInboxView({ owner_agent_id: '__operator__', stream_id: 'operator-default' });
+  const perAgent = listed.summary.by_agent_id['helper-1'].top_report;
+  assert.equal(perAgent.report_id, 'rpt-big');
+  assert.equal(perAgent.summary, 'Finished');
+  assert.equal(perAgent.detail, undefined, 'the body belongs in reports[], not repeated per agent');
+  assert.equal(listed.summary.top_report.detail, detail, 'the stream-level top report keeps its body');
+
+  fs.rmSync(rootDir, { recursive: true, force: true });
+});

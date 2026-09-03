@@ -511,6 +511,22 @@ function buildSummaryForReports(reports, options = {}) {
     }
   }
 
+  // Each per-agent entry carried a whole third copy of a report body that is
+  // already in reports[] and again under the stream-level top_report. Reduce it
+  // to a reference now that nothing compares priorities against it any more.
+  for (const agentSummary of Object.values(byAgentId)) {
+    const full = agentSummary.top_report;
+    agentSummary.top_report = full
+      ? {
+        report_id: full.report_id,
+        mission_id: full.mission_id,
+        kind: full.kind,
+        summary: full.summary,
+        ts: full.ts
+      }
+      : null;
+  }
+
   return {
     unresolved_count: unresolvedCount,
     blocking_count: blockingCount,
@@ -793,6 +809,30 @@ export function createOwnerInboxStateStore(options = {}) {
 
     const ts = asTimestamp(input.ts, nowMs(now));
     const kind = normalizeReportKind(input.kind);
+
+    // Supersede an identical repeat from the same helper rather than stacking
+    // it. A helper parked on a CLI feedback survey emitted the same blocked
+    // report every thirty seconds; twenty-two copies, each carrying a full pane
+    // dump as detail, buried the done report the owner was waiting for and made
+    // one listing enormous. Same agent, same mission, same kind, same words is
+    // the same event still happening, not a new one.
+    const repeatDetail = asNonEmptyString(input.detail);
+    for (let i = state.reports.length - 1; i >= 0; i -= 1) {
+      const prior = state.reports[i];
+      if (prior.stream_id !== streamId || prior.from_agent_id !== fromAgentId) {
+        continue;
+      }
+      if (!isUnresolvedLifecycleState(prior.lifecycle_state)) {
+        continue;
+      }
+      if (prior.mission_id === missionId && prior.kind === kind
+          && prior.summary === summary && prior.detail === repeatDetail) {
+        prior.lifecycle_state = 'superseded';
+        prior.superseded_at = nowMs(now);
+      }
+      break;
+    }
+
     const report = {
       stream_id: streamId,
       mission_id: missionId,
