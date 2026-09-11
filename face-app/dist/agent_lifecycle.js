@@ -1916,6 +1916,12 @@ export function createAgentLifecycleRuntime(options = {}) {
 
   async function deleteAgent(agentId, input = {}) {
     const purgeRelatedState = input?.purge_related_state !== false;
+    const preserveWorktreeInput = input?.preserve_worktree;
+    if (preserveWorktreeInput !== undefined && preserveWorktreeInput !== null
+      && typeof preserveWorktreeInput !== 'boolean') {
+      throw createLifecycleError('invalid_request', 'preserve_worktree must be boolean or null');
+    }
+    const preserveWorktree = preserveWorktreeInput === true;
     let agent = getAgentStateOrThrow(agentId);
     const streamId = asNonEmptyString(agent.stream_id);
 
@@ -1935,9 +1941,20 @@ export function createAgentLifecycleRuntime(options = {}) {
 
     agent = getAgentStateOrThrow(agent.id);
     let deletedPath = null;
+    let retainedPath = null;
     if (asNonEmptyString(agent.worktree_path)) {
-      const deleteResult = await deleteWorktree(agent.id);
-      deletedPath = asNonEmptyString(deleteResult?.deleted_path);
+      if (preserveWorktree) {
+        // Retiring keeps the workspace untouched: no git or filesystem call, so
+        // this path needs no external-delete authorization. Only the registry
+        // forgets it, after the pane has already been detached above.
+        retainedPath = path.resolve(agent.worktree_path);
+        stateStore.updateAgentMetadata(agent.id, {
+          worktree_path: null
+        });
+      } else {
+        const deleteResult = await deleteWorktree(agent.id);
+        deletedPath = asNonEmptyString(deleteResult?.deleted_path);
+      }
     }
 
     agent = getAgentStateOrThrow(agent.id);
@@ -1950,6 +1967,7 @@ export function createAgentLifecycleRuntime(options = {}) {
       ...purged,
       action: 'delete',
       deleted_path: deletedPath,
+      ...(preserveWorktree ? { worktree_preserved: true, retained_path: retainedPath } : {}),
       related
     };
   }
@@ -2143,7 +2161,7 @@ export function createAgentLifecycleRuntime(options = {}) {
       case 'focus':
         return focusAgent(agentId, input);
       case 'delete':
-        return deleteAgent(agentId);
+        return deleteAgent(agentId, input);
       case 'delete-worktree':
       case 'delete_worktree':
         return deleteWorktree(agentId, input);

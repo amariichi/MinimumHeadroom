@@ -152,7 +152,10 @@ test('mcp agent lifecycle tools call the face-app HTTP API', async () => {
             action: 'delete',
             agent: {
               id: 'helper-a'
-            }
+            },
+            ...(parsedBody?.preserve_worktree === true
+              ? { worktree_preserved: true, retained_path: '/tmp/retained-helper-a' }
+              : {})
           }
         }));
         return;
@@ -289,6 +292,29 @@ test('mcp agent lifecycle tools call the face-app HTTP API', async () => {
       }
     });
     assert.match(deleteResponse.result.content[0].text, /deleted agent id=helper-a/);
+    const deleteRequests = () => requests.filter((item) => item.url === '/api/agents/helper-a/delete');
+    assert.deepEqual(deleteRequests()[0]?.body, {});
+
+    const retireResponse = await rpc.call('tools/call', {
+      name: 'agent.delete',
+      arguments: {
+        agent_id: 'helper-a',
+        preserve_worktree: true,
+        purge_related_state: false
+      }
+    });
+    assert.match(retireResponse.result.content[0].text, /deleted agent id=helper-a retained_path=\/tmp\/retained-helper-a/);
+    assert.deepEqual(deleteRequests()[1]?.body, { preserve_worktree: true, purge_related_state: false });
+
+    const invalidRetireResponse = await rpc.call('tools/call', {
+      name: 'agent.delete',
+      arguments: {
+        agent_id: 'helper-a',
+        preserve_worktree: 'yes'
+      }
+    });
+    assert.match(invalidRetireResponse.result.content[0].text, /agent\.delete failed: preserve_worktree must be boolean or null/);
+    assert.equal(deleteRequests().length, 2);
 
     const snapshotResponse = await rpc.call('tools/call', {
       name: 'agent.pane_snapshot',

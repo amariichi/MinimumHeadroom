@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.30.0';
+const SERVER_VERSION = '1.30.1';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_AUTH_TOKEN = (() => {
@@ -363,13 +363,15 @@ const BASE_TOOL_DEFINITIONS = [
   },
   {
     name: 'agent.delete',
-    description: 'Delete one managed helper agent, including its pane/worktree when configured.',
+    description: 'Delete one managed helper agent, including its pane/worktree when configured. preserve_worktree=true still terminates the pane and removes the registry entry but leaves the workspace on disk and reports retained_path; purge_related_state=false keeps its assignment and inbox records.',
     inputSchema: {
       type: 'object',
       additionalProperties: true,
       required: ['agent_id'],
       properties: {
-        agent_id: { type: 'string', minLength: 1 }
+        agent_id: { type: 'string', minLength: 1 },
+        preserve_worktree: { type: ['boolean', 'null'] },
+        purge_related_state: { type: ['boolean', 'null'] }
       }
     }
   },
@@ -1572,9 +1574,20 @@ function normalizeAgentFocusPayload(rawArguments) {
 
 function normalizeAgentDeletePayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
-  return {
+  const payload = {
     agent_id: requireString(args, 'agent_id')
   };
+  for (const key of ['preserve_worktree', 'purge_related_state']) {
+    const value = args[key];
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (typeof value !== 'boolean') {
+      throw new Error(`${key} must be boolean or null`);
+    }
+    payload[key] = value;
+  }
+  return payload;
 }
 
 function normalizeAgentPaneSnapshotPayload(rawArguments) {
@@ -2348,9 +2361,15 @@ async function handleToolCall(params) {
   if (toolName === 'agent.delete') {
     try {
       const payload = normalizeAgentDeletePayload(rawArguments);
+      const body = {};
+      for (const key of ['preserve_worktree', 'purge_related_state']) {
+        if (payload[key] !== undefined) {
+          body[key] = payload[key];
+        }
+      }
       const { response, payload: apiPayload, url } = await callFaceHttp(`/api/agents/${encodeURIComponent(payload.agent_id)}/delete`, {
         method: 'POST',
-        body: {}
+        body
       });
       if (!response.ok || apiPayload?.ok !== true) {
         const detail = typeof apiPayload?.detail === 'string' ? apiPayload.detail : `http_${response.status}`;
@@ -2359,7 +2378,8 @@ async function handleToolCall(params) {
           structuredContent: { ok: false, http: url, status: response.status, payload: apiPayload }
         });
       }
-      return toolTextResult(`deleted agent id=${payload.agent_id}`, {
+      const retainedPath = apiPayload?.result?.retained_path ?? null;
+      return toolTextResult(`deleted agent id=${payload.agent_id}${retainedPath ? ` retained_path=${retainedPath}` : ''}`, {
         structuredContent: { ok: true, http: url, request: payload, result: apiPayload.result }
       });
     } catch (error) {
