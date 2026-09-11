@@ -1276,6 +1276,137 @@ test('agent lifecycle runtime delete purges helper assignment and inbox records'
   cleanup(repoRoot);
 });
 
+test('agent lifecycle runtime delete with preserve_worktree kills pane first and retains external non-git workspace', async () => {
+  let runtimeRef = null;
+  const killObservations = [];
+  const { repoRoot, runtime, commands, assignmentStateStore } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'kill-pane') {
+        const agent = runtimeRef.getState().agents.find((item) => item.id === 'agent-retire');
+        killObservations.push({ registered: Boolean(agent), worktree_path: agent?.worktree_path ?? null });
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  runtimeRef = runtime;
+  const externalDir = createTempRoot('mh-agent-retire-external-');
+  fs.writeFileSync(path.join(externalDir, 'evidence.txt'), 'keep me\n');
+
+  await runtime.addAgent({
+    id: 'agent-retire',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%95',
+    worktree_path: externalDir
+  });
+  assignmentStateStore.upsertAssignment({
+    stream_id: `repo:${repoRoot}`,
+    mission_id: 'mission-retire',
+    owner_agent_id: '__operator__',
+    agent_id: 'agent-retire',
+    goal: 'Retire helper but keep records'
+  });
+  const commandsBeforeDelete = commands.length;
+
+  const result = await runtime.dispatchAgentAction('agent-retire', 'delete', {
+    preserve_worktree: true,
+    purge_related_state: false
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'delete');
+  assert.equal(result.worktree_preserved, true);
+  assert.equal(result.retained_path, path.resolve(externalDir));
+  assert.equal(result.deleted_path, null);
+  assert.equal(result.related, null);
+  assert.equal(killObservations.length, 1);
+  assert.equal(killObservations[0].registered, true);
+  assert.equal(path.resolve(killObservations[0].worktree_path), path.resolve(externalDir));
+  assert.equal(runtime.getState().agents.some((agent) => agent.id === 'agent-retire'), false);
+  assert.equal(fs.readFileSync(path.join(externalDir, 'evidence.txt'), 'utf8'), 'keep me\n');
+  const deleteCommands = commands.slice(commandsBeforeDelete);
+  assert.equal(deleteCommands.some((entry) => entry[0] === 'tmux' && entry[1] === 'kill-pane' && entry[3] === '%95'), true);
+  assert.equal(deleteCommands.some((entry) => entry[0] === 'git'), false);
+  assert.equal(
+    assignmentStateStore.listAssignments({ stream_id: `repo:${repoRoot}` }).some((item) => item.agent_id === 'agent-retire'),
+    true
+  );
+
+  cleanup(repoRoot);
+  cleanup(externalDir);
+});
+
+test('agent lifecycle runtime delete without preserve_worktree still refuses external workspace', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness();
+  const externalDir = createTempRoot('mh-agent-retire-default-');
+  fs.writeFileSync(path.join(externalDir, 'evidence.txt'), 'keep me\n');
+
+  await runtime.addAgent({
+    id: 'agent-no-retire',
+    create_worktree: false,
+    create_tmux: false,
+    worktree_path: externalDir
+  });
+
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-no-retire', 'delete', {}),
+    (error) => error?.code === 'external_delete_forbidden'
+  );
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-no-retire', 'delete', { preserve_worktree: 'true' }),
+    (error) => error?.code === 'invalid_request'
+  );
+  const agent = runtime.getState().agents.find((item) => item.id === 'agent-no-retire');
+  assert.ok(agent);
+  assert.equal(path.resolve(agent.worktree_path), path.resolve(externalDir));
+  assert.equal(fs.readFileSync(path.join(externalDir, 'evidence.txt'), 'utf8'), 'keep me\n');
+
+  cleanup(repoRoot);
+  cleanup(externalDir);
+});
+
+test('agent lifecycle runtime preserve_worktree delete keeps registry when pane kill fails', async () => {
+  const { repoRoot, runtime } = createRuntimeHarness({
+    commandRunner: async (command, args) => {
+      if (command === 'tmux' && args[0] === 'display-message') {
+        return { stdout: `${args[3]}\n`, stderr: '', code: 0 };
+      }
+      if (command === 'tmux' && args[0] === 'kill-pane') {
+        const error = new Error('kill failed');
+        error.code = 'command_failed';
+        throw error;
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+  });
+  const externalDir = createTempRoot('mh-agent-retire-kill-fail-');
+
+  await runtime.addAgent({
+    id: 'agent-retire-stuck',
+    create_worktree: false,
+    create_tmux: false,
+    pane_id: '%96',
+    worktree_path: externalDir
+  });
+
+  await assert.rejects(
+    () => runtime.dispatchAgentAction('agent-retire-stuck', 'delete', { preserve_worktree: true }),
+    (error) => error?.code === 'invalid_state'
+  );
+  const agent = runtime.getState().agents.find((item) => item.id === 'agent-retire-stuck');
+  assert.ok(agent);
+  assert.equal(agent.pane_id, '%96');
+  assert.equal(path.resolve(agent.worktree_path), path.resolve(externalDir));
+  assert.equal(fs.existsSync(externalDir), true);
+
+  cleanup(repoRoot);
+  cleanup(externalDir);
+});
+
 test('agent lifecycle runtime startup cleanup deletes active helpers and purges leftover helper state', async () => {
   const externalRepoRoot = createTempRoot('mh-agent-startup-hidden-');
   const { repoRoot, runtime, stateStore, assignmentStateStore, ownerInboxStateStore, commands } = createRuntimeHarness({
