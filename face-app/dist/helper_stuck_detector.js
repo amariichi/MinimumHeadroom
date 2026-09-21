@@ -1,6 +1,5 @@
 const DEFAULT_INTERVAL_MS = 5000;
 const DEFAULT_TAIL_LINES = 40;
-const DEFAULT_DEDUPE_MULTIPLIER = 6;
 const DEFAULT_DETAIL_TAIL_LINES = 12;
 
 export const DEFAULT_STUCK_PATTERNS = [
@@ -86,7 +85,7 @@ function pickLatestAssignment(assignmentStore, agentId) {
   let best = null;
   let bestTs = -1;
   for (const candidate of assignments) {
-    const ts = Number(candidate?.last_sent_at ?? candidate?.updated_at ?? candidate?.created_at ?? 0);
+    const ts = assignmentStartedAt(candidate);
     if (ts > bestTs) {
       bestTs = ts;
       best = candidate;
@@ -95,13 +94,51 @@ function pickLatestAssignment(assignmentStore, agentId) {
   return best;
 }
 
-function firstMatchingLine(lines, regex) {
-  for (const line of lines) {
-    if (regex.test(line)) {
-      return line;
-    }
-  }
-  return null;
+function assignmentStartedAt(assignment) {
+  // updated_at also changes on reports. Prefer delivery time once a mission is
+  // sent; a newly assigned (unsent) revision instead starts at updated_at.
+  return Number(assignment?.last_sent_at) > 0
+    ? Math.max(Number(assignment.last_sent_at), Number(assignment.created_at) || 0)
+    : Number(assignment?.updated_at ?? assignment?.created_at ?? 0);
+}
+
+function isFinalKind(kind) {
+  return kind === 'done' || kind === 'review_findings';
+}
+
+function currentFinalReport(assignment) {
+  return isFinalKind(assignment?.last_report_kind)
+    && Number(assignment.last_report_at ?? 0) >= assignmentStartedAt(assignment);
+}
+
+function matches(regex, line) {
+  regex.lastIndex = 0;
+  return regex.test(line);
+}
+
+function latestRunningLine(lines) {
+  // A live activity row below a former modal is evidence that the modal has
+  // cleared. The same row ABOVE a real current approval must not hide it.
+  return lines.findLastIndex((line) => /^\s*[•●✻✽✶✳⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣷]*\s*(?:Working|Thinking|Loading|Running)(?:\s|\(|\.{3}|…|$)/i.test(line));
+}
+
+function normalizeModalLine(line) {
+  const text = line.trim().replace(/^[›>]\s*/, '');
+  // Durations/times inside the command are arguments, not a changing clock.
+  if (/^(?:\$\s|Bash:|Tool:|Requesting permission for:)/.test(text)) return text.replace(/\s+/g, ' ');
+  // These rows describe the surrounding terminal, not the blocking choice.
+  if (/^(?:\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?|.*\b(?:context left|tokens used)\b.*|gpt-[\w.-]+.*[·│].*)$/i.test(text)) return '';
+  return text.replace(/\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\b/gi, '<time>')
+    .replace(/\b\d+(?:\.\d+)?\s*(?:ms|s|m|h|seconds?|minutes?|hours?)\b/gi, '<duration>')
+    .replace(/\s+/g, ' ');
+}
+
+function modalFingerprint(lines, index) {
+  // Include the requested action so a different command with the same generic
+  // approval heading produces a new notice. Ignore clocks and terminal footer.
+  const action = lines.slice(Math.max(0, index - 6), index)
+    .filter((line) => /^\s*(?:Requesting permission for:|Bash:|Tool:|\$\s)/.test(line));
+  return [...action, ...lines.slice(index)].map(normalizeModalLine).filter(Boolean).join('\n');
 }
 
 export function createHelperStuckDetector(options = {}) {
@@ -115,11 +152,9 @@ export function createHelperStuckDetector(options = {}) {
   }
   const assignmentStore = options.assignmentStore ?? null;
   const log = options.log ?? { info() {}, warn() {}, error() {} };
-  const clock = typeof options.clock === 'function' ? options.clock : Date.now;
   const intervalMs = Number.isInteger(options.intervalMs) && options.intervalMs >= 250 ? options.intervalMs : DEFAULT_INTERVAL_MS;
   const tailLines = Number.isInteger(options.tailLines) && options.tailLines >= 4 ? options.tailLines : DEFAULT_TAIL_LINES;
   const detailTailLines = Number.isInteger(options.detailTailLines) && options.detailTailLines >= 1 ? options.detailTailLines : DEFAULT_DETAIL_TAIL_LINES;
-  const dedupeWindowMs = Number.isInteger(options.dedupeWindowMs) && options.dedupeWindowMs >= 0 ? options.dedupeWindowMs : intervalMs * DEFAULT_DEDUPE_MULTIPLIER;
   const patterns = Array.isArray(options.patterns) && options.patterns.length > 0 ? options.patterns : DEFAULT_STUCK_PATTERNS;
   const fallbackStreamId = asNonEmptyString(options.fallbackStreamId) ?? null;
   const fallbackOwnerAgentId = asNonEmptyString(options.fallbackOwnerAgentId) ?? '__operator__';
@@ -133,6 +168,25 @@ export function createHelperStuckDetector(options = {}) {
     return asNonEmptyString(agent?.stream_id) ?? fallbackStreamId ?? (runtime.activeStreamId ?? null);
   }
 
+  function assignmentCompleted(assignment) {
+    if (!assignment) return false;
+    if (currentFinalReport(assignment)) return true;
+    if (typeof inboxStore.listReports !== 'function') return false;
+    try {
+      // An old detector report can have overwritten last_report_kind. Search
+      // final reports too, including ones the owner has already resolved.
+      return inboxStore.listReports({ stream_id: assignment.stream_id,
+        owner_agent_id: assignment.owner_agent_id, include_resolved: true }).some((report) =>
+        report.stream_id === assignment.stream_id && report.mission_id === assignment.mission_id
+        && report.from_agent_id === assignment.agent_id && report.owner_agent_id === assignment.owner_agent_id
+        && isFinalKind(report.kind)
+        && Number(report.accepted_at ?? report.ts ?? 0) >= assignmentStartedAt(assignment));
+    } catch (error) {
+      log.warn?.(`[helper-stuck-detector] completion lookup failed: ${error?.message ?? error}`);
+      return false;
+    }
+  }
+
   async function inspectAgent(agent) {
     const agentId = asNonEmptyString(agent?.id);
     if (!agentId) {
@@ -140,9 +194,11 @@ export function createHelperStuckDetector(options = {}) {
     }
     const paneId = asNonEmptyString(agent?.pane_id);
     if (!paneId) {
+      dedupeMap.delete(agentId);
       return { matched: false };
     }
     if (agent?.status && agent.status !== 'active') {
+      dedupeMap.delete(agentId);
       return { matched: false };
     }
     let snapshot;
@@ -154,27 +210,39 @@ export function createHelperStuckDetector(options = {}) {
     }
     const lines = Array.isArray(snapshot?.lines) ? snapshot.lines : [];
     if (lines.length === 0) {
+      dedupeMap.delete(agentId);
       return { matched: false };
     }
-    for (const pattern of patterns) {
-      const matchedLine = firstMatchingLine(lines, pattern.regex);
-      if (!matchedLine) {
-        continue;
-      }
-      const dedupeKey = `${agentId}::${pattern.id}::${matchedLine.trim()}`;
-      const now = clock();
-      const prev = dedupeMap.get(dedupeKey);
-      if (typeof prev === 'number' && now - prev < dedupeWindowMs) {
+    // Resolve after the asynchronous snapshot, since the helper can submit its
+    // final report (or receive a new mission) while that capture is in flight.
+    const assignment = pickLatestAssignment(assignmentStore, agentId);
+    if (assignmentCompleted(assignment)) {
+      dedupeMap.delete(agentId);
+      return { matched: false, completed: true };
+    }
+    const runningIndex = latestRunningLine(lines);
+    const candidates = patterns.map((pattern) => ({ pattern,
+      index: lines.findLastIndex((line, i) => i > runningIndex && matches(pattern.regex, line))
+    })).filter(({ index }) => index !== -1);
+    // A generic confirm footer belongs to the more specific modal above it.
+    // Otherwise use the latest modal, not an older prompt in scrollback.
+    candidates.sort((a, b) => Number(a.pattern.id === 'generic_press_enter')
+      - Number(b.pattern.id === 'generic_press_enter') || b.index - a.index);
+    for (const { pattern, index } of candidates) {
+      const matchedLine = lines[index];
+      const assignmentKey = [assignment?.stream_id, assignment?.mission_id, assignment?.assignment_revision,
+        assignment?.last_delivery_id, assignment?.last_sent_at, assignment?.created_at].join(':');
+      const dedupeKey = `${agentId}::${paneId}::${assignmentKey}::${pattern.id}::${modalFingerprint(lines, index)}`;
+      if (dedupeMap.get(agentId) === dedupeKey) {
         return { matched: true, suppressed: true, dedupeKey };
       }
-      dedupeMap.set(dedupeKey, now);
       const detailTail = lines.slice(-detailTailLines).join('\n');
+      pattern.regex.lastIndex = 0;
       const matchResult = pattern.regex.exec(matchedLine);
       const summary = typeof pattern.summary === 'function'
         ? pattern.summary(matchResult ?? [matchedLine])
         : `helper paused (${pattern.id})`;
       const detail = `${matchedLine}\n---\n${detailTail}`;
-      const assignment = pickLatestAssignment(assignmentStore, agentId);
       const streamId = asNonEmptyString(assignment?.stream_id) ?? resolveStreamForAgent(agent);
       const ownerAgentId = asNonEmptyString(assignment?.owner_agent_id) ?? fallbackOwnerAgentId;
       const missionId = asNonEmptyString(assignment?.mission_id) ?? fallbackMissionId;
@@ -195,6 +263,12 @@ export function createHelperStuckDetector(options = {}) {
           blocking: false,
           source: 'stuck_detector'
         });
+        if (report?.ok === false || (report?.transport_state && report.transport_state !== 'accepted')) {
+          return { matched: true, posted: false, dedupeKey, report };
+        }
+        // A successful notice covers this continuous modal occurrence. There
+        // is no expiry: changing clock/footer text cannot create a new event.
+        dedupeMap.set(agentId, dedupeKey);
         return {
           matched: true,
           posted: true,
@@ -208,6 +282,7 @@ export function createHelperStuckDetector(options = {}) {
         return { matched: true, posted: false, dedupeKey, error: error?.message ?? String(error) };
       }
     }
+    dedupeMap.delete(agentId);
     return { matched: false };
   }
 
@@ -232,6 +307,10 @@ export function createHelperStuckDetector(options = {}) {
         if (outcome?.posted) {
           posted += 1;
         }
+      }
+      const presentIds = new Set(agents.map((agent) => agent.id));
+      for (const agentId of dedupeMap.keys()) {
+        if (!presentIds.has(agentId)) dedupeMap.delete(agentId);
       }
     } finally {
       ticking = false;

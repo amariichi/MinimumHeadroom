@@ -402,6 +402,67 @@ test('touch hold selects a complete wide glyph and a second touch cancels', () =
   gesture.dispose();
 });
 
+test('selection edge drag uses the supplied scroll authority in both directions', () => {
+  const timers = createFakeTimers();
+  const terminal = new FakeTerminal({ cols: 20, rows: 5 });
+  terminal.buffer.active.viewportY = 10;
+  const amounts = [];
+  const gesture = createTerminalCopyGesture({
+    surface: new FakeElement(),
+    host: new FakeElement(),
+    terminal,
+    useTouchEvents: true,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    scrollByLines(amount) {
+      amounts.push(amount);
+      terminal.scrollLines(amount);
+    },
+    writeClipboard: async () => {}
+  });
+  const first = touchPoint({ clientY: 50 });
+
+  gesture.handleTouchStart(touchListEvent({ touches: [first] }));
+  timers.runNext();
+  gesture.handleTouchMove(touchListEvent({ touches: [touchPoint({ clientY: 0 })] }));
+  gesture.handleTouchMove(touchListEvent({ touches: [touchPoint({ clientY: 100 })] }));
+
+  assert.deepEqual(amounts, [-1, 1]);
+  assert.equal(terminal.buffer.active.viewportY, 10);
+  gesture.dispose();
+});
+
+test('mobile selection line scroll keeps native proxy and terminal history moving together', () => {
+  const root = new FakeElement({ top: 0, bottom: 100, left: 0, width: 200, height: 100 });
+  const host = new FakeElement({ top: 0, bottom: 100, left: 0, width: 200, height: 100 });
+  const spacer = new FakeElement();
+  root.scrollHeight = 500;
+  root.scrollTop = 100;
+  const view = createOperatorTerminalView({
+    root,
+    host,
+    scrollSpacer: spacer,
+    TerminalClass: FakeTerminal,
+    useNativeScrollProxy: true,
+    useTouchEvents: true,
+    ResizeObserverClass: null,
+    requestFrame: () => 1,
+    cancelFrame() {}
+  });
+  view.terminal.resize(20, 5);
+  view.terminal.buffer.active.baseY = 20;
+  view.terminal.buffer.active.viewportY = 5;
+
+  view.scrollLines(-1);
+  assert.equal(root.scrollTop, 80);
+  assert.equal(view.terminal.buffer.active.viewportY, 4);
+
+  view.scrollLines(1);
+  assert.equal(root.scrollTop, 100);
+  assert.equal(view.terminal.buffer.active.viewportY, 5);
+  view.dispose();
+});
+
 test('contextual Copy tries the Clipboard API then falls back to hidden selection copy', async () => {
   const timers = createFakeTimers();
   const terminal = new FakeTerminal({ cols: 20, rows: 5 });
