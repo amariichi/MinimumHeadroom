@@ -131,6 +131,9 @@ export function createTerminalCopyGesture(options = {}) {
   const setTimer = options.setTimer ?? setTimeout;
   const clearTimer = options.clearTimer ?? clearTimeout;
   const writeClipboard = options.writeClipboard ?? createClipboardWriter(options);
+  const scrollByLines = typeof options.scrollByLines === 'function'
+    ? options.scrollByLines
+    : (amount) => terminal.scrollLines(amount);
   const useTouchEvents = options.useTouchEvents ?? (
     typeof globalThis !== 'undefined' && typeof globalThis.TouchEvent === 'function'
   );
@@ -372,9 +375,9 @@ export function createTerminalCopyGesture(options = {}) {
     event.preventDefault?.();
     const rect = host?.getBoundingClientRect?.();
     if (rect && clientY < rect.top + 12) {
-      terminal.scrollLines(-1);
+      scrollByLines(-1);
     } else if (rect && clientY > rect.bottom - 12) {
-      terminal.scrollLines(1);
+      scrollByLines(1);
     }
     const cell = cellFromClientPoint(clientX, clientY);
     if (
@@ -625,7 +628,8 @@ export function createOperatorTerminalView(options = {}) {
     accessibleCopyButton: options.accessibleCopyButton,
     clipboard: options.clipboard,
     documentRef: options.documentRef,
-    useTouchEvents: options.useTouchEvents
+    useTouchEvents: options.useTouchEvents,
+    scrollByLines: scrollSelectionByLines
   });
   let sessionId = asNonEmptyString(options.sessionId) ?? DEFAULT_SESSION_ID;
   let pane = null;
@@ -826,6 +830,20 @@ export function createOperatorTerminalView(options = {}) {
     terminal.scrollToLine(viewportY);
     syncingNativeScroll = false;
     host.style.transform = remainder > 0.01 ? `translateY(${-remainder}px)` : '';
+  }
+
+  function scrollSelectionByLines(amount) {
+    const lines = Math.trunc(Number(amount) || 0);
+    if (lines === 0) {
+      return;
+    }
+    if (!useNativeScrollProxy) {
+      terminal.scrollLines(lines);
+      return;
+    }
+    root.scrollTop += lines * measureNativeScrollCellHeight();
+    syncTerminalFromNativeScroll();
+    nativeAutoFollow = isNativeScrollNearBottom();
   }
 
   function applyNativeTailPosition() {
@@ -1106,6 +1124,10 @@ export function createOperatorTerminalView(options = {}) {
           options.copyRetryButton.hidden = true;
         }
       }
+    },
+    scrollLines(amount) {
+      scrollSelectionByLines(amount);
+      return true;
     },
     scrollPages(direction) {
       if (useNativeScrollProxy) {

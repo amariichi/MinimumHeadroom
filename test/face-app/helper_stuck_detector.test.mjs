@@ -43,6 +43,9 @@ function createFakeInbox() {
   const reports = [];
   return {
     reports,
+    listReports() {
+      return reports;
+    },
     submitReport(payload) {
       const report = { ...payload, report_id: `r-${reports.length + 1}`, accepted_at: 1 };
       reports.push(report);
@@ -114,7 +117,7 @@ test('detector dedupes when the same line persists across ticks', async () => {
   assert.equal(inbox.reports.length, 1);
 });
 
-test('detector re-fires when matched line changes', async () => {
+test('detector re-fires when the requested action or modal heading changes', async () => {
   const agents = [{ id: 'claude-1', pane_id: '%7', stream_id: 'repo:/test', status: 'active' }];
   const runtime = createFakeRuntime(agents, {
     'claude-1': ['Do you want to proceed?', '  Bash: ls']
@@ -128,12 +131,12 @@ test('detector re-fires when matched line changes', async () => {
   runtime._setSnapshot('claude-1', ['Do you want to proceed?', '  Bash: rm -rf']);
   await detector.tick();
 
-  assert.equal(inbox.reports.length, 1, 'same matched line text on both ticks dedupes');
+  assert.equal(inbox.reports.length, 2, 'a different requested command is a new blocking choice');
 
   runtime._setSnapshot('claude-1', ['Different text: Do you want to proceed? 2', '  diff']);
   await detector.tick();
 
-  assert.equal(inbox.reports.length, 2, 'different matched line emits a new report');
+  assert.equal(inbox.reports.length, 3, 'different matched line emits a new report');
 });
 
 test('detector stays silent when no pattern matches', async () => {
@@ -328,4 +331,201 @@ test('claude_approval pattern also matches the Antigravity permission modal', as
   assert.equal(result.posted, 1);
   assert.equal(inbox.reports.length, 1);
   assert.equal(inbox.reports[0].from_agent_id, 'agy-1');
+});
+
+function notificationScenario({ lines = ['Do you want to proceed?', '  1. Yes'], assignments = [] } = {}) {
+  const agents = [{ id: 'helper-2', pane_id: '%7', stream_id: 'repo:/test', status: 'active' }];
+  const runtime = createFakeRuntime(agents, { 'helper-2': lines });
+  const inbox = createFakeInbox();
+  const byAgent = { 'helper-2': assignments };
+  const detector = createHelperStuckDetector({ runtime, inboxStore: inbox,
+    assignmentStore: createFakeAssignmentStore(byAgent), log: quietLog,
+    dedupeWindowMs: 0 }); // Time-window expiry must never repeat a continuous modal.
+  return { runtime, inbox, detector, byAgent, agents };
+}
+
+const currentMission = { stream_id: 'repo:/test', mission_id: 'current', owner_agent_id: '__operator__',
+  agent_id: 'helper-2', last_sent_at: 100, created_at: 50, assignment_revision: 1 };
+
+function finalReport(overrides = {}) {
+  return { stream_id: 'repo:/test', mission_id: 'current', owner_agent_id: '__operator__',
+    from_agent_id: 'helper-2', kind: 'done', accepted_at: 200, lifecycle_state: 'resolved', ...overrides };
+}
+
+test('an unchanged modal reports once despite changing clock, duration and context footer', async () => {
+  const scenario = notificationScenario();
+  for (let i = 0; i < 100; i += 1) {
+    scenario.runtime._setSnapshot('helper-2', [
+      `You've hit your usage limit. Try again at 12:${String(i % 60).padStart(2, '0')} PM`,
+      'Upgrade to continue.',
+      `Retry in ${100 - i}s`,
+      `${100 - i}% context left`,
+      `gpt-5.5 high · /test · ${i} tokens`,
+      `Time: 13:15:${String(i % 60).padStart(2, '0')}`
+    ]);
+    await scenario.detector.tick();
+  }
+  assert.equal(scenario.inbox.reports.length, 1);
+  assert.equal(scenario.inbox.reports[0].summary, 'helper blocked by usage limit');
+});
+
+test('a modal that clears and immediately reappears emits a new event', async () => {
+  const scenario = notificationScenario();
+  await scenario.detector.tick();
+  scenario.runtime._setSnapshot('helper-2', ['• Working (1s • esc to interrupt)']);
+  await scenario.detector.tick();
+  scenario.runtime._setSnapshot('helper-2', ['Do you want to proceed?', '  1. Yes']);
+  await scenario.detector.tick();
+  assert.equal(scenario.inbox.reports.length, 2);
+});
+
+test('old quota and approval text in scrollback is silent while a later Working row is active', async () => {
+  const scenario = notificationScenario({ lines: [
+    "You've hit your usage limit. Try later.",
+    'Do you want to proceed?',
+    '  1. Yes',
+    '› Continue the task',
+    '• Working (9s • esc to interrupt)',
+    '› Explain this codebase',
+    'gpt-5.5 high · /test'
+  ] });
+  assert.equal((await scenario.detector.tick()).posted, 0);
+  assert.equal(scenario.inbox.reports.length, 0);
+});
+
+test('a real active approval or quota after Working still emits its notice', async () => {
+  for (const lines of [
+    ['• Working (9s • esc to interrupt)', 'Would you like to run the following command?', '$ pwd', '› 1. Yes'],
+    ['• Working (9s • esc to interrupt)', "You've hit your usage limit. Upgrade..."]
+  ]) {
+    const scenario = notificationScenario({ lines });
+    assert.equal((await scenario.detector.tick()).posted, 1);
+  }
+});
+
+test('stale quota in scrollback does not shadow a new real permission modal', async () => {
+  const scenario = notificationScenario({ lines: [
+    "You've hit your usage limit. Upgrade...", '• Working (9s • esc to interrupt)',
+    'Allow the minimum_headroom MCP server to run tool "face_ping"?', '› 1. Allow'
+  ] });
+  await scenario.detector.tick();
+  assert.equal(scenario.inbox.reports.length, 1);
+  assert.equal(scenario.inbox.reports[0].summary, 'helper paused on MCP tool approval prompt');
+});
+
+test('completed current assignments do not generate modal reports', async () => {
+  for (const kind of ['done', 'review_findings']) {
+    const scenario = notificationScenario({ assignments: [
+      { ...currentMission, last_report_kind: kind, last_report_at: 200 }
+    ] });
+    assert.equal((await scenario.detector.tick()).posted, 0);
+    assert.equal(scenario.inbox.reports.length, 0);
+  }
+});
+
+test('a resolved final report suppresses notices even after a blocked report replaced assignment metadata', async () => {
+  const scenario = notificationScenario({ assignments: [
+    { ...currentMission, last_report_kind: 'blocked', last_report_at: 300 }
+  ] });
+  scenario.inbox.reports.push(finalReport());
+  assert.equal((await scenario.detector.tick()).posted, 0);
+  assert.equal(scenario.inbox.reports.length, 1);
+});
+
+test('completion that arrives during asynchronous pane capture suppresses the pending notice', async () => {
+  const scenario = notificationScenario({ assignments: [currentMission] });
+  const snapshot = scenario.runtime.paneSnapshot.bind(scenario.runtime);
+  scenario.runtime.paneSnapshot = async (agentId) => {
+    const result = await snapshot(agentId);
+    scenario.inbox.reports.push(finalReport());
+    return result;
+  };
+  assert.equal((await scenario.detector.tick()).posted, 0);
+  assert.equal(scenario.inbox.reports.length, 1);
+});
+
+test('other missions, helpers and streams cannot suppress a current active permission', async () => {
+  const scenario = notificationScenario({ assignments: [currentMission] });
+  scenario.inbox.reports.push(finalReport({ mission_id: 'previous' }),
+    finalReport({ from_agent_id: 'helper-1' }), finalReport({ stream_id: 'repo:/other' }));
+  assert.equal((await scenario.detector.tick()).posted, 1);
+  assert.equal(scenario.inbox.reports.length, 4);
+});
+
+test('a new delivery of the same mission is not suppressed by its previous final report', async () => {
+  const scenario = notificationScenario({ assignments: [
+    { ...currentMission, last_sent_at: 400, last_report_kind: 'done', last_report_at: 200 }
+  ] });
+  scenario.inbox.reports.push(finalReport());
+  assert.equal((await scenario.detector.tick()).posted, 1);
+  assert.equal(scenario.inbox.reports.at(-1).kind, 'blocked');
+});
+
+test('a new unsent assignment wins over an older completed mission and gets its own notice', async () => {
+  const scenario = notificationScenario({ assignments: [
+    { ...currentMission, last_report_kind: 'done', last_report_at: 200, updated_at: 200 },
+    { ...currentMission, mission_id: 'next', created_at: 300, updated_at: 300, last_sent_at: 0 }
+  ] });
+  assert.equal((await scenario.detector.tick()).posted, 1);
+  assert.equal(scenario.inbox.reports[0].mission_id, 'next');
+});
+
+test('a new assignment re-arms the same modal even if no clear pane was observed', async () => {
+  const scenario = notificationScenario({ assignments: [currentMission] });
+  await scenario.detector.tick();
+  scenario.byAgent['helper-2'] = [{ ...currentMission, mission_id: 'next', last_sent_at: 300 }];
+  await scenario.detector.tick();
+  assert.deepEqual(scenario.inbox.reports.map((report) => report.mission_id), ['current', 'next']);
+});
+
+test('a failed report submission is retried instead of marking the modal as notified', async () => {
+  const scenario = notificationScenario();
+  const submit = scenario.inbox.submitReport.bind(scenario.inbox);
+  let attempts = 0;
+  scenario.inbox.submitReport = (payload) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('temporary store failure');
+    return submit(payload);
+  };
+  assert.equal((await scenario.detector.tick()).posted, 0);
+  assert.equal((await scenario.detector.tick()).posted, 1);
+  assert.equal((await scenario.detector.tick()).posted, 0);
+  assert.equal(attempts, 2);
+});
+
+test('posting a notice cannot re-arm itself by updating an unsent assignment timestamp', async () => {
+  const assignment = { ...currentMission, last_sent_at: 0, created_at: 100, updated_at: 100 };
+  const scenario = notificationScenario({ assignments: [assignment] });
+  const submit = scenario.inbox.submitReport.bind(scenario.inbox);
+  scenario.inbox.submitReport = (payload) => {
+    assignment.updated_at += 100;
+    assignment.last_report_at = assignment.updated_at;
+    assignment.last_report_kind = 'blocked';
+    return submit(payload);
+  };
+  await scenario.detector.tick();
+  await scenario.detector.tick();
+  await scenario.detector.tick();
+  assert.equal(scenario.inbox.reports.length, 1);
+});
+
+test('a changed modal uses the latest specific prompt instead of old approval scrollback', async () => {
+  const scenario = notificationScenario();
+  await scenario.detector.tick();
+  scenario.runtime._setSnapshot('helper-2', [
+    'Do you want to proceed?', '  1. Yes',
+    "You've hit your usage limit. Upgrade...", 'Press enter to confirm'
+  ]);
+  await scenario.detector.tick();
+  assert.deepEqual(scenario.inbox.reports.map((report) => report.summary), [
+    'helper paused on approval prompt', 'helper blocked by usage limit'
+  ]);
+});
+
+test('changing a duration in a requested command is not mistaken for a ticking footer', async () => {
+  const scenario = notificationScenario({ lines: ['Do you want to proceed?', '$ timeout 10s command'] });
+  await scenario.detector.tick();
+  scenario.runtime._setSnapshot('helper-2', ['Do you want to proceed?', '$ timeout 20s command']);
+  await scenario.detector.tick();
+  assert.equal(scenario.inbox.reports.length, 2);
 });
