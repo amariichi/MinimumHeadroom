@@ -742,7 +742,7 @@ export function createOperatorTerminalTransport(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const log = toLogger(options.log ?? console);
   const scrollback = clampInteger(options.scrollback, 5000, 100, 100_000);
-  const batchDelayMs = clampInteger(options.batchDelayMs, 500, 1, 1000);
+  const batchDelayMs = clampInteger(options.batchDelayMs, 200, 1, 1000);
   const batchMaxBytes = clampInteger(options.batchMaxBytes, 16 * 1024, 256, 1024 * 1024);
   const restartDelayMs = clampInteger(options.restartDelayMs, 750, 100, 30_000);
   const createClient = typeof options.createClient === 'function'

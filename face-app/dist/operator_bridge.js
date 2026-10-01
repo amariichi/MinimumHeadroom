@@ -1070,7 +1070,7 @@ export function loadBridgeOptionsFromEnv(env = process.env) {
       ? 'snapshot'
       : 'control',
     terminalScrollback: clampInteger(env.MH_BRIDGE_TERMINAL_SCROLLBACK, 5000, 100, 100_000),
-    terminalBatchDelayMs: clampInteger(env.MH_BRIDGE_TERMINAL_BATCH_DELAY_MS, 500, 1, 1000),
+    terminalBatchDelayMs: clampInteger(env.MH_BRIDGE_TERMINAL_BATCH_DELAY_MS, 200, 1, 1000),
     terminalBatchMaxBytes: clampInteger(env.MH_BRIDGE_TERMINAL_BATCH_MAX_BYTES, 16 * 1024, 256, 1024 * 1024),
     terminalRestartDelayMs: clampInteger(env.MH_BRIDGE_TERMINAL_RESTART_DELAY_MS, 750, 100, 30_000),
     mirrorLines: clampInteger(env.MH_BRIDGE_MIRROR_LINES, 200, 10, 2000),

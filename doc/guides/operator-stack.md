@@ -128,7 +128,7 @@ Important bridge variables:
 - `MH_BRIDGE_RESTART_PRE_KEYS`: keys sent before the restart command
 - `MH_BRIDGE_TERMINAL_TRANSPORT`: `control` (default) or `snapshot` (temporary rollback)
 - `MH_BRIDGE_TERMINAL_SCROLLBACK`: xterm checkpoint and browser scrollback line limit (default `5000`)
-- `MH_BRIDGE_TERMINAL_BATCH_DELAY_MS`: maximum live-output batching delay (default `500` ms, up to two updates per second)
+- `MH_BRIDGE_TERMINAL_BATCH_DELAY_MS`: maximum live-output batching delay (default `200` ms, normally about five updates per second during continuous output; full batches are sent sooner)
 - `MH_BRIDGE_TERMINAL_BATCH_MAX_BYTES`: maximum incremental batch size (default `16384`)
 - `MH_BRIDGE_MIRROR_LINES`: rollback snapshot tail size; used only in `snapshot` mode
 - `MH_BRIDGE_MIRROR_INTERVAL_MS`: rollback snapshot polling interval; used only in `snapshot` mode
@@ -556,7 +556,7 @@ env MH_FACE_AGENT_ID=helper-1 MH_FACE_AGENT_LABEL=helper-1 agent-cli
 - `MH_BRIDGE_RESTART_PRE_KEYS`: 再開コマンド前に送るキー
 - `MH_BRIDGE_TERMINAL_TRANSPORT`: `control`（既定）または一時ロールバック用 `snapshot`
 - `MH_BRIDGE_TERMINAL_SCROLLBACK`: xterm checkpoint とブラウザのスクロールバック行数（既定 `5000`）
-- `MH_BRIDGE_TERMINAL_BATCH_DELAY_MS`: 増分出力をまとめる最大時間（既定 `500` ms、最大毎秒 2 回更新）
+- `MH_BRIDGE_TERMINAL_BATCH_DELAY_MS`: 増分出力をまとめる最大時間（既定 `200` ms、連続出力時は通常毎秒約 5 回更新。最大サイズに達したバッチはそれより早く送信）
 - `MH_BRIDGE_TERMINAL_BATCH_MAX_BYTES`: 増分バッチの最大サイズ（既定 `16384` bytes）
 - `MH_BRIDGE_MIRROR_LINES`: `snapshot` ロールバック時だけ使う tail 行数
 - `MH_BRIDGE_MIRROR_INTERVAL_MS`: `snapshot` ロールバック時だけ使うポーリング間隔
