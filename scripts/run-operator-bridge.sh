@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 : "${MH_BRIDGE_WS_URL:=ws://127.0.0.1:8765/ws}"
 : "${MH_BRIDGE_SESSION_ID:=default}"
-: "${MH_BRIDGE_RESTART_COMMAND:=codex resume --last --no-alt-screen}"
+: "${MH_BRIDGE_RESTART_COMMAND:=codex resume --last}"
 : "${MH_BRIDGE_RESTART_PRE_KEYS:=C-u}"
 : "${MH_BRIDGE_TERMINAL_TRANSPORT:=control}"
 : "${MH_BRIDGE_TERMINAL_SCROLLBACK:=5000}"

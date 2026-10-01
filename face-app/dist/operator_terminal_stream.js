@@ -184,6 +184,19 @@ export function cursorRestoreSequence(cursor) {
   return `\u001b[${Math.max(0, cursor.y) + 1};${Math.max(0, cursor.x) + 1}H`;
 }
 
+export function parsePaneModes(value) {
+  const flags = String(value ?? '').trim().split(',');
+  if (flags.length !== 5 || flags.some((flag) => !/^[01]$/u.test(flag))) return null;
+  const [alternate, standard, button, any, sgr] = flags.map((flag) => flag === '1');
+  return { alternate, mouse: any ? 'any' : button ? 'drag' : standard ? 'vt200' : 'none', sgr };
+}
+
+export function paneModeSequence(modes) {
+  if (!modes) return '';
+  const mouse = { any: 1003, drag: 1002, vt200: 1000 }[modes.mouse];
+  return `${modes.alternate ? '\u001b[?1049h' : ''}${mouse ? `\u001b[?${mouse}h` : ''}`;
+}
+
 function parseBoundary(line, prefix) {
   const text = line.toString('utf8');
   if (!text.startsWith(prefix)) {
@@ -621,6 +634,7 @@ export function createTmuxControlModeClient(options = {}) {
       const lineCount = clampInteger(scrollback, 5000, 1, 100_000);
       let capture = Buffer.alloc(0);
       let cursor = null;
+      let modes = null;
       let delivered = false;
 
       function deliver() {
@@ -628,7 +642,7 @@ export function createTmuxControlModeClient(options = {}) {
           return;
         }
         delivered = true;
-        onComplete?.(capture, cursor);
+        onComplete?.(capture, cursor, modes);
       }
 
       const [capturePromise, cursorPromise] = requestCommandBatch([
@@ -642,9 +656,11 @@ export function createTmuxControlModeClient(options = {}) {
           // The format string must be quoted: unquoted, tmux treats the leading
           // '#' as a comment and silently answers with its default status line
           // instead of the cursor position.
-          command: `display-message -p -t ${paneInfo.pane} "#{cursor_x},#{cursor_y}"`,
+          command: `display-message -p -t ${paneInfo.pane} "#{cursor_x},#{cursor_y};#{alternate_on},#{mouse_standard_flag},#{mouse_button_flag},#{mouse_any_flag},#{mouse_sgr_flag}"`,
           onComplete(data) {
-            cursor = parseCursorReply(data);
+            const [position, flags] = data.toString('utf8').split(';');
+            cursor = parseCursorReply(position);
+            modes = parsePaneModes(flags);
             // Runs synchronously while the control stream is still inside this
             // response, so the caller seeds its copy before any later %output.
             deliver();
@@ -669,7 +685,27 @@ export function createTmuxControlModeClient(options = {}) {
         log.warn(`[operator-terminal] cursor query failed: ${cursorResult.reason.message}`);
         deliver();
       }
-      return { capture, cursor };
+      return { capture, cursor, modes };
+    },
+    async scroll(lines, x, y) {
+      if (!Number.isSafeInteger(lines) || lines === 0 || Math.abs(lines) > 100) return false;
+      await start();
+      const col = clampInteger(x, Math.ceil(paneInfo.cols / 2), 1, paneInfo.cols);
+      const row = clampInteger(y, Math.ceil(paneInfo.rows / 2), 1, paneInfo.rows);
+      const button = lines < 0 ? 64 : 65;
+      const count = Math.abs(lines);
+      const tracking = '#{||:#{mouse_any_flag},#{||:#{mouse_button_flag},#{mouse_standard_flag}}}';
+      const reports = [
+        [`#{&&:${tracking},#{mouse_sgr_flag}}`, `\u001b[<${button};${col};${row}M`],
+        [`#{&&:${tracking},#{!:#{mouse_sgr_flag}}}`, `\u001b[M${String.fromCharCode(button + 32, Math.min(223, col) + 32, Math.min(223, row) + 32)}`]
+      ];
+      // Check the live mode inside tmux when executing, not before queuing:
+      // a program exiting to a shell must never receive literal escape text.
+      const commands = reports.map(([guard, report]) => ({
+        command: `if-shell -F -t ${paneInfo.pane} '${guard}' 'send-keys -t ${paneInfo.pane} -H ${Buffer.from(report.repeat(count), 'latin1').toString('hex').match(/../gu).join(' ')}'`
+      }));
+      await Promise.all(requestCommandBatch(commands));
+      return true;
     },
     async stop() {
       stopping = true;
@@ -869,16 +905,18 @@ export function createOperatorTerminalTransport(options = {}) {
       const capturePaneWithCursor = typeof nextClient.capturePaneWithCursor === 'function'
         ? nextClient.capturePaneWithCursor.bind(nextClient)
         : (limit, onComplete) => nextClient.capturePane(limit, (capture) => onComplete(capture, null));
-      await capturePaneWithCursor(scrollback, (capture, cursor) => {
+      await capturePaneWithCursor(scrollback, (capture, cursor, modes) => {
         nextState = createState({ cols, rows, scrollback });
         state = nextState;
         // The capture replays as text, which parks the cursor after the last
         // captured line. Restoring tmux's real cursor keeps every later byte on
         // the row it belongs to instead of drifting down the screen.
         const restore = cursorRestoreSequence(cursor);
-        const seed = restore
-          ? Buffer.concat([Buffer.from(capture), Buffer.from(restore, 'utf8')])
-          : capture;
+        const seed = Buffer.concat([
+          Buffer.from(paneModeSequence(modes), 'utf8'),
+          Buffer.from(capture),
+          Buffer.from(restore ?? '', 'utf8')
+        ]);
         void nextState.resetFromCapture(seed).catch((error) => {
           log.warn(`[operator-terminal] capture seed failed: ${error.message}`);
         });
@@ -1042,6 +1080,14 @@ export function createOperatorTerminalTransport(options = {}) {
         return false;
       }
       return queueReset(subscriberId);
+    },
+    handleScroll(payload = {}) {
+      return enqueueLifecycle(async () => {
+        if (closed || !hasReset || !subscribers.has(asNonEmptyString(payload.subscriber_id))
+          || payload.pane !== pane || payload.generation !== generation
+          || !Number.isSafeInteger(payload.lines) || payload.lines === 0 || Math.abs(payload.lines) > 100) return false;
+        return client?.scroll?.(payload.lines, payload.x, payload.y) ?? false;
+      });
     },
     setPane() {
       return enqueueLifecycle(async () => {

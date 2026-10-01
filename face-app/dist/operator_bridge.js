@@ -843,6 +843,11 @@ export function createOperatorBridgeRuntime(options = {}) {
         return;
       }
 
+      if (terminalTransportMode === 'control' && payload.type === 'operator_terminal_scroll') {
+        await terminalTransport.handleScroll(payload);
+        return;
+      }
+
       if (payload.type === 'operator_response') {
         await handleOperatorResponse(payload);
       }
@@ -1059,7 +1064,7 @@ export function loadBridgeOptionsFromEnv(env = process.env) {
     sessionId: normalizeSessionId(env.MH_BRIDGE_SESSION_ID, 'default'),
     tmuxPane,
     defaultRecoveryTmuxPane: asNonEmptyString(env.MH_BRIDGE_RECOVERY_TMUX_PANE) ?? tmuxPane,
-    restartCommand: asNonEmptyString(env.MH_BRIDGE_RESTART_COMMAND) ?? 'codex resume --last --no-alt-screen',
+    restartCommand: asNonEmptyString(env.MH_BRIDGE_RESTART_COMMAND) ?? 'codex resume --last',
     restartPreKeys: parseRestartPreKeys(env.MH_BRIDGE_RESTART_PRE_KEYS ?? 'C-u'),
     terminalTransport: asNonEmptyString(env.MH_BRIDGE_TERMINAL_TRANSPORT)?.toLowerCase() === 'snapshot'
       ? 'snapshot'

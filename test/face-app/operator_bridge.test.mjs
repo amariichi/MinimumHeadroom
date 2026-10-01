@@ -67,9 +67,9 @@ test('Control Mode terminal defaults to two timer-driven updates per second', ()
   assert.equal(options.terminalBatchDelayMs, 500);
 });
 
-test('default Codex resume preserves terminal scrollback', () => {
+test('default Codex resume keeps the ordinary CLI display mode', () => {
   const options = loadBridgeOptionsFromEnv({ MH_BRIDGE_TMUX_PANE: '%1' });
-  assert.equal(options.restartCommand, 'codex resume --last --no-alt-screen');
+  assert.equal(options.restartCommand, 'codex resume --last');
 });
 
 test('explicit restart commands remain unchanged', () => {

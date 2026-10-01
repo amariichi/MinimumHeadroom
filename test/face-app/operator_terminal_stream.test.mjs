@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { promisify } from 'node:util';
+import headless from '@xterm/headless';
 import test from 'node:test';
 import {
   createHeadlessTerminalState,
@@ -17,6 +18,95 @@ import {
 
 const execFileAsync = promisify(execFile);
 const silentLog = { info() {}, warn() {}, error() {} };
+
+test('ordinary terminal output retains 5000 history rows through a checkpoint', async () => {
+  const state = createHeadlessTerminalState({ cols: 40, rows: 24, scrollback: 5000 });
+  const replay = new headless.Terminal({ cols: 40, rows: 24, scrollback: 5000, allowProposedApi: true });
+  try {
+    await state.write(Buffer.from(Array.from({length: 6024}, (_, i) => `${i % 2 ? 'stderr' : 'stdout'} line ${i + 1}`).join('\r\n')));
+    const checkpoint = await state.serialize();
+    await new Promise(resolve => replay.write(checkpoint, resolve));
+    assert.equal(replay.buffer.active.baseY, 5000);
+    assert.match(replay.buffer.active.getLine(0).translateToString(true), /line 1001$/u);
+    replay.scrollToTop();
+    assert.equal(replay.buffer.active.viewportY, 0);
+    assert.match(replay.buffer.active.getLine(5023).translateToString(true), /line 6024$/u);
+  } finally { await state.dispose(); replay.dispose(); }
+});
+
+test('late subscription captures fullscreen mouse modes and wheel scroll reaches older terminal output', async (t) => {
+  const socket = `mh-wheel-test-${process.pid}-${Date.now()}`;
+  const pane = 'wheel:0.0';
+  let client;
+  t.after(async () => {
+    await client?.stop();
+    try { await execFileAsync('tmux', ['-L', socket, 'kill-server']); } catch {}
+  });
+  await execFileAsync('tmux', ['-L', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'wheel', '-x', '40', '-y', '6', `${process.execPath} ${new URL('../../scripts/test-fixtures/mouse_terminal.mjs', import.meta.url).pathname}`]);
+  await delay(150);
+  client = createTmuxControlModeClient({ pane, tmuxArgs: ['-L', socket], log: silentLog });
+  const before = await client.capturePaneWithCursor();
+  assert.deepEqual(before.modes, { alternate: true, mouse: 'any', sgr: true });
+  assert.match(before.capture.toString(), /Output line 200/u);
+  await client.scroll(-80, 20, 3);
+  await delay(50);
+  const after = await client.capturePane();
+  assert.match(after.toString(), /Fixed terminal header/u);
+  assert.match(after.toString(), /Output line 120/u);
+  await client.scroll(80, 20, 3);
+  await delay(50);
+  assert.match((await client.capturePane()).toString(), /Output line 200/u);
+  assert.equal(await client.scroll(-101, 20, 3), false);
+  await execFileAsync('tmux', ['-L', socket, 'resize-window', '-t', 'wheel:0', '-x', '300', '-y', '24']);
+  const wide = createTmuxControlModeClient({pane,tmuxArgs:['-L',socket],log:silentLog});
+  try {
+    await wide.start();
+    await wide.scroll(-1,280,12);
+    await delay(30);
+    const title = await execFileAsync('tmux',['-L',socket,'display-message','-p','-t',pane,'#{pane_title}']);
+    assert.match(title.stdout,/Mouse column 280 row 12/u);
+    await wide.scroll(1,280,12);
+  } finally { await wide.stop(); }
+  // A source mode change must stop queued wheel reports from reaching the app.
+  await execFileAsync('tmux', ['-L', socket, 'send-keys', '-t', pane, '-l', 'disable-mouse']);
+  await delay(30);
+  assert.equal((await client.capturePaneWithCursor()).modes.mouse, 'none');
+  await client.scroll(-10, 20, 3);
+  await delay(30);
+  assert.match((await client.capturePane()).toString(), /Output line 200/u);
+  // A shell must not receive printable fragments of mouse escape sequences.
+  await execFileAsync('tmux', ['-L', socket, 'new-window', '-t', 'wheel', '-n', 'shell', 'sh']);
+  await delay(100);
+  const shell = createTmuxControlModeClient({ pane: 'wheel:shell.0', tmuxArgs: ['-L', socket], log: silentLog });
+  try {
+    await shell.start();
+    const original = await shell.capturePane();
+    await shell.scroll(-10, 2, 2);
+    await delay(30);
+    assert.deepEqual(await shell.capturePane(), original);
+  } finally { await shell.stop(); }
+});
+
+test('terminal scroll accepts only current subscribed pane and generation', async () => {
+  const calls = [];
+  const transport = createOperatorTerminalTransport({
+    tmuxController: { pane: '%9' }, log: silentLog,
+    createClient: () => ({
+      start: async () => ({ pane: '%9', cols: 40, rows: 6 }),
+      capturePane: async (_limit, complete) => complete(Buffer.from('seed')),
+      scroll: async (...args) => { calls.push(args); return true; }, stop: async () => {}
+    })
+  });
+  try {
+    await transport.handleSubscribe({ subscriber_id: 'viewer' });
+    const valid = { subscriber_id: 'viewer', pane: '%9', generation: transport.getState().generation, lines: -10, x: 20, y: 3 };
+    for (const override of [{subscriber_id:'other'}, {pane:'%10'}, {generation:0}, {lines:101}, {lines:1.5}, {lines:0}]) assert.equal(await transport.handleScroll({...valid,...override}), false);
+    assert.equal(await transport.handleScroll(valid), true);
+    assert.deepEqual(calls, [[-10, 20, 3]]);
+    await transport.handleUnsubscribe({ subscriber_id: 'viewer' });
+    assert.equal(await transport.handleScroll(valid), false);
+  } finally { await transport.shutdown(); }
+});
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

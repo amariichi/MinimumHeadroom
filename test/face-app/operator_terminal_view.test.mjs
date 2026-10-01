@@ -48,6 +48,7 @@ class FakeTerminal {
     this.selectedRanges = [];
     this.cellWidths = new Map();
     this.lines = [];
+    this.modes = { mouseTrackingMode: 'none' };
     this.buffer = {
       active: {
         viewportY: 0,
@@ -78,6 +79,7 @@ class FakeTerminal {
     this.writes.push(Buffer.from(bytes).toString('utf8'));
     if (this.deferWrites) this.pendingWriteCallbacks.push(callback);
     else callback?.();
+    this.onWriteStarted?.();
   }
 
   reset() {
@@ -176,6 +178,122 @@ function touchPoint(overrides = {}) {
 function touchListEvent({ touches = [], changedTouches = [], preventDefault = () => {} } = {}) {
   return { touches, changedTouches, preventDefault };
 }
+
+test('source mouse scrolling forwards one-finger drag and page controls without local history', async () => {
+  const root = new FakeElement();
+  const sent = [];
+  const view = createOperatorTerminalView({root, host: new FakeElement(), scrollSpacer: new FakeElement(),
+    TerminalClass: FakeTerminal, useTouchEvents: true, useNativeScrollProxy: true,
+    ResizeObserverClass: null, sendPayload: payload => {sent.push(payload); return true;}});
+  view.terminal.modes.mouseTrackingMode = 'any';
+  view.setVisible(true); view.socketOpen();
+  await view.handleReset({session_id:'default',pane:'%9',generation:1,seq:0,cols:20,rows:5,data_base64:''});
+  const dispatch = (type, points) => {
+    const event = new Event(type, {cancelable:true});
+    event.touches = points.map(([x,y])=>touchPoint({clientX:x,clientY:y}));
+    root.dispatchEvent(event);
+    return event;
+  };
+  dispatch('touchstart', [[50,20]]);
+  assert.equal(dispatch('touchmove', [[50,25]]).defaultPrevented, false);
+  assert.equal(dispatch('touchmove', [[50,80]]).defaultPrevented, true);
+  assert.deepEqual(sent.filter(x=>x.type==='operator_terminal_scroll').map(x=>[x.lines,x.pane,x.generation]), [[-3,'%9',1]]);
+  assert.equal(root.style.touchAction, 'pan-x pinch-zoom');
+  dispatch('touchend', []);
+  view.scrollPages(-1);
+  assert.equal(sent.at(-1).lines, -4);
+  view.socketClose();
+  assert.equal(root.style.touchAction, '');
+  assert.equal(view.scrollPages(-1), true);
+  assert.equal(sent.filter(x=>x.type==='operator_terminal_scroll').length, 2);
+  view.dispose();
+});
+
+test('pinch and long-press selection do not send source scroll reports', async () => {
+  const root = new FakeElement();
+  const sent = [];
+  const view = createOperatorTerminalView({root,host:new FakeElement(),TerminalClass:FakeTerminal,
+    useTouchEvents:true, ResizeObserverClass:null,sendPayload:payload=>{sent.push(payload);return true;}});
+  view.terminal.modes.mouseTrackingMode = 'any';
+  view.setVisible(true); view.socketOpen();
+  await view.handleReset({session_id:'default',pane:'%9',generation:1,seq:0,cols:20,rows:5,data_base64:''});
+  const dispatch = (type,points) => {
+    const event = new Event(type,{cancelable:true});
+    event.touches = points.map(([x,y],id)=>touchPoint({identifier:id,clientX:x,clientY:y}));
+    root.dispatchEvent(event);
+  };
+  dispatch('touchstart',[[50,20]]);
+  dispatch('touchmove',[[50,40],[100,40]]);
+  dispatch('touchmove',[[50,80]]);
+  assert.equal(sent.filter(x=>x.type==='operator_terminal_scroll').length,0);
+  dispatch('touchstart',[[50,20]]);
+  await new Promise(resolve=>setTimeout(resolve,570));
+  dispatch('touchmove',[[50,80]]);
+  assert.equal(sent.filter(x=>x.type==='operator_terminal_scroll').length,0);
+  view.dispose();
+});
+
+test('compact fullscreen mirror scrolls the visible grid before continuing into older source output', async () => {
+  const root=new FakeElement(); const sent=[];
+  root.scrollHeight=200;
+  const view=createOperatorTerminalView({root,host:new FakeElement({top:0,bottom:200,left:0,width:200,height:200}),
+    scrollSpacer:new FakeElement(),TerminalClass:FakeTerminal,useTouchEvents:true,useNativeScrollProxy:true,
+    ResizeObserverClass:null,sendPayload:payload=>{sent.push(payload);return true;}});
+  view.terminal.modes.mouseTrackingMode='any';
+  view.setVisible(true);view.socketOpen();
+  await view.handleReset({session_id:'default',pane:'%9',generation:1,seq:0,cols:20,rows:10,data_base64:''});
+  root.scrollTop=100;
+  const dispatch=(type,y)=>{const e=new Event(type,{cancelable:true});e.touches=[touchPoint({clientY:y})];root.dispatchEvent(e);};
+  dispatch('touchstart',20);dispatch('touchmove',80);
+  assert.equal(root.scrollTop,40);
+  assert.equal(sent.filter(x=>x.type==='operator_terminal_scroll').length,0);
+  dispatch('touchmove',140);
+  assert.equal(root.scrollTop,0);
+  assert.equal(sent.at(-1).type,'operator_terminal_scroll');
+  assert.equal(sent.at(-1).lines,-1);
+  view.dispose();
+});
+
+test('wheel reports respect requested source mode, units and resynchronization', async () => {
+  const root = new FakeElement(); const sent = [];
+  const view = createOperatorTerminalView({root,host:new FakeElement(),TerminalClass:FakeTerminal,
+    ResizeObserverClass:null,sendPayload:payload=>{sent.push(payload);return true;}});
+  view.setVisible(true); view.socketOpen();
+  await view.handleReset({session_id:'default',pane:'%9',generation:1,seq:0,cols:20,rows:5,data_base64:''});
+  const wheel = () => { const event = new Event('wheel',{cancelable:true}); Object.assign(event,{deltaY:-2,deltaMode:1,clientX:50,clientY:50}); root.dispatchEvent(event); return event; };
+  assert.equal(wheel().defaultPrevented,false);
+  view.terminal.modes.mouseTrackingMode = 'vt200';
+  assert.equal(wheel().defaultPrevented,true);
+  assert.equal(sent.at(-1).lines,-2);
+  view.handleData({session_id:'default',pane:'%9',generation:1,seq:9,data_base64:''});
+  assert.equal(wheel().defaultPrevented,false);
+  assert.equal(sent.filter(x=>x.type==='operator_terminal_scroll').length,1);
+  view.dispose();
+});
+
+test('a pane-switch checkpoint cancels the old drag and waits for the new screen to render', async () => {
+  const root=new FakeElement(),sent=[];
+  const view=createOperatorTerminalView({root,host:new FakeElement(),TerminalClass:FakeTerminal,useTouchEvents:true,
+    ResizeObserverClass:null,sendPayload:payload=>{sent.push(payload);return true;}});
+  view.terminal.modes.mouseTrackingMode='any';view.setVisible(true);view.socketOpen();
+  await view.handleReset({session_id:'default',pane:'%9',generation:1,seq:0,cols:20,rows:5,data_base64:''});
+  const dispatch=(type,y)=>{const e=new Event(type,{cancelable:true});e.touches=[touchPoint({clientY:y})];root.dispatchEvent(e);};
+  dispatch('touchstart',20);dispatch('touchmove',40);
+  assert.equal(sent.filter(x=>x.type==='operator_terminal_scroll').length,1);
+  view.terminal.deferWrites=true;
+  const writeStarted=new Promise(resolve=>{view.terminal.onWriteStarted=resolve;});
+  const reset=view.handleReset({session_id:'default',pane:'%10',generation:2,seq:0,cols:20,rows:5,data_base64:''});
+  dispatch('touchmove',80);
+  assert.equal(view.scrollPages(-1),true);
+  await writeStarted;
+  assert.equal(sent.filter(x=>x.type==='operator_terminal_scroll').length,1);
+  view.terminal.pendingWriteCallbacks.shift()();await reset;
+  dispatch('touchmove',100);
+  assert.equal(sent.filter(x=>x.type==='operator_terminal_scroll').length,1);
+  dispatch('touchstart',20);dispatch('touchmove',40);
+  assert.equal(sent.at(-1).pane,'%10');assert.equal(sent.at(-1).generation,2);
+  view.dispose();
+});
 
 test('browser terminal payload decoder inflates negotiated gzip bytes', async () => {
   const raw = Buffer.from('compressed terminal redraw '.repeat(20));

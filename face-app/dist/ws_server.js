@@ -10,7 +10,8 @@ const TERMINAL_CLIENT_MESSAGE_TYPES = new Set([
   'operator_terminal_subscribe',
   'operator_terminal_unsubscribe',
   'operator_terminal_ack',
-  'operator_terminal_resync'
+  'operator_terminal_resync',
+  'operator_terminal_scroll'
 ]);
 const TERMINAL_STREAM_MESSAGE_TYPES = new Set([
   'operator_terminal_reset',
@@ -868,6 +869,12 @@ export async function startFaceWebSocketServer(options = {}) {
       return true;
     }
     const outgoing = terminalControlPayload(socket, payload, subscription);
+    if (payload.type === 'operator_terminal_scroll') {
+      // A viewer awaiting a checkpoint cannot address its current pane safely.
+      if (socket.__mhTerminalNeedsReset === true) return true;
+      sendToOperatorBridges(outgoing);
+      return true;
+    }
     if (socket.__mhTerminalNeedsReset === true) {
       outgoing.needs_reset = true;
       socket.__mhTerminalNeedsReset = false;

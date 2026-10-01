@@ -686,6 +686,9 @@ export function createOperatorTerminalView(options = {}) {
   let nativeFollowFrame = null;
   let nativeInteractionScrollTop = 0;
   let parsingTerminalOutput = false;
+  let remoteContact = null;
+  let wheelRemainder = 0;
+  let sourceScrollReady = false;
   const useNativeTouchEvents = options.useTouchEvents ?? (
     typeof globalThis !== 'undefined' && typeof globalThis.TouchEvent === 'function'
   );
@@ -811,7 +814,90 @@ export function createOperatorTerminalView(options = {}) {
     }
   }
 
-  function handleNativeWheel() {
+  function sourceAcceptsScroll() {
+    const mode = terminal.modes?.mouseTrackingMode;
+    return sourceScrollReady && subscribed && connected && !resyncPending && pane !== null && generation !== null
+      && (mode === 'vt200' || mode === 'drag' || mode === 'any');
+  }
+
+  function sendSourceScroll(lines, clientX, clientY) {
+    if (!sourceAcceptsScroll() || !Number.isFinite(lines) || lines === 0) return false;
+    const rect = host.getBoundingClientRect();
+    const cellHeight = measureNativeScrollCellHeight();
+    const x = clamp(Math.floor(((clientX ?? rect.left + rect.width / 2) - rect.left) / (rect.width / terminal.cols)) + 1, 1, terminal.cols);
+    const y = clamp(Math.floor(((clientY ?? rect.top + rect.height / 2) - rect.top) / cellHeight) + 1, 1, terminal.rows);
+    return emit('operator_terminal_scroll', { lines: clamp(Math.trunc(lines), -100, 100), x, y });
+  }
+
+  function updateSourceScrollMode() {
+    // Leave horizontal movement and pinch available; vertical movement becomes
+    // the same wheel report the PC terminal sends when the program requests it.
+    root.style.touchAction = sourceAcceptsScroll() ? 'pan-x pinch-zoom' : '';
+  }
+
+  function consumeVisibleGridScroll(pixels) {
+    if (!useNativeScrollProxy) return pixels;
+    const previous = Number(root.scrollTop) || 0;
+    const maximum = Math.max(0, root.scrollHeight - root.clientHeight);
+    root.scrollTop = clamp(previous + pixels, 0, maximum);
+    if (pixels < 0) nativeAutoFollow = false;
+    syncTerminalFromNativeScroll();
+    // A compact mobile frame may show only part of the source screen. Read
+    // that part locally first; at either edge continue into source scrolling.
+    return pixels - (root.scrollTop - previous);
+  }
+
+  function scrollSourceOrGrid(lines, clientX, clientY) {
+    const cellHeight = measureNativeScrollCellHeight();
+    const remaining = consumeVisibleGridScroll(lines * cellHeight);
+    const reports = Math.trunc(remaining / cellHeight);
+    return reports === 0 || sendSourceScroll(reports, clientX, clientY);
+  }
+
+  function startSourceTouch(event) {
+    remoteContact = null;
+    if (!sourceAcceptsScroll() || event.touches?.length !== 1) return;
+    const touch = event.touches[0];
+    remoteContact = { id: touch.identifier, startY: touch.clientY, lastY: touch.clientY, remainder: 0, moving: false };
+  }
+
+  function moveSourceTouch(event) {
+    if (!remoteContact) return;
+    if (event.touches?.length !== 1 || !sourceAcceptsScroll() || copyGesture.phase === 'selecting') {
+      remoteContact = null;
+      return;
+    }
+    const touch = Array.from(event.touches).find((value) => value.identifier === remoteContact.id);
+    if (!touch) return;
+    if (!remoteContact.moving && Math.abs(touch.clientY - remoteContact.startY) < COPY_MOVE_THRESHOLD_PX) return;
+    remoteContact.moving = true;
+    event.preventDefault?.();
+    remoteContact.remainder += consumeVisibleGridScroll(remoteContact.lastY - touch.clientY);
+    remoteContact.lastY = touch.clientY;
+    const cellHeight = measureNativeScrollCellHeight();
+    const lines = Math.trunc(remoteContact.remainder / cellHeight);
+    if (lines !== 0) {
+      sendSourceScroll(lines, touch.clientX, touch.clientY);
+      remoteContact.remainder -= lines * cellHeight;
+    }
+  }
+
+  function endSourceTouch() { remoteContact = null; }
+
+  function handleNativeWheel(event) {
+    if (sourceAcceptsScroll() && !event.ctrlKey && !event.shiftKey) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      const unit = event.deltaMode === 1 ? measureNativeScrollCellHeight()
+        : event.deltaMode === 2 ? terminal.rows * measureNativeScrollCellHeight() : 1;
+      wheelRemainder += consumeVisibleGridScroll((Number(event.deltaY) || 0) * unit);
+      const lines = Math.trunc(wheelRemainder / measureNativeScrollCellHeight());
+      if (lines !== 0) {
+        sendSourceScroll(lines, event.clientX, event.clientY);
+        wheelRemainder -= lines * measureNativeScrollCellHeight();
+      }
+      return;
+    }
     if (!useNativeScrollProxy || disposed) {
       return;
     }
@@ -919,7 +1005,6 @@ export function createOperatorTerminalView(options = {}) {
   if (useNativeScrollProxy) {
     root.classList?.add?.('operator-native-scroll-proxy');
     root.addEventListener?.('scroll', handleNativeScroll, { passive: true });
-    root.addEventListener?.('wheel', handleNativeWheel, { passive: true });
     if (useNativeTouchEvents) {
       root.addEventListener?.('touchstart', beginNativeScrollInteraction, { passive: true });
       root.addEventListener?.('touchend', endNativeScrollInteraction, { passive: true });
@@ -929,6 +1014,14 @@ export function createOperatorTerminalView(options = {}) {
       root.addEventListener?.('pointerup', endNativeScrollInteraction, { passive: true });
       root.addEventListener?.('pointercancel', endNativeScrollInteraction, { passive: true });
     }
+  }
+
+  root.addEventListener?.('wheel', handleNativeWheel, { passive: false, capture: true });
+  if (useNativeTouchEvents) {
+    root.addEventListener?.('touchstart', startSourceTouch, { passive: true });
+    root.addEventListener?.('touchmove', moveSourceTouch, { passive: false });
+    root.addEventListener?.('touchend', endSourceTouch, { passive: true });
+    root.addEventListener?.('touchcancel', endSourceTouch, { passive: true });
   }
 
   if (typeof ResizeObserverClass === 'function') {
@@ -962,6 +1055,9 @@ export function createOperatorTerminalView(options = {}) {
       return;
     }
     subscribed = shouldSubscribe;
+    sourceScrollReady = false;
+    endSourceTouch();
+    updateSourceScrollMode();
     if (subscribed) {
       resyncPending = false;
       emit('operator_terminal_subscribe', {
@@ -989,10 +1085,12 @@ export function createOperatorTerminalView(options = {}) {
         }
         await new Promise((resolve) => {
           terminal.write(bytes, () => {
+            if (reset && !disposed && epoch === writeEpoch) sourceScrollReady = true;
             // Consult the current reader intent, not the state when parsing began.
             const followNativeScroll = useNativeScrollProxy && (resetFollow || nativeAutoFollow);
             syncTerminalRenderedHeight();
             syncNativeScrollSize({ followBottom: followNativeScroll });
+            updateSourceScrollMode();
             if (!disposed && epoch === writeEpoch && acknowledge) {
               emit('operator_terminal_ack', {
                 pane: message.pane,
@@ -1015,6 +1113,8 @@ export function createOperatorTerminalView(options = {}) {
       return false;
     }
     resyncPending = true;
+    endSourceTouch();
+    updateSourceScrollMode();
     emit('operator_terminal_resync');
     return true;
   }
@@ -1038,6 +1138,14 @@ export function createOperatorTerminalView(options = {}) {
       return false;
     }
     const resetFollow = pane !== nextPane;
+    sourceScrollReady = false;
+    endSourceTouch();
+    wheelRemainder = 0;
+    if (resetFollow) {
+      copyGesture.handleTouchCancel({});
+      copyGesture.handlePointerCancel({});
+    }
+    updateSourceScrollMode();
     pane = nextPane;
     generation = nextGeneration;
     expectedSequence = nextSequence;
@@ -1095,8 +1203,11 @@ export function createOperatorTerminalView(options = {}) {
     },
     socketClose() {
       connected = false;
+      sourceScrollReady = false;
       subscribed = false;
       resyncPending = false;
+      endSourceTouch();
+      updateSourceScrollMode();
     },
     setVisible(nextVisible) {
       visible = nextVisible === true;
@@ -1149,10 +1260,12 @@ export function createOperatorTerminalView(options = {}) {
       }
     },
     scrollLines(amount) {
+      if (sourceAcceptsScroll()) return scrollSourceOrGrid(amount);
       scrollSelectionByLines(amount);
       return true;
     },
     scrollPages(direction) {
+      if (sourceAcceptsScroll()) return scrollSourceOrGrid(Math.sign(direction) * Math.max(1, Math.floor(root.clientHeight / measureNativeScrollCellHeight()) - 1));
       if (useNativeScrollProxy) {
         root.scrollTop += Math.sign(direction) * Math.max(1, root.clientHeight);
         syncTerminalFromNativeScroll();
@@ -1215,9 +1328,14 @@ export function createOperatorTerminalView(options = {}) {
       }
       root.style?.removeProperty?.('--operator-terminal-render-height');
       copyGesture.dispose();
+      root.removeEventListener?.('wheel', handleNativeWheel, { capture: true });
+      root.removeEventListener?.('touchstart', startSourceTouch);
+      root.removeEventListener?.('touchmove', moveSourceTouch);
+      root.removeEventListener?.('touchend', endSourceTouch);
+      root.removeEventListener?.('touchcancel', endSourceTouch);
+      root.style.touchAction = '';
       if (useNativeScrollProxy) {
         root.removeEventListener?.('scroll', handleNativeScroll);
-        root.removeEventListener?.('wheel', handleNativeWheel);
         if (useNativeTouchEvents) {
           root.removeEventListener?.('touchstart', beginNativeScrollInteraction);
           root.removeEventListener?.('touchend', endNativeScrollInteraction);
