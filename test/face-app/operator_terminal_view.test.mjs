@@ -41,6 +41,7 @@ class FakeTerminal {
     this.cols = options.cols;
     this.rows = options.rows;
     this.writes = [];
+    this.pendingWriteCallbacks = [];
     this.resetCount = 0;
     this.selection = '';
     this.selectedLines = [];
@@ -75,7 +76,8 @@ class FakeTerminal {
 
   write(bytes, callback) {
     this.writes.push(Buffer.from(bytes).toString('utf8'));
-    callback?.();
+    if (this.deferWrites) this.pendingWriteCallbacks.push(callback);
+    else callback?.();
   }
 
   reset() {
@@ -120,7 +122,8 @@ class FakeTerminal {
 
   scrollPages() {}
   scrollToBottom() {}
-  onScroll() { return { dispose() {} }; }
+  onScroll(callback) { this.scrollListener = callback; return { dispose() {} }; }
+  emitScroll(row) { this.buffer.active.viewportY = row; this.scrollListener?.(row); }
   dispose() {}
 }
 
@@ -558,6 +561,92 @@ test('native touch scroll proxy maps outer momentum position into xterm history 
   view.dispose();
   assert.equal(host.style.transform, '');
   assert.equal(spacer.style.height, '0px');
+});
+
+async function scrollingView(options = {}) {
+  const root = new FakeElement();
+  const host = new FakeElement();
+  root.scrollHeight = 500;
+  const view = createOperatorTerminalView({ root, host, scrollSpacer: new FakeElement(),
+    TerminalClass: FakeTerminal, useNativeScrollProxy: true, useTouchEvents: true,
+    ResizeObserverClass: null, requestFrame: () => 1, cancelFrame() {}, ...options });
+  view.socketOpen(); view.setVisible(true);
+  const message = { session_id: 'default', pane: '%3', generation: 7, seq: 1,
+    cols: 20, rows: 5, data_base64: Buffer.from('seed').toString('base64') };
+  view.terminal.buffer.active.baseY = 20;
+  await view.handleReset(message);
+  return { root, host, view, message };
+}
+
+for (const change of ['resize', 'font scale']) {
+  test(`small upward drag retains reader intent through ${change}`, async () => {
+    let resize;
+    class ResizeObserver {
+      constructor(callback) { resize = callback; }
+      observe() {}
+      disconnect() {}
+    }
+    const timers = createFakeTimers();
+    const { root, view, message } = await scrollingView({ ResizeObserverClass: ResizeObserver,
+      setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+    root.dispatchEvent(new Event('touchstart'));
+    root.scrollTop = 398;
+    root.dispatchEvent(new Event('scroll'));
+    if (change === 'resize') resize(); else view.setFontScale(1.1);
+    root.dispatchEvent(new Event('touchend'));
+    assert.equal(root.scrollTop, 398);
+    timers.runNext(); // interaction grace period ends
+    root.dispatchEvent(new Event('scroll')); // incidental layout notification
+    view.terminal.buffer.active.baseY = 21; root.scrollHeight = 520;
+    await view.handleData({ ...message, seq: 2 });
+    assert.equal(root.scrollTop, 398);
+    view.dispose();
+  });
+}
+
+for (const distance of [2, 50]) {
+  test(`upward drag of ${distance}px survives output already being parsed`, async () => {
+    const { root, view, message } = await scrollingView();
+    view.terminal.deferWrites = true;
+    const pending = view.handleData({ ...message, seq: 2 });
+    await new Promise(setImmediate);
+    assert.equal(view.terminal.pendingWriteCallbacks.length, 1);
+    root.dispatchEvent(new Event('touchstart'));
+    root.scrollTop = 400 - distance;
+    root.dispatchEvent(new Event('scroll'));
+    view.terminal.buffer.active.baseY = 21;
+    root.scrollHeight = 520;
+    view.terminal.emitScroll(21); // redraw notification while output is parsing
+    view.terminal.pendingWriteCallbacks.shift()();
+    await pending;
+    assert.equal(root.scrollTop, 400 - distance);
+    root.dispatchEvent(new Event('touchend'));
+    assert.equal(root.scrollTop, 400 - distance);
+    view.dispose();
+  });
+}
+
+test('same-pane checkpoint retains history; a different pane follows its tail', async () => {
+  const { root, view, message } = await scrollingView();
+  root.dispatchEvent(new Event('touchstart'));
+  root.scrollTop = 120; root.dispatchEvent(new Event('scroll'));
+  root.dispatchEvent(new Event('touchend'));
+  await view.handleReset({ ...message, seq: 3 });
+  assert.equal(root.scrollTop, 120);
+  await view.handleReset({ ...message, pane: '%4', generation: 8, seq: 1 });
+  assert.equal(root.scrollTop, 400);
+  view.dispose();
+});
+
+test('touch pauses following while held and resumes on release without a history drag', async () => {
+  const { root, view, message } = await scrollingView();
+  root.dispatchEvent(new Event('touchstart'));
+  view.terminal.buffer.active.baseY = 21; root.scrollHeight = 520;
+  await view.handleData({ ...message, seq: 2 });
+  assert.equal(root.scrollTop, 400);
+  root.dispatchEvent(new Event('touchend'));
+  assert.equal(root.scrollTop, 420);
+  view.dispose();
 });
 
 test('native touch scroll proxy restores incidental layout jumps but preserves deliberate history scrolling', () => {

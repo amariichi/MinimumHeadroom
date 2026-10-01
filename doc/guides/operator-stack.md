@@ -111,6 +111,10 @@ If the agent process runs in a separate Docker network namespace, also see the `
 
 `run-operator-bridge.sh` streams exactly one tmux pane through tmux Control Mode and sends approved input back into that pane with `tmux send-keys`. The browser uses xterm.js for ANSI/VT parsing and keeps 5,000 lines of local scrollback. The bridge sends terminal bytes only while a browser is visibly subscribed.
 
+On touch devices, dragging upward pauses following new output, even when the first movement is small. Incoming output, a same-pane refresh, or a change in screen or font size preserves the reading position. Scroll back to the latest output or use the bottom button to resume following.
+
+The default Codex launch and resume commands include `--no-alt-screen` so the terminal retains history. If scrolling stops at Codex's pinned prompt, the CLI may be running in alternate-screen mode without terminal history. The mirror can only show history retained by the terminal; it cannot reconstruct earlier conversation from screen redraws. Resume Codex with `codex resume --last --no-alt-screen` to use inline display. The new default takes effect on the next launch or resume, not in an already-running CLI. Explicit `--agent-cmd` and `MH_BRIDGE_RESTART_COMMAND` overrides are kept as supplied, so include this flag in custom Codex commands when history is needed. See [OpenAI's CLI command documentation](https://learn.chatgpt.com/docs/developer-commands).
+
 ### tmux pane targeting
 
 Important bridge variables:

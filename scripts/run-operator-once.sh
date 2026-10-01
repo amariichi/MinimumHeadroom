@@ -179,7 +179,7 @@ Examples:
   ./scripts/run-operator-once.sh --profile supertonic
   ./scripts/run-operator-once.sh --profile qwen3-realtime
   ./scripts/run-operator-once.sh --profile qwen3 --repo ~/github/other-project --agent-shell
-  ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
+  ./scripts/run-operator-once.sh --agent-cmd 'codex resume --last --no-alt-screen'
   ./scripts/run-operator-once.sh --agent-cmd 'bash -l'
   ./scripts/run-operator-once.sh --session work --window mobile --ui-mode mobile --audio-target browser
   ASR_GPU=1 MH_KOKORO_VOICE=af_heart ./scripts/run-operator-once.sh --profile default --audio-target browser

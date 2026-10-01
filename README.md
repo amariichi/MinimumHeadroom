@@ -386,7 +386,7 @@ cd /path/to/target-repo
 ./scripts/run-operator-once.sh --profile realtime --agent-shell
 
 # resume an existing Codex conversation
-./scripts/run-operator-once.sh --agent-cmd 'codex resume --last'
+./scripts/run-operator-once.sh --agent-cmd 'codex resume --last --no-alt-screen'
 
 # keep the current shell instead of attaching to tmux
 ./scripts/run-operator-once.sh --profile realtime --no-attach

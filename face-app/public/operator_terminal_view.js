@@ -684,6 +684,8 @@ export function createOperatorTerminalView(options = {}) {
   let nativeScrollContactActive = false;
   let nativeScrollInteractionTimer = null;
   let nativeFollowFrame = null;
+  let nativeInteractionScrollTop = 0;
+  let parsingTerminalOutput = false;
   const useNativeTouchEvents = options.useTouchEvents ?? (
     typeof globalThis !== 'undefined' && typeof globalThis.TouchEvent === 'function'
   );
@@ -794,6 +796,7 @@ export function createOperatorTerminalView(options = {}) {
     clearNativeScrollInteractionTimer();
     nativeScrollContactActive = true;
     nativeScrollInteractionActive = true;
+    nativeInteractionScrollTop = Math.max(0, Number(root.scrollTop) || 0);
   }
 
   function endNativeScrollInteraction() {
@@ -802,6 +805,10 @@ export function createOperatorTerminalView(options = {}) {
     }
     nativeScrollContactActive = false;
     settleNativeScrollInteractionSoon();
+    if (nativeAutoFollow) {
+      applyNativeTailPosition();
+      scheduleNativeTailPosition();
+    }
   }
 
   function handleNativeWheel() {
@@ -810,6 +817,7 @@ export function createOperatorTerminalView(options = {}) {
     }
     nativeScrollInteractionActive = true;
     nativeScrollContactActive = false;
+    nativeInteractionScrollTop = Math.max(0, Number(root.scrollTop) || 0);
     settleNativeScrollInteractionSoon();
   }
 
@@ -847,7 +855,7 @@ export function createOperatorTerminalView(options = {}) {
   }
 
   function applyNativeTailPosition() {
-    if (!useNativeScrollProxy || disposed || !nativeAutoFollow) {
+    if (!useNativeScrollProxy || disposed || !nativeAutoFollow || nativeScrollContactActive) {
       return;
     }
     root.scrollTop = computeNativeTailScrollTop();
@@ -855,7 +863,7 @@ export function createOperatorTerminalView(options = {}) {
   }
 
   function scheduleNativeTailPosition() {
-    if (!useNativeScrollProxy || disposed || !nativeAutoFollow || nativeFollowFrame !== null) {
+    if (!useNativeScrollProxy || disposed || !nativeAutoFollow || nativeScrollContactActive || nativeFollowFrame !== null) {
       return;
     }
     nativeFollowFrame = requestFrame(() => {
@@ -874,6 +882,10 @@ export function createOperatorTerminalView(options = {}) {
     scrollSpacer.style.height = `${baseY * cellHeight + viewportSlack}px`;
     if (followBottom) {
       nativeAutoFollow = true;
+      if (nativeScrollContactActive) {
+        syncTerminalFromNativeScroll();
+        return;
+      }
       applyNativeTailPosition();
       scheduleNativeTailPosition();
       return;
@@ -884,7 +896,15 @@ export function createOperatorTerminalView(options = {}) {
   function handleNativeScroll() {
     const nearBottom = isNativeScrollNearBottom();
     if (nativeScrollInteractionActive) {
-      nativeAutoFollow = nearBottom;
+      const currentTop = Math.max(0, Number(root.scrollTop) || 0);
+      // Even a small deliberate upward drag must escape follow-tail. The usual
+      // near-bottom tolerance otherwise pulls it back before the finger can move.
+      if (currentTop < nativeInteractionScrollTop - 0.5) {
+        nativeAutoFollow = false;
+      } else if (currentTop > nativeInteractionScrollTop + 0.5 && nearBottom) {
+        nativeAutoFollow = true;
+      }
+      nativeInteractionScrollTop = currentTop;
       if (!nativeScrollContactActive) {
         settleNativeScrollInteractionSoon();
       }
@@ -892,8 +912,6 @@ export function createOperatorTerminalView(options = {}) {
       applyNativeTailPosition();
       scheduleNativeTailPosition();
       return;
-    } else if (nearBottom) {
-      nativeAutoFollow = true;
     }
     syncTerminalFromNativeScroll();
   }
@@ -915,7 +933,7 @@ export function createOperatorTerminalView(options = {}) {
 
   if (typeof ResizeObserverClass === 'function') {
     terminalHeightObserver = new ResizeObserverClass(() => {
-      const followBottom = useNativeScrollProxy && (nativeAutoFollow || isNativeScrollNearBottom());
+      const followBottom = useNativeScrollProxy && nativeAutoFollow;
       syncTerminalRenderedHeight();
       syncNativeScrollSize({ followBottom });
     });
@@ -954,7 +972,7 @@ export function createOperatorTerminalView(options = {}) {
     }
   }
 
-  function scheduleWrite(bytesSource, message, epoch = writeEpoch, reset = false, acknowledge = true) {
+  function scheduleWrite(bytesSource, message, epoch = writeEpoch, reset = false, acknowledge = true, resetFollow = reset) {
     writeQueue = writeQueue.catch(() => {}).then(async () => {
       if (disposed || epoch !== writeEpoch) {
         return;
@@ -963,27 +981,31 @@ export function createOperatorTerminalView(options = {}) {
       if (disposed || epoch !== writeEpoch) {
         return;
       }
-      if (reset) {
-        terminal.reset();
-        terminal.resize(message.cols, message.rows);
-      }
-      const followNativeScroll = useNativeScrollProxy && (
-        reset || nativeAutoFollow || isNativeScrollNearBottom()
-      );
-      await new Promise((resolve) => {
-        terminal.write(bytes, () => {
-          syncTerminalRenderedHeight();
-          syncNativeScrollSize({ followBottom: followNativeScroll });
-          if (!disposed && epoch === writeEpoch && acknowledge) {
-            emit('operator_terminal_ack', {
-              pane: message.pane,
-              generation: message.generation,
-              seq: message.seq
-            });
-          }
-          resolve();
+      parsingTerminalOutput = true;
+      try {
+        if (reset) {
+          terminal.reset();
+          terminal.resize(message.cols, message.rows);
+        }
+        await new Promise((resolve) => {
+          terminal.write(bytes, () => {
+            // Consult the current reader intent, not the state when parsing began.
+            const followNativeScroll = useNativeScrollProxy && (resetFollow || nativeAutoFollow);
+            syncTerminalRenderedHeight();
+            syncNativeScrollSize({ followBottom: followNativeScroll });
+            if (!disposed && epoch === writeEpoch && acknowledge) {
+              emit('operator_terminal_ack', {
+                pane: message.pane,
+                generation: message.generation,
+                seq: message.seq
+              });
+            }
+            resolve();
+          });
         });
-      });
+      } finally {
+        parsingTerminalOutput = false;
+      }
     });
     return writeQueue;
   }
@@ -1015,6 +1037,7 @@ export function createOperatorTerminalView(options = {}) {
     ) {
       return false;
     }
+    const resetFollow = pane !== nextPane;
     pane = nextPane;
     generation = nextGeneration;
     expectedSequence = nextSequence;
@@ -1025,7 +1048,7 @@ export function createOperatorTerminalView(options = {}) {
       ...message,
       cols: clamp(cols, 2, 1000),
       rows: clamp(rows, 1, 1000)
-    }, epoch, true);
+    }, epoch, true, true, resetFollow);
     void pendingWrite.catch(() => requestResync());
     return pendingWrite;
   }
@@ -1051,7 +1074,7 @@ export function createOperatorTerminalView(options = {}) {
   }
 
   const scrollDisposable = terminal.onScroll?.((viewportY) => {
-    if (!useNativeScrollProxy || syncingNativeScroll || disposed) {
+    if (!useNativeScrollProxy || syncingNativeScroll || parsingTerminalOutput || disposed) {
       return;
     }
     const buffer = terminal.buffer.active;
@@ -1152,7 +1175,7 @@ export function createOperatorTerminalView(options = {}) {
       terminal.scrollToBottom();
     },
     setFontScale(nextScale) {
-      const followBottom = useNativeScrollProxy && (nativeAutoFollow || isNativeScrollNearBottom());
+      const followBottom = useNativeScrollProxy && nativeAutoFollow;
       fontScale = clamp(Number(nextScale) || 1, 0.6, 2.4);
       terminal.options.fontSize = DEFAULT_FONT_SIZE * fontScale;
       terminal.refresh?.(0, terminal.rows - 1);
