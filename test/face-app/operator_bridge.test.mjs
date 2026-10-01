@@ -67,6 +67,21 @@ test('Control Mode terminal defaults to two timer-driven updates per second', ()
   assert.equal(options.terminalBatchDelayMs, 500);
 });
 
+test('default Codex resume preserves terminal scrollback', () => {
+  const options = loadBridgeOptionsFromEnv({ MH_BRIDGE_TMUX_PANE: '%1' });
+  assert.equal(options.restartCommand, 'codex resume --last --no-alt-screen');
+});
+
+test('explicit restart commands remain unchanged', () => {
+  for (const restartCommand of ['codex resume session-123', 'claude --continue', 'bash -l']) {
+    const options = loadBridgeOptionsFromEnv({
+      MH_BRIDGE_TMUX_PANE: '%1',
+      MH_BRIDGE_RESTART_COMMAND: restartCommand
+    });
+    assert.equal(options.restartCommand, restartCommand);
+  }
+});
+
 function findLatestAck(payloads) {
   const acks = payloads.filter((item) => item.type === 'operator_ack');
   return acks[acks.length - 1] ?? null;

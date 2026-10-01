@@ -17,7 +17,7 @@ RUNTIME_DEFAULT_INTERPRETER_PRESET="${MH_RUNTIME_INTERPRETER_PRESET:-gemma4-supe
 
 SESSION_NAME="agent"
 WINDOW_BASE="operator"
-AGENT_CMD="codex"
+AGENT_CMD="codex --no-alt-screen"
 AGENT_DEFAULT_CMD="${MH_AGENT_DEFAULT_CMD:-}"
 STACK_CMD="./scripts/run-operator-stack.sh"
 AGENT_CWD="$CALLER_DIR"
@@ -146,7 +146,7 @@ Options:
   --window <name>           base window name (default: operator)
   --profile <name>          startup preset (default|realtime|supertonic|supertonic-realtime|qwen3|qwen3-realtime)
   --list-profiles           show startup presets and exit
-  --agent-cmd <command>     command to run in agent pane (default: codex; starts in the shell directory where this script was invoked)
+  --agent-cmd <command>     command to run in agent pane (default: codex --no-alt-screen; preserves scrollback and starts in the shell directory where this script was invoked)
   --agent-shell             shorthand for --agent-cmd 'bash -l'
   --repo <path>             target project directory for the agent pane (resolved from the shell directory where this script was invoked)
   --agent-cwd <path>        same as --repo

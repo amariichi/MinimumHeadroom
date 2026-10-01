@@ -1059,7 +1059,7 @@ export function loadBridgeOptionsFromEnv(env = process.env) {
     sessionId: normalizeSessionId(env.MH_BRIDGE_SESSION_ID, 'default'),
     tmuxPane,
     defaultRecoveryTmuxPane: asNonEmptyString(env.MH_BRIDGE_RECOVERY_TMUX_PANE) ?? tmuxPane,
-    restartCommand: asNonEmptyString(env.MH_BRIDGE_RESTART_COMMAND) ?? 'codex resume --last',
+    restartCommand: asNonEmptyString(env.MH_BRIDGE_RESTART_COMMAND) ?? 'codex resume --last --no-alt-screen',
     restartPreKeys: parseRestartPreKeys(env.MH_BRIDGE_RESTART_PRE_KEYS ?? 'C-u'),
     terminalTransport: asNonEmptyString(env.MH_BRIDGE_TERMINAL_TRANSPORT)?.toLowerCase() === 'snapshot'
       ? 'snapshot'
