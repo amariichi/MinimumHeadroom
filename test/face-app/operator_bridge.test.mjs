@@ -61,10 +61,25 @@ function createRuntimeHarness(options = {}) {
   return { runtime, payloads, tmux };
 }
 
-test('Control Mode terminal defaults to two timer-driven updates per second', () => {
+test('Control Mode terminal defaults to five timer-driven updates per second', () => {
   const options = loadBridgeOptionsFromEnv({ MH_BRIDGE_TMUX_PANE: '%1' });
   assert.equal(options.terminalTransport, 'control');
-  assert.equal(options.terminalBatchDelayMs, 500);
+  assert.equal(options.terminalBatchDelayMs, 200);
+});
+
+test('default Codex resume keeps the ordinary CLI display mode', () => {
+  const options = loadBridgeOptionsFromEnv({ MH_BRIDGE_TMUX_PANE: '%1' });
+  assert.equal(options.restartCommand, 'codex resume --last');
+});
+
+test('explicit restart commands remain unchanged', () => {
+  for (const restartCommand of ['codex resume session-123', 'claude --continue', 'bash -l']) {
+    const options = loadBridgeOptionsFromEnv({
+      MH_BRIDGE_TMUX_PANE: '%1',
+      MH_BRIDGE_RESTART_COMMAND: restartCommand
+    });
+    assert.equal(options.restartCommand, restartCommand);
+  }
 });
 
 function findLatestAck(payloads) {

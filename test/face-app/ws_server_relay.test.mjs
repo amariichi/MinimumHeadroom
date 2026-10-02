@@ -356,6 +356,14 @@ test('ws server routes terminal streams only between subscribed browsers and the
   assert.equal(ack.type, 'operator_terminal_ack');
   assert.equal(ack.subscriber_id, subscribe.subscriber_id);
 
+  const scrollPromise = waitForMessage(bridge);
+  viewer.send(JSON.stringify({type:'operator_terminal_scroll', session_id:'wrong-session', subscriber_id:'forged', pane:'%9', generation:2, lines:-20, x:20, y:10}));
+  const scroll = await scrollPromise;
+  assert.equal(scroll.type, 'operator_terminal_scroll');
+  assert.equal(scroll.session_id, 'default');
+  assert.equal(scroll.subscriber_id, subscribe.subscriber_id);
+  assert.equal(scroll.lines, -20);
+
   const unsubscribePromise = waitForMessage(bridge);
   viewer.close();
   const unsubscribe = await unsubscribePromise;
