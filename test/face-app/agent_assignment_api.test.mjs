@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { gunzipSync } from 'node:zlib';
 import test from 'node:test';
 import { createAgentAssignmentStateStore } from '../../face-app/dist/agent_assignment_state.js';
 import { createAgentAssignmentApi, renderAssignmentPrompt } from '../../face-app/dist/agent_assignment_api.js';
@@ -47,7 +48,7 @@ function createRequest({ method, url, body }) {
 function createResponseCapture() {
   let statusCode = null;
   let headers = null;
-  let rawBody = '';
+  const chunks = [];
 
   return {
     writableEnded: false,
@@ -56,14 +57,17 @@ function createResponseCapture() {
       headers = nextHeaders;
     },
     end(chunk = '') {
-      rawBody += String(chunk ?? '');
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk ?? '')));
       this.writableEnded = true;
     },
     snapshot() {
+      const rawBytes = Buffer.concat(chunks);
+      const rawBody = (headers?.['content-encoding'] === 'gzip' && rawBytes.length ? gunzipSync(rawBytes) : rawBytes).toString('utf8');
       return {
         statusCode,
         headers,
         rawBody,
+        rawBytes,
         body: rawBody === '' ? null : JSON.parse(rawBody)
       };
     }
@@ -328,4 +332,98 @@ test('agent assignment api handles assign, list, and inject flows', async () => 
   assert.equal(runtimeCalls[3]?.input?.rescue_submit_if_buffered, true);
 
   cleanup(rootDir);
+});
+
+
+test('dashboard conditional reads preserve history, scope and time-driven delivery changes', async () => {
+  const temp = createTempStatePath('assignment-dashboard-');
+  let time = 1_700_500_000_000;
+  const store = createAgentAssignmentStateStore({ statePath: temp.statePath, now: () => time, log: quietLog });
+  const lifecycleRuntime = { injectAgent() {} };
+  const api = createAgentAssignmentApi({ store, lifecycleRuntime });
+  const read = async (url, etag = null, target = api, headers = {}) => {
+    const request = createRequest({ method: 'GET', url });
+    Object.assign(request.headers, headers);
+    if (etag) request.headers['if-none-match'] = etag;
+    const response = createResponseCapture();
+    assert.equal(await target.handleHttpRequest(request, response), true);
+    return response.snapshot();
+  };
+  try {
+    const input = { stream_id: 'stream-a', mission_id: 'mission-a', owner_agent_id: '__operator__', agent_id: 'helper-a', goal: 'A'.repeat(150000) };
+    store.upsertAssignment(input);
+    const initial = await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-a');
+    assert.equal(initial.statusCode, 200);
+    assert.equal(initial.headers['cache-control'], 'no-store');
+    assert.equal(initial.body.state.assignments.length, 1);
+    assert.equal(initial.body.state.assignments[0].goal, undefined);
+    assert(initial.rawBody.length < 2000);
+    const unchanged = await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-a', initial.headers.etag);
+    assert.equal(unchanged.statusCode, 304);
+    assert.equal(unchanged.rawBody, '');
+    const full = await read('/api/agent-assignments/list?view=full&stream_id=stream-a', initial.headers.etag);
+    assert.equal(full.statusCode, 200);
+    assert.equal(full.body.state.assignments[0].goal, input.goal);
+    assert.equal(full.body.state.assignments[0].completion_rescue_grace_ms, 10000);
+    const legacy = await read('/api/agent-assignments/list?stream_id=stream-a');
+    assert.equal(legacy.statusCode, 200);
+    assert.deepEqual(legacy.body, full.body);
+    assert(legacy.rawBody.length > 150000, 'legacy clients retain their complete history');
+    assert.equal(legacy.body.state.assignments[0].goal, input.goal);
+    assert.deepEqual(legacy.body.state.summary, full.body.state.summary);
+    const fields = ['stream_id', 'mission_id', 'agent_id', 'delivery_state', 'last_report_kind', 'last_report_at', 'updated_at'];
+    for (const field of fields) assert.deepEqual(initial.body.state.assignments[0][field], full.body.state.assignments[0][field]);
+    assert.deepEqual(Object.keys(initial.body.state.assignments[0]).sort(), fields.sort());
+    const unknownView = await read('/api/agent-assignments/list?view=unexpected&stream_id=stream-a');
+    assert.deepEqual(unknownView.body, legacy.body, 'unknown explicit views retain the original full-history contract');
+    const oldMcp = await read('/api/agent-assignments/list?stream_id=stream-a', initial.headers.etag, api, { 'user-agent': 'node' });
+    assert.equal(oldMcp.statusCode, 200);
+    assert.deepEqual(oldMcp.body, full.body, 'already-loaded Node MCP must keep instructions and rescue details');
+    const nodeDashboard = await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-a', null, api, { 'user-agent': 'node' });
+    assert.deepEqual(nodeDashboard.body, initial.body, 'an explicit compact view is independent of user agent');
+    const browser = await read('/api/agent-assignments/list?stream_id=stream-a', null, api, { 'user-agent': 'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1' });
+    assert.deepEqual(browser.body, legacy.body, 'the old mobile browser retains complete history');
+    const compressed = await read('/api/agent-assignments/list?stream_id=stream-a', null, api, { 'accept-encoding': 'br, gzip, deflate', 'user-agent': 'Mozilla/5.0' });
+    assert.equal(compressed.headers['content-encoding'], 'gzip');
+    assert.equal(compressed.headers.vary, 'Accept-Encoding');
+    assert.equal(compressed.headers['content-length'], compressed.rawBytes.length);
+    assert(compressed.rawBytes.length < Buffer.byteLength(legacy.rawBody));
+    assert.deepEqual(compressed.body, legacy.body);
+    for (const encoding of ['gzip;q=0, deflate', 'gzip;q=invalid', 'gzip;q=1.1', 'br', '']) {
+      const identity = await read('/api/agent-assignments/list?stream_id=stream-a', null, api, { 'accept-encoding': encoding });
+      assert.equal(identity.headers['content-encoding'], undefined);
+      assert.deepEqual(identity.body, legacy.body);
+    }
+    const compressedNotModified = await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-a', initial.headers.etag, api, { 'accept-encoding': 'GZIP; q=0.5' });
+    assert.equal(compressedNotModified.statusCode, 304);
+    assert.equal(compressedNotModified.rawBytes.length, 0);
+    const compressedNodeDashboard = await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-a', null, api, { 'user-agent': 'node', 'accept-encoding': 'GZIP; q=0.5' });
+    assert.equal(compressedNodeDashboard.headers['content-encoding'], 'gzip');
+    assert.deepEqual(compressedNodeDashboard.body, initial.body);
+    const oldMcpGzip = await read('/api/agent-assignments/list?stream_id=stream-a', null, api, { 'user-agent': 'node', 'accept-encoding': 'gzip' });
+    assert.equal(oldMcpGzip.headers['content-encoding'], 'gzip');
+    assert.deepEqual(oldMcpGzip.body, full.body);
+    const filteredOut = await read('/api/agent-assignments/list?stream_id=stream-a&agent_id=other&mission_id=mission-a&owner_agent_id=__operator__');
+    assert.equal(filteredOut.body.state.assignments.length, 0);
+    const other = await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-b', initial.headers.etag);
+    assert.equal(other.statusCode, 200);
+    assert.equal(other.body.state.assignments.length, 0);
+    store.markDeliverySent({ stream_id: 'stream-a', mission_id: 'mission-a', delivery_id: 'delivery-a', ack_timeout_ms: 1000 });
+    const sent = await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-a', initial.headers.etag);
+    assert.equal(sent.statusCode, 200);
+    assert.equal(sent.body.state.assignments[0].delivery_state, 'sent_to_tmux');
+    time += 2000;
+    const timeout = await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-a', sent.headers.etag);
+    assert.equal(timeout.statusCode, 200);
+    assert.equal(timeout.body.state.assignments[0].delivery_state, 'timeout');
+    const legacyTimeout = await read('/api/agent-assignments/list?stream_id=stream-a');
+    assert.equal(legacyTimeout.body.state.assignments[0].delivery_state, timeout.body.state.assignments[0].delivery_state, 'legacy badges reflect time-driven delivery changes');
+    assert.equal(legacyTimeout.body.state.assignments[0].goal, input.goal);
+    const historyAfter = await read('/api/agent-assignments/list?view=full&stream_id=stream-a&agent_id=helper-a&mission_id=mission-a&owner_agent_id=__operator__');
+    assert.equal(historyAfter.body.state.assignments[0].goal, input.goal);
+    assert.equal(historyAfter.body.state.assignments[0].delivery_state, 'timeout');
+    const restarted = createAgentAssignmentApi({ store, lifecycleRuntime });
+    assert.equal((await read('/api/agent-assignments/list?view=dashboard&stream_id=stream-a', timeout.headers.etag, restarted)).statusCode, 200);
+    assert.equal(store.getAssignmentsView().assignments.length, 1);
+  } finally { cleanup(temp.rootDir); }
 });

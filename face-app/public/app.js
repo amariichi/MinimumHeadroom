@@ -40,6 +40,7 @@ import {
   summarizeAgentTileMessage,
   summarizeOwnerInboxSummary
 } from './agent_dashboard_state.js';
+import { createAssignmentDashboardReader, createDashboardRefreshLoop } from './agent_dashboard_refresh.js';
 import { resolveAgentsFromActionResult } from './agent_dashboard_apply_result.js';
 import { listAgentLifecycleActions, shouldShowMobileAgentList } from './agent_dashboard_actions.js';
 import { summarizeAgentActionFailure, summarizeAgentActionSuccess } from './agent_dashboard_action_feedback.js';
@@ -499,8 +500,6 @@ let lastAgentDashboardRerenderAt = 0;
 let operatorFocusPending = null;
 let operatorFocusPendingTimer = null;
 let operatorMirrorActivitySuppression = null;
-let agentDashboardPollTimer = null;
-let agentDashboardLoadInFlight = null;
 let agentDashboardAddFormOpen = false;
 let agentDashboardAddPending = false;
 let agentDashboardSurfaceOpen = false;
@@ -1763,9 +1762,9 @@ function trackAgentTileFromPayload(payload) {
   }
 }
 
-async function readAgentDashboardState() {
+async function readAgentDashboardState(signal) {
   const response = await authFetch('/api/agents/state', {
-    method: 'GET',
+    signal, method: 'GET',
     cache: 'no-store'
   });
   if (!response.ok) {
@@ -1778,7 +1777,7 @@ async function readAgentDashboardState() {
   return normalizeDashboardStatePayload(payload.state);
 }
 
-async function readOwnerInboxState(streamId = null) {
+async function readOwnerInboxState(streamId = null, signal) {
   const query = new URLSearchParams({
     owner_agent_id: OPERATOR_DASHBOARD_AGENT_ID
   });
@@ -1786,7 +1785,7 @@ async function readOwnerInboxState(streamId = null) {
     query.set('stream_id', streamId.trim());
   }
   const response = await authFetch(`/api/owner-inbox/list?${query.toString()}`, {
-    method: 'GET',
+    signal, method: 'GET',
     cache: 'no-store'
   });
   if (!response.ok) {
@@ -1799,23 +1798,9 @@ async function readOwnerInboxState(streamId = null) {
   return normalizeOwnerInboxViewState(payload.state);
 }
 
-async function readAgentAssignmentState(streamId = null) {
-  const query = new URLSearchParams();
-  if (typeof streamId === 'string' && streamId.trim() !== '') {
-    query.set('stream_id', streamId.trim());
-  }
-  const response = await authFetch(`/api/agent-assignments/list?${query.toString()}`, {
-    method: 'GET',
-    cache: 'no-store'
-  });
-  if (!response.ok) {
-    throw new Error(`agent assignment request failed (${response.status})`);
-  }
-  const payload = await response.json();
-  if (!payload || payload.ok !== true || !payload.state || typeof payload.state !== 'object') {
-    throw new Error('agent assignment response is invalid');
-  }
-  return normalizeAgentAssignmentViewState(payload.state);
+const readAssignmentDashboard = createAssignmentDashboardReader(authFetch);
+async function readAgentAssignmentState(streamId = null, signal) {
+  return normalizeAgentAssignmentViewState(await readAssignmentDashboard(streamId, { signal }));
 }
 
 function syncAgentActivityFromDashboardState(previousAgents, nextAgents, nowMs = Date.now()) {
@@ -2335,24 +2320,24 @@ function renderOperatorMobileAgentList() {
   }
 }
 
-async function refreshAgentDashboardState(options = {}) {
-  if (agentDashboardLoadInFlight) {
-    return agentDashboardLoadInFlight;
-  }
+async function loadAgentDashboardState(options = {}) {
+  const signal = options.signal;
   const silentStatus = options.silentStatus === true;
-  agentDashboardLoadInFlight = (async () => {
+  return (async () => {
     const previousAgents = agentDashboardState.agents;
-    const agentsPromise = readAgentDashboardState();
+    const agentsPromise = readAgentDashboardState(signal);
     const nextDashboardState = await agentsPromise;
-    const ownerInboxPromise = readOwnerInboxState(nextDashboardState.activeStreamId).catch((error) => {
+    signal?.throwIfAborted();
+    const ownerInboxPromise = readOwnerInboxState(nextDashboardState.activeStreamId, signal).catch((error) => {
       console.warn(`[face-app] owner inbox refresh failed: ${error.message}`);
       return null;
     });
-    const assignmentPromise = readAgentAssignmentState(nextDashboardState.activeStreamId).catch((error) => {
+    const assignmentPromise = readAgentAssignmentState(nextDashboardState.activeStreamId, signal).catch((error) => {
       console.warn(`[face-app] agent assignment refresh failed: ${error.message}`);
       return null;
     });
     const [nextOwnerInboxState, nextAssignmentState] = await Promise.all([ownerInboxPromise, assignmentPromise]);
+    signal?.throwIfAborted();
     syncAgentActivityFromDashboardState(previousAgents, nextDashboardState.agents, Date.now());
     agentDashboardState.agents = nextDashboardState.agents;
     agentDashboardState.activeStreamId = nextDashboardState.activeStreamId;
@@ -2383,26 +2368,19 @@ async function refreshAgentDashboardState(options = {}) {
     }
   })()
     .catch((error) => {
-      if (!silentStatus) {
+      if (!silentStatus && !signal?.aborted) {
         setAgentDashboardStatus(`agent state error: ${error.message}`, 'warn');
       }
-    })
-    .finally(() => {
-      agentDashboardLoadInFlight = null;
     });
-  return agentDashboardLoadInFlight;
 }
 
-function scheduleAgentDashboardPoll(delayMs = AGENT_DASHBOARD_POLL_INTERVAL_MS) {
-  if (agentDashboardPollTimer !== null) {
-    clearTimeout(agentDashboardPollTimer);
-  }
-  agentDashboardPollTimer = window.setTimeout(() => {
-    agentDashboardPollTimer = null;
-    void refreshAgentDashboardState({ silentStatus: true }).finally(() => {
-      scheduleAgentDashboardPoll(AGENT_DASHBOARD_POLL_INTERVAL_MS);
-    });
-  }, Math.max(600, delayMs));
+const agentDashboardRefreshLoop = createDashboardRefreshLoop({
+  refresh: loadAgentDashboardState,
+  isVisible: () => document.visibilityState !== 'hidden',
+  intervalMs: AGENT_DASHBOARD_POLL_INTERVAL_MS
+});
+function refreshAgentDashboardState(options = {}) {
+  return agentDashboardRefreshLoop.refresh(options);
 }
 
 function installAgentDashboardControls() {
@@ -2471,9 +2449,7 @@ function installAgentDashboardControls() {
 function installOperatorStateRefreshHooks() {
   document.addEventListener('visibilitychange', () => {
     syncOperatorTerminalVisibility();
-    if (document.visibilityState === 'visible') {
-      refreshAgentDashboardSoon();
-    }
+    void agentDashboardRefreshLoop.visibilityChanged();
   });
   window.addEventListener('focus', () => {
     refreshAgentDashboardSoon();
@@ -5193,6 +5169,7 @@ function connectWebSocket() {
   socket.addEventListener('open', () => {
     reconnectAttempts = 0;
     setWsStatus('online', 'ok');
+    refreshAgentDashboardSoon();
     operatorTerminalView?.socketOpen();
     dispatchOperatorUiAction({ type: 'socket_open' });
     setOperatorStatusLine('connected', 'ok');
@@ -6227,7 +6204,6 @@ async function bootstrap() {
   if (operatorPanelEnabled) {
     await restoreStartupOperatorFocus();
   }
-  scheduleAgentDashboardPoll(AGENT_DASHBOARD_POLL_INTERVAL_MS);
   markOperatorUiBootReady();
 
   lgApplyButton.addEventListener('click', () => {
@@ -6273,10 +6249,7 @@ window.addEventListener('beforeunload', () => {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  if (agentDashboardPollTimer !== null) {
-    clearTimeout(agentDashboardPollTimer);
-    agentDashboardPollTimer = null;
-  }
+  agentDashboardRefreshLoop.dispose();
 
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.close();

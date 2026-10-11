@@ -1,5 +1,17 @@
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
+
+function acceptsGzip(header) {
+  return String(header ?? '').split(',').some((entry) => {
+    const [coding, ...parameters] = entry.trim().split(';');
+    if (coding.trim().toLowerCase() !== 'gzip') return false;
+    const quality = parameters.find((parameter) => /^\s*q\s*=/i.test(parameter));
+    if (quality === undefined) return true;
+    const q = Number(quality.slice(quality.indexOf('=') + 1).trim());
+    return q > 0 && q <= 1;
+  });
+}
 
 function asNonEmptyString(value) {
   if (typeof value !== 'string') {
@@ -353,6 +365,7 @@ export function createAgentAssignmentApi(options = {}) {
     throw new Error('lifecycleRuntime is required');
   }
   const maxBodyBytes = parseInteger(options.maxBodyBytes, 128 * 1024, 1024);
+  const dashboardInstanceId = randomUUID();
 
   return {
     async handleHttpRequest(request, response) {
@@ -374,10 +387,52 @@ export function createAgentAssignmentApi(options = {}) {
             agent_id: parsedUrl.searchParams.get('agent_id'),
             mission_id: parsedUrl.searchParams.get('mission_id')
           });
-          writeJson(response, 200, {
-            ok: true,
-            state: view
-          });
+          // Compact records are an explicit UI view. Default and unknown views
+          // retain full history for existing browsers, MCP and other API clients.
+          if (parsedUrl.searchParams.get('view') === 'dashboard') {
+            const dashboard = {
+              ...view,
+              assignments: view.assignments.map((assignment) => ({
+                stream_id: assignment.stream_id,
+                mission_id: assignment.mission_id,
+                agent_id: assignment.agent_id,
+                delivery_state: assignment.delivery_state,
+                last_report_kind: assignment.last_report_kind,
+                last_report_at: assignment.last_report_at,
+                updated_at: assignment.updated_at
+              }))
+            };
+            const body = JSON.stringify({ ok: true, state: dashboard });
+            const digest = createHash('sha256').update(dashboardInstanceId).update(body).digest('hex');
+            const etag = `W/"${digest}"`;
+            const headers = {
+              'content-type': 'application/json; charset=utf-8',
+              'cache-control': 'no-store', etag, vary: 'Accept-Encoding'
+            };
+            const matches = String(request.headers?.['if-none-match'] ?? '').split(',').map((tag) => tag.trim());
+            if (matches.includes(etag)) {
+              response.writeHead(304, headers);
+              response.end();
+            } else {
+              const compressed = acceptsGzip(request.headers?.['accept-encoding']) ? gzipSync(body) : null;
+              const payload = compressed && compressed.length < Buffer.byteLength(body) ? compressed : body;
+              if (Buffer.isBuffer(payload)) headers['content-encoding'] = 'gzip';
+              headers['content-length'] = Buffer.byteLength(payload);
+              response.writeHead(200, headers);
+              response.end(payload);
+            }
+            return true;
+          }
+          // Old pages still receive the complete history, compressed only when
+          // negotiated. Content and authentication keep their existing contract.
+          const body = JSON.stringify({ ok: true, state: view });
+          const compressed = acceptsGzip(request.headers?.['accept-encoding']) ? gzipSync(body) : null;
+          const payload = compressed && compressed.length < Buffer.byteLength(body) ? compressed : body;
+          const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
+            vary: 'Accept-Encoding', 'content-length': Buffer.byteLength(payload) };
+          if (Buffer.isBuffer(payload)) headers['content-encoding'] = 'gzip';
+          response.writeHead(200, headers);
+          response.end(payload);
           return true;
         }
 
