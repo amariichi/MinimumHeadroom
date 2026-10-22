@@ -12,7 +12,7 @@ matcher = ".*"
 
 [[hooks.PermissionRequest.hooks]]
 type = "command"
-command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event permission_required"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event PermissionRequest"
 timeout = 5
 
 # Primary path: Stop fires when a turn ends.
@@ -20,10 +20,45 @@ timeout = 5
 
 [[hooks.Stop.hooks]]
 type = "command"
-command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event idle_after_response"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event Stop"
 timeout = 5
 
 # Legacy fallback for Codex versions where [features] codex_hooks is unavailable.
 # When the new hooks system is active above, this still fires for
 # `agent-turn-complete` and is harmless duplication.
-notify = ["/abs/path/to/scripts/mh-hook.mjs", "--runtime", "codex"]
+# notify = ["/abs/path/to/scripts/mh-hook.mjs", "--runtime", "codex"]
+
+# Observe input waits; these hooks emit no approval decisions. Codex 0.163 baseline.
+[[hooks.PreToolUse]]
+matcher = "request_user_input"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event PreToolUse"
+timeout = 5
+
+[[hooks.PostToolUse]]
+matcher = ".*"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event PostToolUse"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event UserPromptSubmit"
+timeout = 5
+
+# Response interruption/session exit is distinct from explicit helper done.
+[[hooks.Interrupt]]
+[[hooks.Interrupt.hooks]]
+type = "command"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event Interrupt"
+timeout = 3
+
+# Response interruption/session exit is distinct from explicit helper done.
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "/abs/path/to/scripts/mh-hook.mjs --runtime codex --event SessionEnd"
+timeout = 3

@@ -120,6 +120,7 @@ This preserves freshness even for similar text.
 - Capture `active_stream_id` from the first `agent.list(scope="stream")` result. A helper that belongs to the current user task must use that stream, even when `source_repo_path` or `target_repo_root` points at another repository. Omit `stream_id` to use the active default or pass the exact active value; do not derive a new stream from the helper repository.
 - For cross-repository missions, use absolute `target_paths`. After spawn, require `visible_in_active_stream=true` and confirm the helper appears in a fresh `agent.list(scope="stream")`. If spawn returns a visibility warning, treat it as `needs_attention` unless the separate stream was intentional.
 - Treat `agent.assign` as the durable mission record and `agent.inject` as controlled delivery for bootstrap or explicit reinstruction.
+- Use the caller's actual `MH_FACE_AGENT_ID` as the assignment owner: the normal Operator is `__operator__`. Do not invent `owner` as a placeholder. A bound MCP caller can omit `owner_agent_id` on `agent.assign` and `owner.inbox.list` to use its own identity. Explicit other owners remain valid; helpers must report the exact owner from their assignment.
 - For review, investigation, or other narrow helper work, shape the mission explicitly:
   - set `role` when it helps the helper stay narrow (`reviewer`, `investigator`, `implementer`, `docs-check`)
   - use `target_paths` when the owner knows the file or directory scope

@@ -196,6 +196,8 @@ export function summarizeAgentEventMessage(payload, options = {}) {
     return 'approval required';
   }
   if (name === 'needs_attention') {
+    if (payload?.meta?.attention_kind === 'choice') return 'choice required';
+    if (payload?.meta?.attention_kind === 'question') return 'answer required';
     const detail = truncateText(
       asNonEmptyString(payload?.meta?.detail) ?? asNonEmptyString(payload?.meta?.action) ?? '',
       Math.max(12, maxLength - 11)
@@ -220,7 +222,6 @@ export function deriveAgentTransientUpdate(payload, options = {}) {
     return {
       message: text,
       speaking: true,
-      needsAttention: false,
       promptIdle: false,
       speechBubble: summarizeSpeechBubbleText(payload.text, Math.min(maxLength, 60)),
       speechBubbleTtlMs: Number.isFinite(payload.ttl_ms)
@@ -247,6 +248,7 @@ export function deriveAgentTransientUpdate(payload, options = {}) {
         message,
         needsAttention: true,
         needsAttentionTtlMs: longAttentionTtlMs,
+        ...(payload.meta?.awaiting_input === true ? { inputPending: true } : {}),
         promptIdle: false
       };
     }
@@ -256,23 +258,34 @@ export function deriveAgentTransientUpdate(payload, options = {}) {
         message,
         needsAttention: true,
         needsAttentionTtlMs: ttlMs,
+        ...(payload.meta?.awaiting_input === true ? { inputPending: true } : {}),
         promptIdle: false
       };
     }
     if (payload.name === 'cmd_failed' || payload.name === 'tests_failed') {
       return {
         message,
-        needsAttention: false,
         error: true,
+        ...(payload.meta?.source === 'mh_hook' && payload.meta?.native_event === 'PostToolUse'
+          && payload.meta?.awaiting_input === false ? { inputPending: false, needsAttention: false } : {}),
         promptIdle: false
       };
     }
     if (payload.name === 'prompt_idle') {
       return {
         message,
-        needsAttention: false,
         promptIdle: true,
+        ...(payload.meta?.awaiting_input === false ? { inputPending: false, needsAttention: false, responseIdle: true } : {}),
         speaking: false
+      };
+    }
+    if (payload.name === 'turn_interrupted' || payload.name === 'idle_after_response') {
+      return {
+        message,
+        responseIdle: payload.meta?.fully_idle !== false && !(payload.meta?.background_tasks_count > 0)
+          && !(payload.meta?.session_crons_count > 0),
+        speaking: false,
+        ...(payload.meta?.awaiting_input === false ? { inputPending: false, needsAttention: false } : {})
       };
     }
     if (
@@ -284,6 +297,8 @@ export function deriveAgentTransientUpdate(payload, options = {}) {
       return {
         message,
         needsAttention: false,
+        responseIdle: false,
+        ...(payload.meta?.awaiting_input === false ? { inputPending: false } : {}),
         promptIdle: false
       };
     }
@@ -305,7 +320,6 @@ export function deriveAgentTransientUpdate(payload, options = {}) {
     if (payload.phase === 'play_start') {
       return {
         speaking: true,
-        needsAttention: false,
         promptIdle: false
       };
     }

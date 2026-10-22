@@ -52,3 +52,21 @@ test/tts-asr-loop/latest-*.md
 # Release firmware build output (scripts/build-release-firmware.sh) — binaries, not source.
 # Leading slash = repo root only, so it does NOT match the tracked mcp-server/dist or face-app/dist.
 /dist/
+
+# Local investigation and live-validation notes contain machine/session details.
+# Public setup instructions stay in doc/hook-bridge and doc/examples.
+/doc/agent-state-*.md
+/doc/execplans/agent-state-input-waits.md
+# Keep private source recordings locally; publish only *.synthetic.json fixtures.
+/test/fixtures/agent-state-live-20261020.json
+/test/fixtures/claude-bash-box-20261021.json
+/test/fixtures/claude-permission-reminders-20261021.json
+/test/fixtures/claude-terminal-ambiguity-20261021.json
+/test/fixtures/codex-wrapped-approval-20261020.json
+/test/fixtures/claude-mcp-report-20261022.json
+# Dependency/runtime links are ignored even when they are symlinks.
+/node_modules
+/asr-worker/.venv
+/silero-vad-worker/.venv
+
+/doc/execplans/wait-speech.md

@@ -1973,6 +1973,12 @@ export function createAgentLifecycleRuntime(options = {}) {
   }
 
   async function cleanupAgentsOnStartup() {
+    if (options.cleanupOnStartup === false) {
+      return { ok: true, action: 'startup_cleanup', skipped: true, results: [],
+        orphan_assignments: { ok: true, removed_count: 0 },
+        orphan_inbox: { ok: true, removed: { streams: 0, missions: 0, reports: 0 } },
+        state: stateStore.getState() };
+    }
     const agents = stateStore.listAgents({ scope: 'all' });
     const results = [];
 

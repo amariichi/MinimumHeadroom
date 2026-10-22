@@ -586,16 +586,29 @@ export function createAgentAssignmentStateStore(options = {}) {
         assignment: clone(assignment)
       };
     }
+    const previous = { ...assignment };
+    const previousUpdatedAt = state.updated_at;
     const ts = asInteger(input.accepted_at, asInteger(input.ts, nowMs(now), 0) ?? nowMs(now), 0) ?? nowMs(now);
     assignment.last_report_id = reportId;
     assignment.last_report_kind = kind;
     assignment.last_report_at = ts;
-    assignment.last_error = null;
-    assignment.delivery_state = assignment.delivery_state === 'timeout' ? 'acked_late' : 'acked';
-    assignment.acked_at = ts;
-    assignment.ack_deadline_at = 0;
+    // Runtime observations expose a blocker, but do not prove that the helper
+    // accepted its mission or that its MCP reporting channel works.
+    if (input.source !== 'stuck_detector' && input.source !== 'mh_hook') {
+      assignment.last_error = null;
+      assignment.delivery_state = assignment.delivery_state === 'timeout' ? 'acked_late' : 'acked';
+      assignment.acked_at = ts;
+      assignment.ack_deadline_at = 0;
+    }
     assignment.updated_at = ts;
-    commitState();
+    try {
+      commitState();
+    } catch (error) {
+      // A failed disk write must not make redelivery look already applied.
+      Object.assign(assignment, previous);
+      state.updated_at = previousUpdatedAt;
+      throw error;
+    }
     return {
       ok: true,
       noop: false,

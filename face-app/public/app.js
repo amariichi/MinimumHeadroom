@@ -20,7 +20,9 @@ import {
   BROWSER_AUDIO_MAX_CHANNELS_DEFAULT,
   clampBrowserAudioMaxChannels,
   selectBrowserAudioChannelIndex,
-  shouldStopBrowserAudioChannel
+  matchesBrowserAudioSource,
+  planBrowserAudioCancellation,
+  createBrowserAudioCancellationLedger
 } from './browser_audio_policy.js';
 import {
   deriveAgentOperationalState,
@@ -407,6 +409,7 @@ let unlockAudioEl = null;
 let unlockInFlight = null;
 let audioUnlocked = false;
 let pendingReplayPayload = null;
+const browserAudioCancellations = createBrowserAudioCancellationLedger();
 let browserAudioMixer = null;
 let browserAudioMaxChannels = BROWSER_AUDIO_MAX_CHANNELS_DEFAULT;
 let silentAudioDataUrl = null;
@@ -1575,6 +1578,8 @@ function getAgentTransientState(agentId) {
     speechBubbleFallback: false,
     speakingUntil: 0,
     needsAttentionUntil: 0,
+    inputPending: false,
+    responseIdle: false,
     promptIdleUntil: 0,
     errorUntil: 0,
     lastActivityAt: 0,
@@ -1605,6 +1610,8 @@ function pruneAgentTransientState(nowMs = Date.now()) {
       speechBubbleExpired &&
       speakingExpired &&
       attentionExpired &&
+      !state.inputPending &&
+      !state.responseIdle &&
       promptIdleExpired &&
       errorExpired &&
       activityExpired &&
@@ -1690,7 +1697,7 @@ function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
     agentId === agentDashboardState.selectedAgentId &&
     operatorActivePrompt &&
     (operatorActivePrompt.state === 'awaiting_input' || operatorActivePrompt.state === 'awaiting_approval');
-  const needsAttention = transientNeedsAttention || promptNeedsAttention || inboxTone.needsAttention || assignmentTone.needsAttention;
+  const needsAttention = transient?.inputPending === true || transientNeedsAttention || promptNeedsAttention || inboxTone.needsAttention || assignmentTone.needsAttention;
   const error = transientError || inboxTone.error;
   const lastActivityAt = resolveAgentQuietActivityAt(agent, transient);
   const quietPromptIdle = shouldUseAgentQuietPromptIdle({
@@ -1706,6 +1713,7 @@ function resolveAgentTransientToneOptions(agentId, agent, nowMs = Date.now()) {
   return {
     speaking,
     needsAttention,
+    responseIdle: transient?.responseIdle === true,
     promptIdle: (explicitPromptIdle || quietPromptIdle) && !assignmentTone.suppressPromptIdle && !speaking && !needsAttention && !error,
     error
   };
@@ -1747,6 +1755,12 @@ function trackAgentTileFromPayload(payload) {
   }
   if (typeof update.speaking === 'boolean') {
     markAgentSpeaking(agentId, update.speaking);
+  }
+  if (typeof update.inputPending === 'boolean') {
+    getAgentTransientState(agentId).inputPending = update.inputPending;
+  }
+  if (typeof update.responseIdle === 'boolean') {
+    getAgentTransientState(agentId).responseIdle = update.responseIdle;
   }
   if (typeof update.needsAttention === 'boolean') {
     markAgentNeedsAttention(agentId, update.needsAttention, update.needsAttentionTtlMs);
@@ -4116,6 +4130,8 @@ function clearBrowserAudioChannel(channel, options = {}) {
   channel.active = false;
   channel.sessionId = null;
   channel.generation = null;
+  channel.messageId = null;
+  channel.revision = null;
   channel.startedAt = 0;
 }
 
@@ -4400,20 +4416,31 @@ function installMediaPlayerControls() {
   });
 }
 
-function stopActiveBrowserAudio(generation = null, sessionId = null) {
+function stopActiveBrowserAudio(generation = null, sessionId = null, identity = {}) {
+  const criteria = { ...identity, generation, sessionId };
+  browserAudioCancellations.cancel(criteria);
+  if (pendingReplayPayload && matchesBrowserAudioSource(pendingReplayPayload, criteria)) {
+    pendingReplayPayload = null;
+    hideAudioReplayButton();
+  }
   if (!browserAudioMixer) {
     return;
   }
   for (const channel of browserAudioMixer.channels) {
-    if (!shouldStopBrowserAudioChannel(channel, { generation, sessionId })) {
-      continue;
+    const plan = planBrowserAudioCancellation(channel, criteria);
+    channel.queue = plan.keep;
+    for (const source of plan.remove) releaseBrowserAudioSource(source);
+    if (plan.stopActive) {
+      channel.token += 1; // Invalidate a pending player.play() promise too.
+      pauseAndResetBrowserAudioChannel(channel);
+      clearBrowserAudioChannel(channel, { clearQueue: false });
+      drainQueuedBrowserAudioChannel(channel);
     }
-    pauseAndResetBrowserAudioChannel(channel);
-    clearBrowserAudioChannel(channel);
   }
 }
 
 function queueReplayPayload(payload) {
+  if (browserAudioCancellations.isCancelled(payload)) return;
   pendingReplayPayload = payload;
   showAudioReplayButton();
 }
@@ -4441,6 +4468,10 @@ function drainQueuedBrowserAudioChannel(channel) {
 }
 
 async function startBrowserAudioSourceOnChannel(channel, source) {
+  if (browserAudioCancellations.isCancelled(source)) {
+    releaseBrowserAudioSource(source);
+    return { superseded: true };
+  }
   const token = channel.token + 1;
   channel.token = token;
   pauseAndResetBrowserAudioChannel(channel);
@@ -4451,6 +4482,8 @@ async function startBrowserAudioSourceOnChannel(channel, source) {
   channel.active = true;
   channel.sessionId = source.sessionId;
   channel.generation = source.generation;
+  channel.messageId = source.messageId;
+  channel.revision = source.revision;
   channel.startedAt = Date.now();
 
   const finalizeIfCurrent = () => {
@@ -4468,11 +4501,12 @@ async function startBrowserAudioSourceOnChannel(channel, source) {
 
   try {
     await channel.player.play();
-    if (channel.token !== token) {
+    if (channel.token !== token || browserAudioCancellations.isCancelled(source)) {
       return { superseded: true };
     }
     return { superseded: false };
   } catch (error) {
+    if (channel.token !== token || browserAudioCancellations.isCancelled(source)) return { superseded: true };
     if (channel.token === token) {
       clearBrowserAudioChannel(channel);
     }
@@ -4480,15 +4514,21 @@ async function startBrowserAudioSourceOnChannel(channel, source) {
   }
 }
 
-async function playAudioSource(src, generation = null, release = null, sessionId = '-') {
+async function playAudioSource(src, generation = null, release = null, sessionId = '-', identity = {}) {
   const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId.trim() : '-';
-  const channel = reserveBrowserAudioChannel(normalizedSessionId);
   const source = {
     src,
     release: typeof release === 'function' ? release : null,
     sessionId: normalizedSessionId,
-    generation: Number.isInteger(generation) ? generation : null
+    generation: Number.isInteger(generation) ? generation : null,
+    messageId: identity.message_id ?? identity.messageId ?? null,
+    revision: identity.revision ?? null
   };
+  if (browserAudioCancellations.isCancelled(source)) {
+    releaseBrowserAudioSource(source);
+    return { superseded: true };
+  }
+  const channel = reserveBrowserAudioChannel(normalizedSessionId);
 
   if (channel.active && channel.sessionId === normalizedSessionId) {
     if (!Array.isArray(channel.queue)) {
@@ -4508,6 +4548,7 @@ async function playAudioSource(src, generation = null, release = null, sessionId
 }
 
 async function playBrowserAudioPayload(payload) {
+  if (browserAudioCancellations.isCancelled(payload)) return;
   if (!shouldPlayTtsAudio(payload)) {
     return;
   }
@@ -4522,7 +4563,7 @@ async function playBrowserAudioPayload(payload) {
 
   try {
     await unlockPlaybackAudio();
-    const played = await playAudioSource(source.src, generation, source.release, sessionId);
+    const played = await playAudioSource(source.src, generation, source.release, sessionId, payload);
     if (played.superseded) {
       return;
     }
@@ -4536,7 +4577,9 @@ async function playBrowserAudioPayload(payload) {
       mimeType,
       audioBase64: payload.audio_base64,
       generation,
-      sessionId
+      sessionId,
+      messageId: payload.message_id ?? null,
+      revision: payload.revision ?? null
     });
     setTtsPhase('browser_blocked', 'warn');
   }
@@ -4961,7 +5004,7 @@ function handleTtsState(payload) {
 
   if (phase === 'play_stop') {
     if (reason === 'interrupted') {
-      stopActiveBrowserAudio(payload.generation, sessionId);
+      stopActiveBrowserAudio(payload.generation, sessionId, payload);
     }
     setTtsStatus('ready', 'ok');
     setTtsPhase(phase, 'default');
@@ -4969,7 +5012,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'interrupt_requested') {
-    stopActiveBrowserAudio(payload.generation, sessionId);
+    stopActiveBrowserAudio(payload.generation, sessionId, payload);
     setTtsStatus('busy', 'default');
     setTtsPhase(`${phase}:${reason ?? '-'}`, 'default');
     return;
@@ -4982,7 +5025,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'dropped') {
-    stopActiveBrowserAudio(payload.generation, sessionId);
+    stopActiveBrowserAudio(payload.generation, sessionId, payload);
     setTtsPhase(`dropped:${payload.reason ?? '-'}`, 'warn');
     if (!hasActiveAgentSpeech()) {
       setTtsStatus('ready', 'default');
@@ -4991,7 +5034,7 @@ function handleTtsState(payload) {
   }
 
   if (phase === 'error') {
-    stopActiveBrowserAudio(payload.generation, sessionId);
+    stopActiveBrowserAudio(payload.generation, sessionId, payload);
     setTtsStatus('error', 'warn');
     setTtsPhase(`error:${payload.reason ?? '-'}`, 'warn');
     return;
@@ -5567,6 +5610,7 @@ function installAudioReplayButton() {
 
     const replay = pendingReplayPayload;
     pendingReplayPayload = null;
+    if (browserAudioCancellations.isCancelled(replay)) return;
     void (async () => {
       try {
         const directSource = buildPlaybackSource(replay.mimeType, replay.audioBase64);
@@ -5574,7 +5618,8 @@ function installAudioReplayButton() {
           directSource.src,
           replay.generation,
           directSource.release,
-          replay.sessionId ?? '-'
+          replay.sessionId ?? '-',
+          replay
         );
         if (played.superseded) {
           return;
@@ -5589,7 +5634,8 @@ function installAudioReplayButton() {
             retrySource.src,
             replay.generation,
             retrySource.release,
-            replay.sessionId ?? '-'
+            replay.sessionId ?? '-',
+            replay
           );
           if (played.superseded) {
             return;

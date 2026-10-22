@@ -1,8 +1,19 @@
+import { commandFingerprint, toolInputFingerprint, approvalActionMatches } from '../../scripts/agent-hook-events.mjs';
+
 const DEFAULT_INTERVAL_MS = 5000;
 const DEFAULT_TAIL_LINES = 40;
 const DEFAULT_DETAIL_TAIL_LINES = 12;
 
 export const DEFAULT_STUCK_PATTERNS = [
+  {
+    id: 'agy_command_approval',
+    category: 'approval',
+    regex: /^\s*Run this command\?\s*$/,
+    validate: (lines, index) => lines.slice(Math.max(0, index - 6), index).some(line => /^\s*Requesting permission for:/.test(line))
+      && lines.slice(index + 1).some(line => /1\. Yes, run command/.test(line))
+      && lines.slice(index + 1).some(line => /2\. No, cancel/.test(line)),
+    summary: () => 'helper paused on command approval prompt'
+  },
   {
     id: 'claude_approval',
     category: 'approval',
@@ -119,11 +130,114 @@ function matches(regex, line) {
 function latestRunningLine(lines) {
   // A live activity row below a former modal is evidence that the modal has
   // cleared. The same row ABOVE a real current approval must not hide it.
-  return lines.findLastIndex((line) => /^\s*[•●✻✽✶✳⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣷]*\s*(?:Working|Thinking|Loading|Running)(?:\s|\(|\.{3}|…|$)/i.test(line));
+  return lines.findLastIndex((line) => /^\s*[•●◦✻✽✶✳⠁-⣿]*\s*(?:Working|Thinking|Loading|Running)(?:\s|\(|\.{3}|…|$)/i.test(line));
+}
+
+function latestReadyLine(lines) {
+  const plain = lines.findLastIndex(line => /^\s*[›>❯]\s*$/.test(line));
+  // Observed Codex 0.163.0 interruption frame keeps a placeholder in its
+  // otherwise empty prompt. The placeholder alone is not proof of readiness.
+  const interrupted = lines.findLastIndex(line => line.trim() === '■ Conversation interrupted - use /feedback if something went wrong');
+  const prompt = lines.findLastIndex(line => line.trim() === '› Ask Codex to do anything');
+  const newerModal = interrupted >= 0 && lines.slice(interrupted + 1, prompt).some(line =>
+    /Would you like to run the following command\?|Allow the .+ MCP server to run tool/.test(line));
+  return interrupted >= 0 && prompt > interrupted && !newerModal ? Math.max(plain, prompt) : plain;
+}
+
+function actionFingerprint(lines, index) {
+  const marker = lines.findLastIndex((line, i) => i <= index && /^\s*Requesting permission for:/.test(line));
+  if (marker >= Math.max(0, index - 6)) {
+    const inline = lines[marker].replace(/^\s*Requesting permission for:\s*/, '');
+    const command = inline || lines.slice(marker + 1, index).map(line => line.trim()).filter(Boolean).join('\n');
+    return commandFingerprint(command);
+  }
+  const shell = lines.slice(Math.max(0, index - 4)).find(line => /^\s*\$\s+/.test(line));
+  return shell ? commandFingerprint(shell.replace(/^\s*\$\s+/, '')) : null;
+}
+
+function claudeBashRows(lines, index) {
+  if (lines[index]?.trim() !== 'Do you want to proceed?') return null;
+  const heading = lines.findLastIndex((line, i) => i < index && line.trim() === 'Bash command');
+  if (heading < Math.max(0, index - 20)) return null;
+  const borders = lines.map((line, i) => i > heading && i < index && /^\s*╌{8,}\s*$/.test(line) ? i : -1).filter(i => i >= 0);
+  if (borders.length !== 2 || borders[1] !== index - 1) return null;
+  const rows = lines.slice(borders[0] + 1, borders[1]);
+  if (!rows.length || rows.length > 8 || rows.some(line => !/^\s*│/.test(line))) return null;
+  return rows.map(line => line.replace(/^\s*│/, ''));
+}
+
+function approvalObservation(lines, index, pattern) {
+  if (pattern.id === 'claude_approval') {
+    const mcp = claudeMcpObservation(lines, index);
+    if (mcp) return mcp;
+    const rows = claudeBashRows(lines, index);
+    if (rows) {
+      // The real Bash widget adds a gutter, optional padding and display
+      // breaks. Only a unique native SINGLE-LINE digest can confirm one of
+      // these bounded alternatives; never infer a shell newline from display.
+      let variants = [''];
+      for (let i = 0; i < rows.length; i++) {
+        const parts = rows[i].startsWith(' ') ? [rows[i], rows[i].slice(1)] : [rows[i]];
+        variants = [...new Set(variants.flatMap(prefix => parts.flatMap(part => i ? [prefix + part, prefix + ' ' + part] : [part])))];
+        if (variants.length > 128) return {};
+      }
+      return { action_format: 'claude_bash_box', action_wrap_fingerprints: [...new Set(variants.map(commandFingerprint))] };
+    }
+  }
+  if (pattern.id !== 'codex_approval') return { action_fingerprint: actionFingerprint(lines, index) };
+  // Codex renders its command AFTER the modal heading. Include every command
+  // row, but stop at the blank separator/options instead of consuming prose.
+  const start = lines.findIndex((line, i) => i > index && /^\s*\$\s+/.test(line));
+  const choice = lines.findIndex((line, i) => i > index && /^\s*[›>]?\s*\d+\.\s/.test(line));
+  if (start < 0 || (choice >= 0 && start >= choice)) return {};
+  const gutter = lines[start].match(/^(\s*)\$/)[1];
+  const rows = [lines[start].replace(/^\s*\$\s+/, '')];
+  for (let i = start + 1; i < (choice < 0 ? lines.length : choice) && lines[i].trim(); i++) {
+    if (!lines[i].startsWith(gutter)) return {};
+    rows.push(lines[i].slice(gutter.length));
+  }
+  const observation = { action_fingerprint: commandFingerprint(rows.join('\n')) };
+  // tmux -J cannot join widget-rendered wraps. Try only exact zero/one-space
+  // boundaries, with a strict size bound. A native hash must confirm a variant;
+  // no raw command is persisted and no general whitespace collapse is used.
+  if (rows.length > 1 && rows.length <= 8) {
+    let variants = [rows[0]];
+    for (const row of rows.slice(1)) variants = variants.flatMap(prefix => [prefix + row, prefix + ' ' + row]);
+    observation.action_wrap_fingerprints = [...new Set(variants.map(commandFingerprint))];
+  }
+  return observation;
+}
+
+function claudeMcpObservation(lines, index) {
+  if (lines[index]?.trim() !== 'Do you want to proceed?') return null;
+  // This observed title maps to our own exact MCP tool, not an inferred
+  // snake-case conversion of arbitrary human-facing tool titles.
+  const heading = lines.findLastIndex((line, i) => i < index
+    && line.trim() === 'minimum_headroom — Agent Report Tool: (MCP)');
+  if (heading < Math.max(0, index - 40)) return null;
+  const borders = lines.map((line, i) => i > heading && i < index && /^\s*╌{8,}\s*$/.test(line) ? i : -1).filter(i => i >= 0);
+  if (borders.length !== 2 || !lines.slice(borders[1] + 1, index)
+    .some(line => line.trim() === 'About the minimum_headroom — Agent Report Tool:')) return null;
+  const input = Object.create(null), rows = lines.slice(borders[0] + 1, borders[1]);
+  if (!rows.length || rows.length > 32) return null;
+  for (const row of rows) {
+    const field = /^\s*([A-Za-z_][A-Za-z0-9_]*): (.+?)\s*$/.exec(row);
+    if (!field || Object.hasOwn(input, field[1])) return null;
+    try {
+      const value = JSON.parse(field[2]);
+      // Wrapped, nested or truncated tables cannot prove complete input.
+      if (value !== null && typeof value === 'object') return null;
+      input[field[1]] = value;
+    } catch { return null; }
+  }
+  if (!['stream_id', 'mission_id', 'owner_agent_id', 'from_agent_id', 'kind', 'summary']
+    .every(field => typeof input[field] === 'string')) return null;
+  const tool = 'mcp__minimum_headroom__agent_report';
+  return { runtime: 'claude', tool_name: tool, tool_fingerprint: toolInputFingerprint(tool, input), action_format: 'claude_mcp_table' };
 }
 
 function normalizeModalLine(line) {
-  const text = line.trim().replace(/^[›>]\s*/, '');
+  const text = line.trim().replace(/^[❯›>]\s*/, '');
   // Durations/times inside the command are arguments, not a changing clock.
   if (/^(?:\$\s|Bash:|Tool:|Requesting permission for:)/.test(text)) return text.replace(/\s+/g, ' ');
   // These rows describe the surrounding terminal, not the blocking choice.
@@ -136,9 +250,15 @@ function normalizeModalLine(line) {
 function modalFingerprint(lines, index) {
   // Include the requested action so a different command with the same generic
   // approval heading produces a new notice. Ignore clocks and terminal footer.
-  const action = lines.slice(Math.max(0, index - 6), index)
-    .filter((line) => /^\s*(?:Requesting permission for:|Bash:|Tool:|\$\s)/.test(line));
-  return [...action, ...lines.slice(index)].map(normalizeModalLine).filter(Boolean).join('\n');
+  const claudeRows = claudeBashRows(lines, index);
+  if (claudeRows) return JSON.stringify([claudeRows, lines.slice(index).map(normalizeModalLine).filter(Boolean)]);
+  const mcp = claudeMcpObservation(lines, index);
+  if (mcp) return `${mcp.tool_name}:${mcp.tool_fingerprint}`;
+  const marker = lines.findLastIndex((line, i) => i < index && /^\s*Requesting permission for:/.test(line));
+  const action = marker >= Math.max(0, index - 6) ? lines.slice(marker, index).map(line => line.trim())
+    : lines.slice(Math.max(0, index - 6), index)
+      .filter(line => /^\s*(?:Bash:|Tool:|\$\s)/.test(line)).map(normalizeModalLine);
+  return [...action, ...lines.slice(index).map(normalizeModalLine)].filter(Boolean).join('\n');
 }
 
 export function createHelperStuckDetector(options = {}) {
@@ -151,6 +271,9 @@ export function createHelperStuckDetector(options = {}) {
     throw new Error('inboxStore with submitReport is required');
   }
   const assignmentStore = options.assignmentStore ?? null;
+  const submitReport = options.submitReport ?? ((input) => inboxStore.submitReport(input));
+  const resolveReport = options.resolveReport;
+  const onResolved = options.onResolved ?? (() => {});
   const log = options.log ?? { info() {}, warn() {}, error() {} };
   const intervalMs = Number.isInteger(options.intervalMs) && options.intervalMs >= 250 ? options.intervalMs : DEFAULT_INTERVAL_MS;
   const tailLines = Number.isInteger(options.tailLines) && options.tailLines >= 4 ? options.tailLines : DEFAULT_TAIL_LINES;
@@ -161,8 +284,18 @@ export function createHelperStuckDetector(options = {}) {
   const fallbackMissionId = asNonEmptyString(options.fallbackMissionId) ?? 'ambient';
 
   const dedupeMap = new Map();
+  const observed = new Map();
+  const knownOccurrences = new Map();
+  const cleared = new Map();
   let timer = null;
   let ticking = false;
+
+  function rememberOccurrence(agentId, key, reportId) {
+    const recent = knownOccurrences.get(agentId) ?? new Map();
+    recent.set(key, reportId);
+    while (recent.size > 64) recent.delete(recent.keys().next().value);
+    knownOccurrences.set(agentId, recent);
+  }
 
   function resolveStreamForAgent(agent) {
     return asNonEmptyString(agent?.stream_id) ?? fallbackStreamId ?? (runtime.activeStreamId ?? null);
@@ -210,7 +343,6 @@ export function createHelperStuckDetector(options = {}) {
     }
     const lines = Array.isArray(snapshot?.lines) ? snapshot.lines : [];
     if (lines.length === 0) {
-      dedupeMap.delete(agentId);
       return { matched: false };
     }
     // Resolve after the asynchronous snapshot, since the helper can submit its
@@ -221,17 +353,19 @@ export function createHelperStuckDetector(options = {}) {
       return { matched: false, completed: true };
     }
     const runningIndex = latestRunningLine(lines);
+    const readyIndex = latestReadyLine(lines);
+    const boundary = Math.max(runningIndex, readyIndex);
+    const assignmentKey = [assignment?.stream_id, assignment?.mission_id, assignment?.assignment_revision,
+      assignment?.last_delivery_id, assignment?.last_sent_at, assignment?.created_at].join(':');
     const candidates = patterns.map((pattern) => ({ pattern,
-      index: lines.findLastIndex((line, i) => i > runningIndex && matches(pattern.regex, line))
-    })).filter(({ index }) => index !== -1);
+      index: lines.findLastIndex((line, i) => i > boundary && matches(pattern.regex, line))
+    })).filter(({ pattern, index }) => index !== -1 && (!pattern.validate || pattern.validate(lines, index)));
     // A generic confirm footer belongs to the more specific modal above it.
     // Otherwise use the latest modal, not an older prompt in scrollback.
     candidates.sort((a, b) => Number(a.pattern.id === 'generic_press_enter')
       - Number(b.pattern.id === 'generic_press_enter') || b.index - a.index);
     for (const { pattern, index } of candidates) {
       const matchedLine = lines[index];
-      const assignmentKey = [assignment?.stream_id, assignment?.mission_id, assignment?.assignment_revision,
-        assignment?.last_delivery_id, assignment?.last_sent_at, assignment?.created_at].join(':');
       const dedupeKey = `${agentId}::${paneId}::${assignmentKey}::${pattern.id}::${modalFingerprint(lines, index)}`;
       if (dedupeMap.get(agentId) === dedupeKey) {
         return { matched: true, suppressed: true, dedupeKey };
@@ -251,7 +385,33 @@ export function createHelperStuckDetector(options = {}) {
         return { matched: true, posted: false, dedupeKey };
       }
       try {
-        const report = inboxStore.submitReport({
+        const action = pattern.category === 'approval' ? approvalObservation(lines, index, pattern) : {};
+        const pending = inboxStore.listReports?.({ stream_id: streamId }) ?? [];
+        const scoped = pending.filter(report => report.from_agent_id === agentId && report.mission_id === missionId);
+        const previous = cleared.get(agentId) !== dedupeKey && scoped.find(report => report.source === 'stuck_detector' && report.observation_key === dedupeKey);
+        const native = scoped.filter(report => report.source === 'mh_hook' && report.kind === 'blocked'
+          && report.owner_agent_id === ownerAgentId && approvalActionMatches(report, action));
+        // The same native approval and visible modal are two observations of
+        // one wait. Ambiguous multiple native calls must never be guessed away.
+        const existing = previous ?? (native.length === 1 ? native[0] : null);
+        if (existing) {
+          rememberOccurrence(agentId, dedupeKey, existing.report_id);
+          dedupeMap.set(agentId, dedupeKey);
+          observed.set(agentId, { reportId: existing.report_id, streamId, missionId, paneId, assignmentKey });
+          return { matched: true, suppressed: true, dedupeKey };
+        }
+        const knownId = knownOccurrences.get(agentId)?.get(dedupeKey);
+        const known = knownId && (inboxStore.listReports?.({ stream_id: streamId, include_resolved: true }) ?? [])
+          .find(report => report.report_id === knownId);
+        // An already observed, natively resolved MCP occurrence can arrive
+        // again in a delayed snapshot while another request is displayed.
+        // A fresh matching native request above wins; a ready boundary below
+        // clears this memory so a genuinely new terminal occurrence can start.
+        if (action.action_format === 'claude_mcp_table' && known?.source === 'mh_hook'
+            && known.lifecycle_state === 'resolved') {
+          return { matched: true, suppressed: true, stale: true, dedupeKey };
+        }
+        const report = await submitReport({
           stream_id: streamId,
           mission_id: missionId,
           owner_agent_id: ownerAgentId,
@@ -260,8 +420,10 @@ export function createHelperStuckDetector(options = {}) {
           summary,
           detail,
           requested_action: 'check pane',
-          blocking: false,
-          source: 'stuck_detector'
+          blocking: true,
+          attention_kind: pattern.category === 'approval' ? 'approval' : pattern.category === 'picker' ? 'choice' : 'other',
+          source: 'stuck_detector', ...action,
+          observation_key: dedupeKey, pane_id: paneId, assignment_key: assignmentKey
         });
         if (report?.ok === false || (report?.transport_state && report.transport_state !== 'accepted')) {
           return { matched: true, posted: false, dedupeKey, report };
@@ -269,6 +431,11 @@ export function createHelperStuckDetector(options = {}) {
         // A successful notice covers this continuous modal occurrence. There
         // is no expiry: changing clock/footer text cannot create a new event.
         dedupeMap.set(agentId, dedupeKey);
+        const reportId = report?.report?.report_id;
+        if (reportId) {
+          rememberOccurrence(agentId, dedupeKey, reportId);
+          observed.set(agentId, { reportId, streamId, missionId, paneId, assignmentKey });
+        }
         return {
           matched: true,
           posted: true,
@@ -282,7 +449,33 @@ export function createHelperStuckDetector(options = {}) {
         return { matched: true, posted: false, dedupeKey, error: error?.message ?? String(error) };
       }
     }
-    dedupeMap.delete(agentId);
+    let prior = observed.get(agentId);
+    if (!prior) {
+      const persisted = (inboxStore.listReports?.({}) ?? []).filter(report => report.source === 'stuck_detector'
+        && report.from_agent_id === agentId && report.pane_id === paneId && report.assignment_key === assignmentKey);
+      if (persisted.length === 1) {
+        const report = persisted[0];
+        prior = { reportId: report.report_id, streamId: report.stream_id, missionId: report.mission_id, paneId, assignmentKey };
+      }
+    }
+    if (prior && prior.paneId === paneId && prior.assignmentKey === assignmentKey
+        && boundary >= 0 && typeof resolveReport === 'function') {
+      try {
+        const result = await resolveReport({ agentId, ...prior });
+        if (result?.resolved || result?.remaining === 0) {
+          observed.delete(agentId);
+          await onResolved({ agentId, ...prior, ...result, promptIdle: readyIndex >= 0 && runningIndex === -1 });
+        }
+      } catch (error) {
+        log.warn?.(`[helper-stuck-detector] resolve failed for ${agentId}: ${error?.message ?? error}`);
+        return { matched: false, resolution_failed: true };
+      }
+    }
+    if (boundary >= 0 && dedupeMap.has(agentId)) cleared.set(agentId, dedupeMap.get(agentId));
+    if (boundary >= 0) {
+      dedupeMap.delete(agentId);
+      knownOccurrences.delete(agentId);
+    }
     return { matched: false };
   }
 
@@ -341,6 +534,7 @@ export function createHelperStuckDetector(options = {}) {
 
   function resetDedupe() {
     dedupeMap.clear();
+    knownOccurrences.clear();
   }
 
   return {

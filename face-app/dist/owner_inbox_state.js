@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { approvalActionMatches } from '../../scripts/agent-hook-events.mjs';
 
 const SCHEMA_VERSION = 1;
 const STREAM_STATUSES = new Set(['active', 'closed', 'orphaned', 'archived']);
@@ -182,6 +183,18 @@ function normalizeRequestedAction(raw) {
   return asNonEmptyString(raw) ?? 'none';
 }
 
+function reportObservationFields(input = {}) {
+  const out = {};
+  for (const field of ['source', 'runtime', 'session_id', 'request_id', 'attention_kind', 'input_kind', 'tool_name', 'tool_fingerprint',
+    'action_fingerprint', 'action_format', 'observation_key', 'pane_id', 'assignment_key', 'turn_id']) {
+    const value = asNonEmptyString(input[field]);
+    if (value) out[field] = value;
+  }
+  if (Array.isArray(input.action_wrap_fingerprints)) out.action_wrap_fingerprints = [...new Set(input.action_wrap_fingerprints
+    .filter(value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)))].slice(0, 128);
+  return out;
+}
+
 function deriveDefaultBlocking(kind) {
   return kind === 'question' || kind === 'blocked' || kind === 'error';
 }
@@ -304,6 +317,7 @@ function normalizeReport(rawReport, now) {
     owner_agent_id: ownerAgentId,
     from_agent_id: fromAgentId,
     kind,
+    ...reportObservationFields(rawReport),
     summary,
     detail: asNonEmptyString(rawReport?.detail),
     requested_action: normalizeRequestedAction(rawReport?.requested_action),
@@ -551,6 +565,7 @@ export function createOwnerInboxStateStore(options = {}) {
 
   let loaded = false;
   let state = createEmptyState(now);
+  const subscribers = new Set();
 
   function ensureLoaded() {
     if (!loaded) {
@@ -561,7 +576,29 @@ export function createOwnerInboxStateStore(options = {}) {
   function commitState() {
     state.updated_at = nowMs(now);
     writeStateFileAtomic(statePath, state);
+    // Notify only after a successful durable write. This also covers manual
+    // resolution, supersession and administrative removal, not just hooks.
+    for (const listener of subscribers) {
+      try { listener(); } catch (error) { log.warn(`owner inbox subscriber failed: ${error.message}`); }
+    }
     return clone(state);
+  }
+
+  function withReportRollback(mutate) {
+    const previous = state;
+    // Report transitions mutate only record fields, not their nested values.
+    // Stage shallow record copies so a failed write cannot poison deduplication
+    // or make an unpersisted answer resolution appear already completed.
+    state = { ...state,
+      streams: state.streams.map(record => ({ ...record })),
+      missions: state.missions.map(record => ({ ...record })),
+      reports: state.reports.map(record => ({ ...record })) };
+    try {
+      return mutate();
+    } catch (error) {
+      state = previous;
+      throw error;
+    }
   }
 
   function terminalStateTimestamp(report) {
@@ -783,93 +820,116 @@ export function createOwnerInboxStateStore(options = {}) {
       };
     }
 
-    const nextStream = ensureStreamRecord(state, streamId, ownerAgentId, now);
-    const nextMission = ensureMissionRecord(
-      state,
-      {
+    return withReportRollback(() => {
+      const nextStream = ensureStreamRecord(state, streamId, ownerAgentId, now);
+      const nextMission = ensureMissionRecord(
+        state,
+        {
+          stream_id: streamId,
+          mission_id: missionId,
+          owner_agent_id: ownerAgentId,
+          from_agent_id: fromAgentId
+        },
+        now
+      );
+
+      const supersedesReportId = asNonEmptyString(input.supersedes_report_id);
+      if (supersedesReportId) {
+        const superseded = findReport(state, streamId, supersedesReportId);
+        if (!superseded || superseded.from_agent_id !== fromAgentId) {
+          throw createStoreError('invalid_request', `supersedes_report_id is invalid for ${streamId}:${supersedesReportId}`);
+        }
+        if (isUnresolvedLifecycleState(superseded.lifecycle_state)) {
+          superseded.lifecycle_state = 'superseded';
+          superseded.superseded_at = nowMs(now);
+        }
+      }
+
+      const ts = asTimestamp(input.ts, nowMs(now));
+      const kind = normalizeReportKind(input.kind);
+
+      // Supersede an identical repeat from the same helper rather than stacking
+      // it. A helper parked on a CLI feedback survey emitted the same blocked
+      // report every thirty seconds; twenty-two copies, each carrying a full pane
+      // dump as detail, buried the done report the owner was waiting for and made
+      // one listing enormous. Same agent, same mission, same kind, same words is
+      // the same event still happening, not a new one.
+      const repeatDetail = asNonEmptyString(input.detail);
+      for (let i = state.reports.length - 1; i >= 0; i -= 1) {
+        const prior = state.reports[i];
+        if (prior.stream_id !== streamId || prior.from_agent_id !== fromAgentId) {
+          continue;
+        }
+        if (!isUnresolvedLifecycleState(prior.lifecycle_state)) {
+          continue;
+        }
+        if (!(input.source === 'mh_hook' && !asNonEmptyString(input.request_id))
+            && prior.mission_id === missionId && prior.kind === kind
+            && prior.summary === summary && prior.detail === repeatDetail
+            && ['source', 'session_id', 'request_id', 'tool_name', 'tool_fingerprint', 'observation_key'].every(field =>
+              (prior[field] ?? null) === asNonEmptyString(input[field]))) {
+          prior.lifecycle_state = 'superseded';
+          prior.superseded_at = nowMs(now);
+        }
+        break;
+      }
+
+      const report = {
         stream_id: streamId,
         mission_id: missionId,
+        report_id: reportId,
         owner_agent_id: ownerAgentId,
-        from_agent_id: fromAgentId
-      },
-      now
-    );
+        from_agent_id: fromAgentId,
+        kind,
+        ...reportObservationFields(input),
+        summary,
+        detail: asNonEmptyString(input.detail),
+        requested_action: normalizeRequestedAction(input.requested_action),
+        blocking: asBoolean(input.blocking, deriveDefaultBlocking(kind)),
+        severity: asSeverity(input.severity, null),
+        supersedes_report_id: supersedesReportId,
+        ts,
+        accepted_at: nowMs(now),
+        acceptance_order: nextAcceptanceOrder(state, streamId),
+        lifecycle_state: 'delivered_to_inbox',
+        seen_at: 0,
+        acted_at: 0,
+        resolved_at: 0,
+        superseded_at: 0,
+        dismissed_at: 0,
+        stale_reason: null
+      };
+      state.reports.push(report);
+      nextStream.updated_at = report.accepted_at;
+      nextMission.updated_at = report.accepted_at;
+      commitState();
+      return {
+        ok: true,
+        transport_state: 'accepted',
+        reason: null,
+        report: clone(report),
+        stream: clone(nextStream),
+        mission: clone(nextMission),
+        idempotent: false
+      };
+    });
+  }
 
-    const supersedesReportId = asNonEmptyString(input.supersedes_report_id);
-    if (supersedesReportId) {
-      const superseded = findReport(state, streamId, supersedesReportId);
-      if (!superseded || superseded.from_agent_id !== fromAgentId) {
-        throw createStoreError('invalid_request', `supersedes_report_id is invalid for ${streamId}:${supersedesReportId}`);
-      }
-      if (isUnresolvedLifecycleState(superseded.lifecycle_state)) {
-        superseded.lifecycle_state = 'superseded';
-        superseded.superseded_at = nowMs(now);
-      }
+  function attachNativeInput(input = {}) {
+    ensureLoaded();
+    const report = findReport(state, input.stream_id, input.report_id);
+    if (!report || !isUnresolvedLifecycleState(report.lifecycle_state) || report.source !== 'stuck_detector'
+        || report.kind !== 'blocked' || input.kind !== 'blocked' || input.source !== 'mh_hook'
+        || !approvalActionMatches(input, report)
+        || ['mission_id', 'from_agent_id', 'owner_agent_id'].some(field => report[field] !== input[field])) {
+      throw createStoreError('invalid_request', 'native input must match the observed approval');
     }
-
-    const ts = asTimestamp(input.ts, nowMs(now));
-    const kind = normalizeReportKind(input.kind);
-
-    // Supersede an identical repeat from the same helper rather than stacking
-    // it. A helper parked on a CLI feedback survey emitted the same blocked
-    // report every thirty seconds; twenty-two copies, each carrying a full pane
-    // dump as detail, buried the done report the owner was waiting for and made
-    // one listing enormous. Same agent, same mission, same kind, same words is
-    // the same event still happening, not a new one.
-    const repeatDetail = asNonEmptyString(input.detail);
-    for (let i = state.reports.length - 1; i >= 0; i -= 1) {
-      const prior = state.reports[i];
-      if (prior.stream_id !== streamId || prior.from_agent_id !== fromAgentId) {
-        continue;
-      }
-      if (!isUnresolvedLifecycleState(prior.lifecycle_state)) {
-        continue;
-      }
-      if (prior.mission_id === missionId && prior.kind === kind
-          && prior.summary === summary && prior.detail === repeatDetail) {
-        prior.lifecycle_state = 'superseded';
-        prior.superseded_at = nowMs(now);
-      }
-      break;
-    }
-
-    const report = {
-      stream_id: streamId,
-      mission_id: missionId,
-      report_id: reportId,
-      owner_agent_id: ownerAgentId,
-      from_agent_id: fromAgentId,
-      kind,
-      summary,
-      detail: asNonEmptyString(input.detail),
-      requested_action: normalizeRequestedAction(input.requested_action),
-      blocking: asBoolean(input.blocking, deriveDefaultBlocking(kind)),
-      severity: asSeverity(input.severity, null),
-      supersedes_report_id: supersedesReportId,
-      ts,
-      accepted_at: nowMs(now),
-      acceptance_order: nextAcceptanceOrder(state, streamId),
-      lifecycle_state: 'delivered_to_inbox',
-      seen_at: 0,
-      acted_at: 0,
-      resolved_at: 0,
-      superseded_at: 0,
-      dismissed_at: 0,
-      stale_reason: null
-    };
-    state.reports.push(report);
-    nextStream.updated_at = report.accepted_at;
-    nextMission.updated_at = report.accepted_at;
-    commitState();
-    return {
-      ok: true,
-      transport_state: 'accepted',
-      reason: null,
-      report: clone(report),
-      stream: clone(nextStream),
-      mission: clone(nextMission),
-      idempotent: false
-    };
+    return withReportRollback(() => {
+      const report = findReport(state, input.stream_id, input.report_id);
+      Object.assign(report, reportObservationFields(input));
+      commitState();
+      return { ok: true, transport_state: 'accepted', idempotent: true, report: clone(report) };
+    });
   }
 
   function updateReportLifecycle(input = {}) {
@@ -895,35 +955,38 @@ export function createOwnerInboxStateStore(options = {}) {
       };
     }
 
-    const ts = nowMs(now);
-    report.lifecycle_state = nextAction;
-    if (nextAction === 'seen_by_owner') {
-      report.seen_at = ts;
-    } else if (nextAction === 'acted_on') {
-      report.acted_at = ts;
-      if (!report.seen_at) {
+    return withReportRollback(() => {
+      const report = findReport(state, streamId, reportId);
+      const ts = nowMs(now);
+      report.lifecycle_state = nextAction;
+      if (nextAction === 'seen_by_owner') {
         report.seen_at = ts;
-      }
-    } else if (nextAction === 'resolved') {
-      report.resolved_at = ts;
-      if (!report.seen_at) {
-        report.seen_at = ts;
-      }
-      if (!report.acted_at) {
+      } else if (nextAction === 'acted_on') {
         report.acted_at = ts;
+        if (!report.seen_at) {
+          report.seen_at = ts;
+        }
+      } else if (nextAction === 'resolved') {
+        report.resolved_at = ts;
+        if (!report.seen_at) {
+          report.seen_at = ts;
+        }
+        if (!report.acted_at) {
+          report.acted_at = ts;
+        }
+      } else if (nextAction === 'dismissed') {
+        report.dismissed_at = ts;
+        if (!report.seen_at) {
+          report.seen_at = ts;
+        }
       }
-    } else if (nextAction === 'dismissed') {
-      report.dismissed_at = ts;
-      if (!report.seen_at) {
-        report.seen_at = ts;
-      }
-    }
-    commitState();
-    return {
-      ok: true,
-      noop: false,
-      report: clone(report)
-    };
+      commitState();
+      return {
+        ok: true,
+        noop: false,
+        report: clone(report)
+      };
+    });
   }
 
   function closeStream(input = {}) {
@@ -1035,11 +1098,17 @@ export function createOwnerInboxStateStore(options = {}) {
 
   return {
     statePath,
+    subscribe(listener) {
+      if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
     load,
     getState,
     listReports,
     getInboxView,
     submitReport,
+    attachNativeInput,
     updateReportLifecycle,
     closeStream,
     pruneTerminalReports,

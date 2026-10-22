@@ -1,0 +1,82 @@
+{
+  "provenance": "Synthetic regression data modelling CLI event/layout contracts. Paths, identities and timestamps are fictitious. This fixture is not live-run evidence.",
+  "hooks": [
+    {
+      "observed_at": "2000-01-01T21:29:14.817Z",
+      "runtime": "codex",
+      "native_event": "Interrupt",
+      "payload": {
+        "hook_event_name": "Interrupt",
+        "session_id": "ccb31bb0-504e-5d40-9010-272e4e88b77d",
+        "turn_id": "f7856c95-8083-5754-b5df-77ef6bc072ec",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "observed_at": "2000-01-01T21:27:42.566Z",
+      "runtime": "codex",
+      "native_event": "PermissionRequest",
+      "payload": {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "ccb31bb0-504e-5d40-9010-272e4e88b77d",
+        "turn_id": "f7856c95-8083-5754-b5df-77ef6bc072ec",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_UI_REFUSED > /home/tester/Workspace/Agent/2000-01-01/case-1/agent-test-validation/ui-roundtrip-20000101/workspace/refused-ui.txt",
+          "description": "May I write this disposable test marker for the normal approval test?"
+        },
+        "permission_mode": "default"
+      }
+    }
+  ],
+  "screen": [
+    "  Worked for 1m 27s • 06:25",
+    "",
+    "",
+    "› Use exec_command exactly once with cmd equal to \"printf TEST_UI_ALLOW_OK\", sandbox_permissions=\"require_escalated\", and a justification",
+    "  asking approval to print the harmless test token. Wait for normal approval. Use no other tools, files, agents, or integrations. If",
+    "  allowed reply only TEST_ALLOWED; if refused do not retry.",
+    "",
+    "",
+    "• I’ll request approval to print the harmless test token.",
+    "",
+    "✔ You approved codex to run printf TEST_UI_ALLOW_OK this time",
+    "",
+    "• Ran printf TEST_UI_ALLOW_OK",
+    "  └ TEST_UI_ALLOW_OK",
+    "",
+    "• TEST_ALLOWED",
+    "",
+    "  Worked for 50s • 06:27",
+    "",
+    "",
+    "› Use exec_command exactly once with cmd equal to \"printf TEST_UI_REFUSED > /home/tester/Workspace/Agent/2000-01-01/case-1/agent-live-",
+    "  validation/ui-roundtrip-20000101/workspace/refused-ui.txt\", sandbox_permissions=\"require_escalated\", and a justification asking normal",
+    "  approval for this disposable test marker. Do not execute anything first. Wait for my decision. If refused do not retry or use another",
+    "  tool. Do not read files, invoke agents, or integrations.",
+    "",
+    "",
+    "• I’ll request approval to write the disposable test marker.",
+    "",
+    "◦ Running printf TEST_UI_REFUSED > /home/tester/Workspace/Agent/2000-01-01/case-1/agent-test-validation/ui-roundtrip-20000101/workspace/",
+    "  │ refused-ui.txt",
+    "",
+    "",
+    "  Would you like to run the following command?",
+    "",
+    "  Environment: local",
+    "",
+    "  Reason: May I write this disposable test marker for the normal approval test?",
+    "",
+    "  $ printf TEST_UI_REFUSED >",
+    "  /home/tester/Workspace/Agent/2000-01-01/case-1/agent-test-validation/ui-roundtrip-20000101/workspace/refused-ui.txt",
+    "",
+    "",
+    "  1. Yes, proceed (y)",
+    "  2. Yes, and don't ask again for commands that start with `printf TEST_UI_REFUSED > /home/tester/Workspace/Agent/2000-01-01/case-1/agent-",
+    "     live-validation/ui-roundtrip-20000101/workspace/refused-ui.txt` (p)",
+    "› 3. No, and tell Codex what to do differently (esc)",
+    "",
+    "  Press enter to confirm or esc to cancel"
+  ]
+}

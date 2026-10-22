@@ -12,7 +12,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime antigravity --event idle_after_response",
+        "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime antigravity --event Stop",
         "timeout": 5
       }
     ]
@@ -29,6 +29,39 @@
             "timeout": 5
           }
         ]
+      }
+    ]
+  },
+  "minimum-headroom-input-observer": {
+    "PreToolUse": [
+      {
+        "matcher": "ask_question|ask_permission",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime antigravity --stdout-mode silent --event PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime antigravity --stdout-mode silent --event PostToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime antigravity --stdout-mode silent --event PreInvocation",
+        "timeout": 5
       }
     ]
   }

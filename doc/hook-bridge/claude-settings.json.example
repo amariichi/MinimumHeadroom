@@ -2,22 +2,21 @@
   "hooks": {
     "Notification": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event permission_required"
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event Notification"
           }
-        ]
+        ],
+        "matcher": "idle_prompt|elicitation_dialog|elicitation_url_dialog"
       }
     ],
     "Stop": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event idle_after_response"
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event Stop"
           }
         ]
       }
@@ -27,7 +26,64 @@
         "hooks": [
           {
             "type": "command",
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event UserPromptSubmit"
+          },
+          {
+            "type": "command",
             "command": "/abs/path/to/scripts/situation-context-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event PermissionRequest"
+          }
+        ],
+        "matcher": ".*"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event PreToolUse"
+          }
+        ],
+        "matcher": "AskUserQuestion|ExitPlanMode"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event PostToolUse"
+          }
+        ],
+        "matcher": ".*"
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event StopFailure"
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/scripts/mh-hook.mjs --runtime claude --event PostToolBatch"
           }
         ]
       }

@@ -43,7 +43,7 @@
 - **オペレーター入力** — 端末直接入力、ブラウザ PTT（JA/EN ASR）、テキスト入力、デスクトップの `Space`/`Shift+Space` 長押し安全装置、キー操作（`Esc`, `↑`, `Select`, `↓`）
 - **通訳スタック** — 英語表記の専用モバイル画面、自動言語判定、サーバー側で保持する 2 言語の会話状態、音声による翻訳先指定、Atom VAD による自動ターン、4 つのローカル起動プリセット
 - **ターミナルミラー** — tmux 末尾出力の読み取り専用スナップショット（500ms、変更時のみ）。実機の幅そのままで描画され、長い行は横スクロール。タッチ端末では指の位置を中心にピンチズーム、ダブルタップで等倍復帰
-- **マルチエージェント**（実験的） — デスクトップのタイルまたはモバイルのリストからヘルパーの生成/フォーカス/削除、権限プリセット、ミッション割当・配信、owner inbox を操作できます。バックグラウンドの停止検出が各ヘルパーの tmux ペインを監視し、既知の CLI モーダル（承認プロンプト、モデルピッカー、利用上限通知、サーベイ）を検出すると owner inbox に自動で `blocked` レポートを投函するので、ポーリング不要で停止に気づけます。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
+- **マルチエージェント**（実験的） — ヘルパーへ作業を委任し、質問・承認待ち・結果をオーナー受信箱で確認できます。CLI の応答が終わっただけでは作業完了にしません。[マルチエージェントガイド](doc/guides/multi-agent.md#japanese)を参照。
 - **M12 視覚** — AtomS3R-M12 カメラ + diffusiongemma（vLLM）による画像説明、変化判定付き SQLite メモリと段階的な要約、`GET /situation` の要約注入、訂正、キーワード監視、Echo Base 音声アラートを提供します。[M12 Vision Guide](doc/guides/m12-vision.md#japanese) を参照。
 - **MCP シグナリング** — `face.event` / `face.say` / `face.ping`、汎用 `media.play` / `media.stop` / `media.status`（[連携ガイド](doc/guides/generic-browser-media.md#japanese)）、エージェントライフサイクルツール（`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`）
 - **3D フェイス** — 眉・目・口・頭のアニメーション、状態モード（`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`）、ドラッグ制御、パネル切替
@@ -445,6 +445,15 @@ export MH_MEDIA_ALLOWED_ENDPOINTS=http://127.0.0.1:9000/audio.mp3
 
 個人用ローカル設定ファイルはリポジトリにコミットしないでください。
 
+導入は **MH のインストール → MCP 接続 → hook の設定・確認 → 配送の動作確認** の4段階です。
+
+1. [クイックスタート](#ja-quick-start)を済ませ、MH アプリを起動します。
+2. 以下のエージェント別手順で CLI に MH の MCP サーバーを登録します。MCP はツールを利用可能にする接続です。エージェントに `face_ping` を呼ばせ、接続を確認してください。
+3. 質問・承認待ち・応答状態を通知する hook を設定します。[RMH ランチャ](examples/rmh-voice-mode/README.md)では Claude/Codex に起動単位の MCP・hook 設定を渡し、agy では MH プラグインをインストール・同期します。ほかの起動方法では各手順に沿った登録が必要です。Codex はさらに `/hooks` で実際のコマンドを確認し、信頼を承認します。
+4. 対象 hook が有効であることを確認し、無害なヘルパーの質問・回答・明示的な完了報告を試します。正しい受信箱への到着と、対応する待ちの解除を確認してください。設定の保存や MCP ping の成功だけでは、hook の実行・配送までは確認できません。
+
+既存設定には必要な項目だけをマージし、モデル・ログイン・権限設定を残してください。更新やチェックアウトの移動後はパスと hook の要確認表示を見直します。信頼は定義と読み込み元に対応するため、同じなら再利用できます。詳しくは [hook の設定・移行手順](doc/hook-bridge/README.md#japanese)を参照してください。
+
 ### Claude Code
 
 CLI で MCP サーバーを追加:
@@ -452,14 +461,24 @@ CLI で MCP サーバーを追加:
 ```bash
 claude mcp add --transport stdio \
   --env FACE_WS_URL=ws://127.0.0.1:8765/ws \
-  minimum-headroom -- /ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh
+  minimum_headroom -- /ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh
 ```
 
 権限プリセットとセキュリティ強化の詳細は [Claude Code setup](doc/examples/claude-code/README.md) を参照。
 
 ### Codex CLI
 
-`doc/examples/codex/config.toml` をテンプレートとして使い、`~/.codex/config.toml` またはプロジェクト内 `.codex/config.toml` に配置。絶対パスは各自の環境に合わせてください。
+手動設定では Codex の CLI で、設定全体を置き換えず MCP 項目を追加できます（CLI 0.163.0 で確認）。`minimum_headroom` が未登録の場合に使い、既存ならその項目を確認・更新してください。
+
+```bash
+codex mcp add --env FACE_WS_URL=ws://127.0.0.1:8765/ws \
+  --env MCP_TOOL_NAME_STYLE=underscore minimum_headroom -- \
+  /ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh
+```
+
+これは MCP だけの登録です。hook の設定・信頼確認は、以下と [hook ガイド](doc/hook-bridge/README.md#japanese)に従って別に行います。
+
+手動起動では [Codex 設定例](doc/examples/codex/config.toml)の必要な項目を `~/.codex/config.toml`、または信頼済みプロジェクトの設定1か所へマージし、仮のパスを置き換えてください。既存ファイル全体を上書きせず、同じ hook を両方へ登録しないでください。読み込み元が複数あると加算されます。
 
 ```toml
 [mcp_servers.minimum_headroom]
@@ -474,61 +493,22 @@ face-app をループバック以外にバインドして `MH_FACE_AUTH_TOKEN` �
 
 ### Antigravity (CLI と GUI)
 
-`agy` ターミナル CLI と Antigravity GUI（Electron アプリ）の両方に対応します。両者は `~/.gemini/` を共有しますが **MCP サーバー・スキルの読み取りパスが異なる**ので、導入手順も別です — 詳細マトリクスは [Antigravity setup](doc/examples/antigravity/README.md) を参照。CLI は `agy plugin install` で `~/.gemini/antigravity-cli/plugins/` へ、GUI は `~/.gemini/config/mcp_config.json` を直接読み、スキルは `~/.gemini/config/plugins/` 配下を見ます。hook は `hooks.json` を利用できます。現行ビルドでは共有 `~/.gemini/settings.json` スニペットも使えます。事前に `mcp_config.json`、`hooks.json`、`settings-hooks.snippet.json` の `/ABS/PATH/minimum-headroom` をご自分のチェックアウトの絶対パスへ置換してください。
+`agy` CLI とデスクトップアプリの設定場所は、利用する版によって異なります。CLI を手動登録する場合は、[設定例](doc/examples/antigravity/README.md)の `/ABS/PATH/minimum-headroom` をチェックアウトのパスに置き換えてから実行します。
 
 ```bash
-# 0. doc/examples/antigravity/{mcp_config.json,hooks.json,settings-hooks.snippet.json} の
-#    /ABS/PATH/minimum-headroom を絶対パスへ置換
-# coding agentが共有するskill正本を優先し、その構成がないhostでは
-# check-in済みの可搬fallbackを使う
-MH_OPS_SKILL="${MH_SHARED_SKILLS_DIR:-$HOME/.agents/skills}/minimum-headroom-ops/SKILL.md"
-[[ -f "$MH_OPS_SKILL" ]] || MH_OPS_SKILL=doc/examples/skills/minimum-headroom-ops/SKILL.md
-
-# --- CLI (agy) ---
-agy plugin install doc/examples/antigravity                   # 冪等
-# 任意: スキルも入れて /skills に出るようにする
-mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
-cp "$MH_OPS_SKILL" \
-   ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
-
-# --- GUI ---
-# 1. ~/.gemini/config/mcp_config.json に mcp_config.json をマージ
-#    （このファイルが 0 バイトだと全 MCP が無音で落ちるトラップ。要確認）
-# 2. plugin.json + skill を ~/.gemini/config/plugins/minimum-headroom/ 配下に配置
-mkdir -p ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops
-cp doc/examples/antigravity/plugin.json \
-   ~/.gemini/config/plugins/minimum-headroom/plugin.json
-cp "$MH_OPS_SKILL" \
-   ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
-
-# --- 共通: hook ---
-# doc/examples/antigravity/hooks.json を使うか、plugin hooks を読まない agy ビルドでは
-# settings-hooks.snippet.json を ~/.gemini/settings.json にマージ
+agy plugin install doc/examples/antigravity
+agy plugin list --json
 ```
 
-インストール後 `agy` を再起動、GUI は **完全終了 → 再起動** (タスクトレイに残ったままだと設定を読み直しません)。CLI なら `/mcp`、GUI ならチャットで `List every MCP tool you can call right now` と聞くと `minimum_headroom` の `face_event` / `face_say` / `face_ping` 及びエージェントライフサイクルツールが列挙されます。
+hook やスキルの確認・更新には、一覧の `minimum-headroom` が示すパスを使ってください。現行版では `~/.gemini/config/plugins/`、旧版では `~/.gemini/antigravity-cli/plugins/` が使われる場合があります。[RMH ランチャ](examples/rmh-voice-mode/README.md)なら CLI プラグインを自動登録します。デスクトップの MCP 登録と任意のスキルコピーは[既存の設定ガイド](doc/examples/antigravity/README.md)を参照し、共有設定の無関係な項目は残してください。
 
-詳細パスマトリクス、よくある失敗パターン（特に GUI の 0 バイト `mcp_config.json` トラップ）、権限プリセット、`GEMINI.md` ルール配置は [Antigravity setup](doc/examples/antigravity/README.md) を参照。RMH 音声優先ランチャ `examples/rmh-voice-mode/start-rmh.sh --agent agy` は CLI のプラグインインストールをマシン固有のパス解決込みで自動実行します。
+設定後は CLI を再起動し、デスクトップは完全終了して起動し直します。CLI の `/mcp`、またはデスクトップのチャットで利用可能な MCP ツールを確認し、`minimum_headroom` の `face_ping`・`face_event`・`face_say` とエージェント管理ツールがあることを確かめます。hook の配送は、別に `/hooks` と無害な質問・回答で確認してください。
 
 agy 1.1.1 でも、RMH と管理対象ヘルパーは対話型 TUI 経路で動くため、print mode の変更の影響を受けません。
 ランチャは `agy models` に表示される名前を `--model '<name>'` で受け取り、利用可能なら
 `~/.agents/skills` の正本をプラグインへ同期します。agy を別の自動化に組み込む場合は `agy -p -` を使わず、
 標準入力を渡すときは prompt flag 自体を省略してください。詳細は
 [agy 1.1.1 互換メモ](doc/examples/antigravity/README.md#print-mode-on-agy-111)を参照してください。
-
-### Hook ブリッジ（face_say の安全網）
-
-エージェントが `face_say` を呼び忘れて承認待ちで沈黙した場合や、最終レポートなしでターンが終わった場合に、ランタイムの hook 機構から自動的にフェイスを喋らせる仕組みです。Claude Code / Codex（新 `hooks` 系）/ Antigravity CLI に対応。
-
-- ドロップインの設定例: `doc/hook-bridge/`
-- 各ランタイムのセットアップ README（Claude / Codex / Antigravity）にも同じスニペットを掲載
-- 詳細な設定手順: `doc/hook-bridge/README.md`
-
-`MH_FACE_AGENT_ID` がエージェントプロセスに設定されていないとき hook は何もせず exit 0 で終了するため、関係ない別セッションには影響しません。発話テンプレートは `~/.minimum-headroom/face-templates.json` で上書き可能（無い場合は日本語 + 英語の組込みデフォルト）。言語は直近の `face_say` 履歴から自動判定（CJK 文字 → `ja`、それ以外 → `en`）、`MH_FACE_LANG` がフォールバック。
-
-Codex はユーザー定義 hook を起動時に未信頼として静かにスキップするため、`~/.codex/config.toml` に hook 設定を追加した後に **1 回だけ** trust 付与が必要です。trust はユーザー単位の `[hooks.state.*]` に永続化されるので、同じユーザーで起動する以降の全 codex プロセス（オペレーターが生成するヘルパーも含む）が自動的に trust 状態を引き継ぎます。ヘルパーペインに毎回入って trust 操作する必要はありません。
-
-最も簡単なのは同梱の `./scripts/grant-codex-hook-trust.sh` を実行する方法（裏側で短命 codex を 1 つ立てて自動的に trust → 終了）。手動でやる場合は普段使いの codex で 1 回 `/hooks` を開いて trust → 閉じる、で同じ効果。再 trust が必要になるのは hook のコマンドや matcher を編集したときだけです。詳細は `doc/hook-bridge/README.md`。
 
 ### エージェント指示の設定
 
@@ -564,6 +544,14 @@ MCP クライアントがドット付きツール名（例: `face.event`、`medi
 - [マルチエージェントガイド](doc/guides/multi-agent.md#japanese) — ヘルパーの生成、権限プリセット、ミッション割当、owner inbox、ワークツリー分離、セキュリティ強化
 - [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#japanese) — **顔 AtomS3R:** ハンズフリー VAD 経路、書き込み＋USB プロビジョニング、RMS と Silero、ADPCM、各チューニング（endSilence / 閾値 / 末尾フレーム / maxUtterance）、PTT、トラブルシュート
 - [Tailscale トラベルルーター手順](doc/guides/tailscale-travel-router-setup.md#japanese) — Tailscale 非対応デバイス（AtomS3R 等）を、Tailscale 対応トラベルルーター経由で PC から到達させるサブネットルーティングの手順。**双方向の ACL**（PC→デバイス／デバイス→PC＝顔の WebSocket ポート）を解説。デバイス→PC は ACL の `src` をトラベルルーターの **LAN CIDR** にする必要がある（ルーターはデバイスの元の送信元 IP をそのまま中継するため、ノード/グループ指定だけでは一致しない）。
+
+## Hook ブリッジ
+
+エージェントが MH ツールを呼ばない場合も、hook が質問・承認待ち・応答状態を通知します。ヘルパーの作業完了には、引き続き明示的な `done` または `review_findings` レポートが必要です。ブリッジは状態を観測し、コマンドを自動承認しません。 自動音声は承認・回答・選択の待ちを区別し、解消した通知を取り消しながら、ほかの待ちは保持します。
+
+Codex は普段使うのと同じ起動方法で立ち上げ、`/hooks` で読み込み元とコマンドを確認し、意図した MH 定義だけを信頼してください。有効になったことも確認します。定義やパスが変わったら見直しますが、バージョン更新だけで必ず全件の再承認が必要になるわけではありません。既存のグローバル hook も読み込まれるため、移行前に旧定義との重複を確認してください。
+
+エージェント別の手順、対応範囲、安全な移行、動作確認は [Hook ブリッジの設定](doc/hook-bridge/README.md#japanese)にまとめています。
 
 ## オプションスキル
 

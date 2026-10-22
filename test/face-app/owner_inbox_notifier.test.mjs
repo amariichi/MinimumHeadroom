@@ -59,7 +59,7 @@ test('owner inbox notifier interrupts for blocked and waits its turn for done', 
   const blockedSay = blockedServer.sent[1];
   assert.equal(blockedSay.policy, 'interrupt');
   assert.equal(blockedSay.priority, 3);
-  assert.equal(blockedServer.sent[0].name, 'permission_required');
+  assert.equal(blockedServer.sent[0].name, 'needs_attention');
 
   const doneServer = createServerSpy();
   await notifier.notify({ report: baseReport, server: doneServer });

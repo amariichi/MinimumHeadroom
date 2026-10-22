@@ -53,10 +53,13 @@ test('parseStdinPayload parses JSON and tolerates noise', () => {
   assert.equal(parseStdinPayload('not json'), null);
 });
 
-test('detectCanonicalEvent maps Claude Notification → permission_required', () => {
-  const detection = detectCanonicalEvent({ payload: { hook_event_name: 'Notification' }, explicitEvent: null });
-  assert.equal(detection.event, 'permission_required');
+test('detectCanonicalEvent ignores Claude permission reminders, including old explicit overrides', () => {
+  const detection = detectCanonicalEvent({ payload: { hook_event_name: 'Notification', notification_type: 'permission_prompt' }, explicitEvent: null });
+  assert.equal(detection.event, null);
+  assert.equal(detection.reason, 'uncorrelated_permission_reminder');
   assert.equal(detection.source, 'hook_event_name');
+  assert.equal(detectCanonicalEvent({ runtime: 'claude', payload: { hook_event_name: 'Notification',
+    notification_type: 'permission_prompt' }, explicitEvent: 'permission_required' }).event, null);
 });
 
 test('detectCanonicalEvent maps Claude Stop → idle_after_response', () => {
@@ -96,9 +99,9 @@ test('runHookCli sends a hook payload when MH_FACE_AGENT_ID is set and event is 
   const stderr = makeStderr();
   const stdout = makeStdout();
   const result = await runHookCli({
-    argv: ['--runtime', 'antigravity'],
+    argv: ['--runtime', 'claude'],
     env: { MH_FACE_AGENT_ID: 'helper-1', FACE_WS_URL: 'ws://ignored/ws' },
-    stdin: makeStdin(JSON.stringify({ hook_event_name: 'Notification', session_id: 'sess-A' })),
+    stdin: makeStdin(JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', session_id: 'sess-A' })),
     stderr,
     stdout,
     now: () => 1000,
@@ -110,7 +113,7 @@ test('runHookCli sends a hook payload when MH_FACE_AGENT_ID is set and event is 
   assert.equal(result.delivered, true);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].url, 'ws://ignored/ws');
-  assert.equal(stdout.text(), '{"decision":"ask"}\n');
+  assert.equal(stdout.text(), '');
   assert.deepEqual(sent[0].payload, {
     v: 1,
     type: 'hook',
@@ -118,8 +121,8 @@ test('runHookCli sends a hook payload when MH_FACE_AGENT_ID is set and event is 
     agent_id: 'helper-1',
     ts: 1000,
     event: 'permission_required',
-    runtime: 'antigravity',
-    meta: { source: 'mh_hook' }
+    runtime: 'claude',
+    meta: { source: 'mh_hook', native_event: 'PermissionRequest', tool_name: 'Bash' }
   });
 });
 
@@ -129,7 +132,7 @@ test('runHookCli exits cleanly without sending when MH_FACE_AGENT_ID is missing'
   const result = await runHookCli({
     argv: ['--runtime', 'claude'],
     env: {},
-    stdin: makeStdin(JSON.stringify({ hook_event_name: 'Notification' })),
+    stdin: makeStdin(JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' })),
     stderr,
     send: async (...args) => {
       sent.push(args);
@@ -231,7 +234,7 @@ test('runHookCli forwards send errors as a clean reason and never throws', async
   const result = await runHookCli({
     argv: ['--runtime', 'claude'],
     env: { MH_FACE_AGENT_ID: 'helper-1' },
-    stdin: makeStdin(JSON.stringify({ hook_event_name: 'Notification' })),
+    stdin: makeStdin(JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' })),
     stderr,
     send: async () => {
       throw new Error('connection refused');

@@ -29,6 +29,8 @@ writeFileSync(process.env.RMH_FAKE_CODEX_ARGV, JSON.stringify({
     env: {
       ...process.env,
       ...extraEnv,
+      XDG_RUNTIME_DIR: path.join(tmp, 'runtime'),
+      RMH_WITH_VISION: '0',
       PATH: `${tmp}${path.delimiter}${process.env.PATH}`,
       CODEX_HOME: '/tmp/rmh-existing-codex-home',
       RMH_FAKE_CODEX_ARGV: output
@@ -53,7 +55,7 @@ writeFileSync(process.env.RMH_FAKE_CODEX_ARGV, JSON.stringify({
   }
 }
 
-test('start-rmh codex keeps normal CODEX_HOME and adds UserPromptSubmit only when situation injection is enabled', async () => {
+test('start-rmh codex keeps normal CODEX_HOME, always observes resumption and gates only situation injection', async () => {
   const withInjection = await runLauncherWithFakeCodex({
     MH_SITUATION_INJECT: '1'
   });
@@ -67,5 +69,12 @@ test('start-rmh codex keeps normal CODEX_HOME and adds UserPromptSubmit only whe
   });
   assert.equal(withoutInjection.env.CODEX_HOME, '/tmp/rmh-existing-codex-home');
   assert.equal(withoutInjection.env.MH_SITUATION_INJECT, '0');
-  assert.equal(withoutInjection.argv.some((arg) => arg.includes('hooks.UserPromptSubmit')), false);
+  assert.equal(withoutInjection.argv.some((arg) => arg.includes('hooks.UserPromptSubmit')), true);
+  assert.equal(withoutInjection.argv.some((arg) => arg.includes('situation-context-hook-codex.mjs')), false);
+  for (const event of ['PermissionRequest', 'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'Interrupt', 'SessionEnd']) {
+    const definition = withoutInjection.argv.find(arg => arg.startsWith(`hooks.${event}=`));
+    assert.ok(definition, `canonical launch observes ${event}`);
+    assert.ok(definition.includes(`scripts/mh-hook.mjs --runtime codex --event ${event}`));
+    assert.equal(definition.includes('codex-hook.mjs'), false, 'normal launch never uses the test collector');
+  }
 });

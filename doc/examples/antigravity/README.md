@@ -1,13 +1,13 @@
 # Antigravity setup (CLI and GUI)
 
-Antigravity ships in two shapes — the `agy` terminal CLI and the Electron desktop app (Antigravity GUI). They share `~/.gemini/` but **read MCP servers and skills from different paths**. This directory contains files that work for both; the difference is where you put them.
+Antigravity provides the `agy` terminal CLI and a desktop app. They share `~/.gemini/`; MCP configuration and plugin locations depend on the interface and installed version. For CLI plugins, use the path reported by `agy plugin list --json` rather than assuming a directory. This directory contains examples for both interfaces.
 
 | Layer        | Antigravity CLI (`agy`)                              | Antigravity GUI                                          |
 |--------------|------------------------------------------------------|----------------------------------------------------------|
 | MCP servers  | per-plugin `mcp_config.json` (installed via `agy plugin install`) | global `~/.gemini/config/mcp_config.json` |
-| Skills       | per-plugin `skills/<name>/SKILL.md` under `~/.gemini/antigravity-cli/plugins/<plugin>/` | per-plugin `skills/<name>/SKILL.md` under `~/.gemini/config/plugins/<plugin>/` |
+| Skills       | per-plugin `skills/<name>/SKILL.md` under the listed plugin path | per-plugin `skills/<name>/SKILL.md` under `~/.gemini/config/plugins/<plugin>/` |
 | Hooks        | plugin/workspace `hooks.json`; current builds can also use shared `~/.gemini/settings.json` snippets | same `hooks.json` / shared settings behavior |
-| Install path | `~/.gemini/antigravity-cli/plugins/<name>/`         | `~/.gemini/config/plugins/<name>/`                       |
+| Install path | inspect `agy plugin list --json`; current builds can use `~/.gemini/config/plugins/<name>/`, older builds use `~/.gemini/antigravity-cli/plugins/<name>/` | `~/.gemini/config/plugins/<name>/`                       |
 
 Files shipped here:
 
@@ -38,17 +38,22 @@ From the repository root:
 
     agy plugin install doc/examples/antigravity
 
-`agy plugin install` is idempotent — re-running it overwrites the previous install. The plugin lands at `~/.gemini/antigravity-cli/plugins/minimum-headroom/`. Verify:
+Reinstalling refreshes the plugin. Verify its active location before editing or validating installed files:
 
-    agy plugin list   # → minimum-headroom, source "local-install"
+    agy plugin list --json
+
+Find `minimum-headroom` and its `path`. Set the following variable to that exact path; this example matches current CLI builds:
+
+    AGY_PLUGIN_DIR="$HOME/.gemini/config/plugins/minimum-headroom"
+    agy plugin validate "$AGY_PLUGIN_DIR" --json
+
+Older builds may instead report `$HOME/.gemini/antigravity-cli/plugins/minimum-headroom`. Updating a different copy does not prove the active hooks changed. Use `/hooks` and `/mcp` in a new test session to check what actually loaded.
 
 On agy 1.0.16, `agy plugin install` may validate hooks/skills but still leave
 the CLI plugin directory with only `plugin.json` and `mcp_config.json`.
 `examples/rmh-voice-mode/start-rmh.sh --agent agy` works around that by copying
 the rendered plugin into `~/.gemini/antigravity-cli/plugins/minimum-headroom/`
-after install. If you install manually and `agy plugin validate
-~/.gemini/antigravity-cli/plugins/minimum-headroom` reports `skills: skipped`
-or `hooks: skipped`, copy the rendered plugin files into that directory too.
+after install. For that older build, if validation reports missing skills or hooks, copy the rendered files into its reported plugin directory too. Do not treat the legacy copy as authoritative for newer builds.
 
 The plugin includes MCP server registration. If you install through
 `examples/rmh-voice-mode/start-rmh.sh --agent agy`, the launcher also copies the
@@ -56,12 +61,12 @@ The plugin includes MCP server registration. If you install through
 `/skills` can see both. For a manual install from this directory, install those
 skills alongside the MCP plugin if your `agy` build does not copy them:
 
-    mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
-    mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/atoms3r-vision
+    mkdir -p "$AGY_PLUGIN_DIR/skills/minimum-headroom-ops"
+    mkdir -p "$AGY_PLUGIN_DIR/skills/atoms3r-vision"
     cp "$MH_OPS_SKILL" \
-       ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
+       "$AGY_PLUGIN_DIR/skills/minimum-headroom-ops/SKILL.md"
     cp "$MH_VISION_SKILL" \
-       ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/atoms3r-vision/SKILL.md
+       "$AGY_PLUGIN_DIR/skills/atoms3r-vision/SKILL.md"
 
 Restart `agy`, type `/mcp` inside the TUI to confirm `minimum_headroom` is loaded.
 
@@ -121,7 +126,6 @@ plugin without starting a conversation:
 
 The GUI reads its MCP server list from `~/.gemini/config/mcp_config.json`. **A common failure mode is that this file exists but is 0 bytes**, which causes `unexpected end of JSON input` in `~/.config/Antigravity/logs/language_server.log` and silently disables every MCP server. Always check the file is valid JSON before debugging anything else:
 
-    cat ~/.gemini/config/mcp_config.json | head -c 100
     node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME+"/.gemini/config/mcp_config.json","utf8"))'   # exits non-zero on parse error
 
 ### Register the MCP server
@@ -181,18 +185,20 @@ ask the agent to call `vision_situation` rather than inferring camera state from
 Antigravity's current public hook format is `hooks.json`. This directory ships `hooks.json` for plugin/workspace installs:
 
 - `PreInvocation` → `situation-context-hook-agy.mjs`: injects the AtomS3R-M12 camera situation digest as a transient `ephemeralMessage` before each model invocation. Safe-by-default: the underlying `scripts/situation-context-hook.sh` prints nothing (and the wrapper emits `{}`) unless `MH_SITUATION_INJECT=1` is set in the agy process environment, so registering it costs nothing in ordinary sessions. The wrapper derives a stable watermark key from the agy `conversationId` and passes it to the plain hook via `MH_SITUATION_SESSION_KEY`, so the salience watermark survives across invocations of the same conversation.
-- `Stop` → `mh-hook.mjs --runtime antigravity --event idle_after_response`
+- `Stop` → `mh-hook.mjs --runtime antigravity --event Stop` (response end, not explicit mission completion)
+- passive `PreToolUse` for `ask_question|ask_permission`, `PostToolUse` and `PreInvocation` observers, with `--stdout-mode silent` so they return no permission decision
 - a disabled `PreToolUse` example for approval attention, because enabling it can ask before matching tools and should be an explicit local choice.
 
+The current input observers do not make permission decisions. Keep the optional broad approval-attention example disabled unless deliberately configuring a policy. Check actual command modals as well: an ordinary `run_command` hook alone is not proof that approval is pending.
+
 The global/operator plugin deliberately does not register
-`agy-helper-policy.mjs`. Antigravity requires every `PreToolUse` hook to return
-an explicit decision, so such a hook cannot be inert in ordinary sessions.
+`agy-helper-policy.mjs`. The helper policy hook can return a `PreToolUse` decision, so it must not be confused with the passive state observer.
 `agent.spawn(permission_preset=...)` instead creates a worktree-local plugin at
 `.agents/plugins/minimum-headroom-helper-policy/` for managed agy helpers only.
 
 During migration testing, current CLI/GUI builds also accepted a shared `~/.gemini/settings.json` hook block using `Notification` and `AfterAgent`. If your installed build does not load plugin `hooks.json`, merge `settings-hooks.snippet.json` into `~/.gemini/settings.json` instead. That snippet uses `--runtime antigravity --stdout-mode silent` so no deprecated Gemini runtime name remains and no stray stdout JSON is emitted for that settings-style hook path.
 
-Restart Antigravity (CLI or GUI) after changing either hook file.
+Restart only the intended Antigravity session after changing its configuration. Verify MCP tools and actual hook delivery separately; the CLI and GUI compatibility paths do not necessarily expose the same lifecycle events. See [hook setup and verification](../../hook-bridge/README.md#english).
 
 In RMH voice-first mode the agent itself speaks every turn-end, so the `AfterAgent → idle_after_response` line is suppressed at the hook script level via `MH_HOOK_SUPPRESS_EVENTS=idle_after_response` (set automatically by `examples/rmh-voice-mode/start-rmh.sh`). See `examples/rmh-voice-mode/README.md` for details.
 
@@ -235,8 +241,8 @@ The project `AGENTS.md` (or `GEMINI.md`) rules remain part of the security model
 | Step | Command | Expected |
 |------|---------|----------|
 | CLI plugin valid | `agy plugin validate doc/examples/antigravity` | `mcpServers: 1 processed`; hooks may be processed or skipped depending on agy build |
-| CLI installed plugin complete | `agy plugin validate ~/.gemini/antigravity-cli/plugins/minimum-headroom` | `skills: 2 processed`, `mcpServers: 1 processed`, `hooks: 3 processed` for the voice-mode launcher install |
-| CLI plugin installed | `agy plugin list` | `minimum-headroom` listed as `local-install` |
+| CLI installed plugin complete | `agy plugin validate "$AGY_PLUGIN_DIR" --json` | No validation errors; current template has four hook groups including the disabled optional group. Enabled handlers cover four event kinds and five commands. |
+| CLI plugin installed | `agy plugin list --json` | `minimum-headroom` enabled, with the intended active path |
 | GUI MCP file valid | `node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME+"/.gemini/config/mcp_config.json","utf8"))'` | exits 0 |
 | GUI sees server | chat prompt in GUI: `List every MCP tool you can call right now` | response includes `face_event`, `face_say`, `face_ping` |
 | GUI sees vision tools | chat prompt in GUI: `List every MCP tool you can call right now` | response includes `vision_situation` and `vision_look` |

@@ -116,7 +116,7 @@ export function shouldUseAgentQuietPromptIdle(options = {}) {
   if (lastActivityAt <= 0) {
     return false;
   }
-  if (options.speaking === true || options.needsAttention === true || options.promptNeedsAttention === true || options.error === true) {
+  if (options.speaking === true || options.needsAttention === true || options.inputPending === true || options.promptNeedsAttention === true || options.error === true) {
     return false;
   }
   if (normalizeAgentStatus(options.agentStatus) !== 'active') {
@@ -140,7 +140,7 @@ export function deriveAgentTileTone(agent, options = {}) {
   if (options.error === true) {
     return 'error';
   }
-  if (options.needsAttention === true || options.attention === true) {
+  if (options.needsAttention === true || options.inputPending === true || options.attention === true) {
     return 'needs_attention';
   }
   if (options.promptIdle === true) {
@@ -195,7 +195,7 @@ export function deriveAgentOperationalState(agent, options = {}) {
   const hasRecentActivity = lastActivityAt > 0 && nowMs - lastActivityAt < recentActivityWindowMs;
   const finalReport = reportKind ? FINAL_ASSIGNMENT_REPORT_KINDS.has(reportKind) : false;
 
-  if (options.needsAttention === true || assignmentTone.needsAttention) {
+  if (options.needsAttention === true || options.inputPending === true || assignmentTone.needsAttention) {
     return 'needs_attention';
   }
   if (deliveryState === 'sent_to_tmux') {
@@ -203,6 +203,9 @@ export function deriveAgentOperationalState(agent, options = {}) {
   }
   if (finalReport && informationalCount > 0) {
     return 'awaiting_review';
+  }
+  if (options.responseIdle === true && options.speaking !== true) {
+    return 'idle';
   }
   if (options.speaking === true || hasRecentActivity) {
     return 'working';

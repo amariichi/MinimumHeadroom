@@ -165,8 +165,14 @@ case "$AGENT" in
     CODEX_MCP_COMMAND="$(toml_string "$MH_REPO_ROOT/scripts/run-bound-mcp-server.sh")"
     CODEX_FACE_WS_URL="$(toml_string "$FACE_WS_URL")"
     CODEX_VISION_BASE_URL="$(toml_string "$VISION_BASE_URL")"
-    CODEX_PERMISSION_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event permission_required")"
-    CODEX_STOP_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event idle_after_response")"
+    CODEX_PERMISSION_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event PermissionRequest")"
+    CODEX_STOP_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event Stop")"
+    CODEX_INPUT_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event PreToolUse")"
+    CODEX_RESOLVED_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event PostToolUse")"
+    CODEX_RESUME_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event UserPromptSubmit")"
+    CODEX_INTERRUPT_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event Interrupt")"
+    CODEX_SESSION_END_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/mh-hook.mjs --runtime codex --event SessionEnd")"
+    CODEX_SUBMIT_HOOKS="{ type = \"command\", command = $CODEX_RESUME_HOOK, timeout = 5 }"
     CODEX_USER_PROMPT_HOOK="$(toml_string "$MH_REPO_ROOT/scripts/situation-context-hook-codex.mjs")"
     CODEX_CONFIG_ARGS=(
       -c "mcp_servers.minimum_headroom.command=$CODEX_MCP_COMMAND"
@@ -174,18 +180,21 @@ case "$AGENT" in
       -c "mcp_servers.minimum_headroom.env={ FACE_WS_URL = $CODEX_FACE_WS_URL, VISION_BASE_URL = $CODEX_VISION_BASE_URL, MCP_TOOL_NAME_STYLE = \"underscore\" }"
       -c "features.hooks=true"
       -c "hooks.PermissionRequest=[{ matcher = \".*\", hooks = [{ type = \"command\", command = $CODEX_PERMISSION_HOOK, timeout = 5 }] }]"
+      -c "hooks.PreToolUse=[{ matcher = \"request_user_input\", hooks = [{ type = \"command\", command = $CODEX_INPUT_HOOK, timeout = 5 }] }]"
+      -c "hooks.PostToolUse=[{ matcher = \".*\", hooks = [{ type = \"command\", command = $CODEX_RESOLVED_HOOK, timeout = 5 }] }]"
       -c "hooks.Stop=[{ hooks = [{ type = \"command\", command = $CODEX_STOP_HOOK, timeout = 5 }] }]"
+      -c "hooks.Interrupt=[{ hooks = [{ type = \"command\", command = $CODEX_INTERRUPT_HOOK, timeout = 3 }] }]"
+      -c "hooks.SessionEnd=[{ hooks = [{ type = \"command\", command = $CODEX_SESSION_END_HOOK, timeout = 3 }] }]"
     )
     case "${MH_SITUATION_INJECT:-0}" in
       1 | true | yes | on)
         # Codex accepts UserPromptSubmit hookSpecificOutput.additionalContext.
         # Use a Codex-specific wrapper so stdout is always valid hook JSON even
         # on builds that reject plain-text UserPromptSubmit output.
-        CODEX_CONFIG_ARGS+=(
-          -c "hooks.UserPromptSubmit=[{ hooks = [{ type = \"command\", command = $CODEX_USER_PROMPT_HOOK, timeout = 5 }] }]"
-        )
+        CODEX_SUBMIT_HOOKS+=", { type = \"command\", command = $CODEX_USER_PROMPT_HOOK, timeout = 5 }"
         ;;
     esac
+    CODEX_CONFIG_ARGS+=(-c "hooks.UserPromptSubmit=[{ hooks = [$CODEX_SUBMIT_HOOKS] }]")
     # Make sure codex sees the project AGENTS.md in this folder.
     cd "$HERE"
     MODEL_ARGS=()
@@ -199,7 +208,7 @@ case "$AGENT" in
 
   agy)
     # Current agy reads MCP server registrations from installed agy plugins
-    # (`agy plugin install <dir>` → ~/.gemini/antigravity-cli/plugins/<name>/), and reads
+    # (`agy plugin list --json` reports its active path), and reads
     # hooks separately from hooks.json or ~/.gemini/settings.json depending on
     # the installed build. We idempotently render and install a complete
     # minimum-headroom plugin from templates so MH_REPO_ROOT is resolved for the
@@ -235,8 +244,9 @@ case "$AGENT" in
     fi
     # agy 1.0.16 may validate hooks/skills in the rendered plugin but still
     # leave the CLI plugin directory with only plugin.json + mcp_config.json.
-    # Make the CLI path explicit so the agy process launched below sees the
-    # same MCP, hook, and skill files that validated successfully.
+    # Retain this compatibility copy for that legacy CLI. Newer builds can load
+    # ~/.gemini/config/plugins/<name>/, which plugin install updates above;
+    # the path returned by plugin list is authoritative for manual verification.
     AGY_CLI_PLUGIN_DIR="${HOME}/.gemini/antigravity-cli/plugins/minimum-headroom"
     mkdir -p "$AGY_CLI_PLUGIN_DIR"
     cp -a "$PLUGIN_SRC/." "$AGY_CLI_PLUGIN_DIR/"

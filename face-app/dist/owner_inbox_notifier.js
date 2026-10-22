@@ -13,6 +13,8 @@
 // survey produced twenty-two blocked reports in eleven minutes, which is why
 // repeats are collapsed in the store before they reach here.
 
+import { waitSpeechSubject, waitSpeechCategory, waitSpeechLine, reportSpeechKey } from './wait_speech.js';
+
 const ANNOUNCED_KINDS = new Set(['done', 'blocked', 'question', 'review_findings']);
 
 const CJK_REGEX = /[　-ヿ㐀-䶿一-鿿ｦ-ﾟ]/;
@@ -25,14 +27,6 @@ const LINES = {
   review_findings: {
     en: (agent) => `${agent} has findings.`,
     ja: (agent) => `${agent} から指摘が来ています。`
-  },
-  blocked: {
-    en: (agent) => `${agent} is blocked.`,
-    ja: (agent) => `${agent} が止まっています。`
-  },
-  question: {
-    en: (agent) => `${agent} has a question.`,
-    ja: (agent) => `${agent} が質問しています。`
   }
 };
 
@@ -43,6 +37,7 @@ function asNonEmptyString(value) {
 export function createOwnerInboxNotifier(options = {}) {
   const log = options.log ?? console;
   const enabled = options.enabled !== false;
+  const store = options.store ?? null;
 
   function pickLanguage(report) {
     const sample = `${report?.summary ?? ''} ${report?.detail ?? ''}`;
@@ -67,9 +62,11 @@ export function createOwnerInboxNotifier(options = {}) {
       return null;
     }
     const lang = pickLanguage(report);
-    const text = LINES[kind][lang](helperId);
     const ts = Date.now();
     const blocking = kind === 'blocked' || kind === 'question';
+    const subject = waitSpeechSubject(helperId, report.runtime, lang);
+    const text = blocking ? waitSpeechLine(waitSpeechCategory(report), subject, lang) : LINES[kind][lang](subject);
+    const approval = blocking && report.attention_kind === 'approval';
     return {
       event: {
         v: 1,
@@ -77,11 +74,14 @@ export function createOwnerInboxNotifier(options = {}) {
         session_id: 'owner-inbox',
         agent_id: ownerId,
         ts,
-        name: blocking ? 'permission_required' : 'cmd_succeeded',
+        name: approval ? 'permission_required' : blocking ? 'needs_attention' : 'cmd_succeeded',
         severity: blocking ? 0.9 : 0.5,
         meta: {
           source: 'owner_inbox',
           report_kind: kind,
+          attention_kind: report.attention_kind ?? (kind === 'question' ? 'question' : blocking ? 'other' : null),
+          input_kind: report.input_kind ?? null,
+          signal_source: report.source ?? 'agent_report',
           from_agent_id: helperId,
           mission_id: report?.mission_id ?? null,
           report_id: report?.report_id ?? null
@@ -117,6 +117,11 @@ export function createOwnerInboxNotifier(options = {}) {
     if (!payloads) {
       return { ok: false, reason: 'not_announced' };
     }
+    const blocking = report.kind === 'blocked' || report.kind === 'question';
+    const isCurrent = () => !store || store.listReports({ stream_id: report.stream_id }).some(current =>
+      current.report_id === report.report_id && current.from_agent_id === report.from_agent_id
+      && current.owner_agent_id === report.owner_agent_id);
+    if (blocking && !isCurrent()) return { ok: false, reason: 'wait_resolved' };
     if (server && typeof server.broadcast === 'function') {
       try {
         server.broadcast(payloads.event);
@@ -131,7 +136,9 @@ export function createOwnerInboxNotifier(options = {}) {
     }
     if (ttsController && typeof ttsController.handleSayPayload === 'function') {
       try {
-        await ttsController.handleSayPayload(payloads.say);
+        await ttsController.handleSayPayload(payloads.say, blocking ? {
+          notificationKey: reportSpeechKey(report), isCurrent
+        } : {});
       } catch (error) {
         log.warn?.(`[owner-inbox] speak failed: ${error.message}`);
       }

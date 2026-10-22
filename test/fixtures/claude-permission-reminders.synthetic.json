@@ -1,0 +1,111 @@
+{
+  "provenance": "Synthetic regression data modelling CLI event/layout contracts. Paths, identities and timestamps are fictitious. This fixture is not live-run evidence.",
+  "cases": {
+    "question_start": {
+      "observed_at": "2000-01-02T14:50:30.478Z",
+      "canonical": {
+        "runtime": "claude",
+        "session_id": "e406d36b-1c64-51fe-8a33-1b34c1bba39c",
+        "event": "input_required",
+        "meta": {
+          "native_event": "PreToolUse",
+          "tool_name": "AskUserQuestion",
+          "tool_fingerprint": "a500e0bcedb8db4410e064d37fc4943ef58fcc03fc83f905c970b9bde1f2f527",
+          "request_id": "toolu_synthetic_5",
+          "input_kind": "choice_single"
+        }
+      }
+    },
+    "question_reminder": {
+      "observed_at": "2000-01-02T14:50:36.647Z",
+      "canonical": {
+        "runtime": "claude",
+        "session_id": "e406d36b-1c64-51fe-8a33-1b34c1bba39c",
+        "event": "permission_required",
+        "meta": {
+          "native_event": "Notification",
+          "notification_type": "permission_prompt"
+        }
+      }
+    },
+    "question_answer": {
+      "observed_at": "2000-01-02T14:51:53.509Z",
+      "canonical": {
+        "runtime": "claude",
+        "session_id": "e406d36b-1c64-51fe-8a33-1b34c1bba39c",
+        "event": "input_resolved",
+        "meta": {
+          "native_event": "PostToolUse",
+          "tool_name": "AskUserQuestion",
+          "tool_fingerprint": "ae5beb04d7f2353f12579af821833c57d08ce1f09ba599869d3cd4b0f65f51a2",
+          "request_id": "toolu_synthetic_5"
+        }
+      }
+    },
+    "question_stop": {
+      "observed_at": "2000-01-02T14:51:55.340Z",
+      "canonical": {
+        "runtime": "claude",
+        "session_id": "e406d36b-1c64-51fe-8a33-1b34c1bba39c",
+        "event": "idle_after_response",
+        "meta": {
+          "native_event": "Stop"
+        }
+      }
+    },
+    "approval_start": {
+      "observed_at": "2000-01-02T14:52:31.942Z",
+      "canonical": {
+        "runtime": "claude",
+        "session_id": "e406d36b-1c64-51fe-8a33-1b34c1bba39c",
+        "event": "permission_required",
+        "meta": {
+          "native_event": "PermissionRequest",
+          "tool_name": "Bash",
+          "tool_fingerprint": "7bd8d25cffd9c27cf4c2d854f94e06bc8bc9955ef361a0e2bcf37f853d63ef51",
+          "action_fingerprint": "556fe301fa3576edb7b19fcf8c96aa4dd84969dda4bc58225614ac73e6ef52e2",
+          "action_format": "single_line"
+        }
+      }
+    },
+    "approval_reminder": {
+      "observed_at": "2000-01-02T14:52:37.939Z",
+      "canonical": {
+        "runtime": "claude",
+        "session_id": "e406d36b-1c64-51fe-8a33-1b34c1bba39c",
+        "event": "permission_required",
+        "meta": {
+          "native_event": "Notification",
+          "notification_type": "permission_prompt"
+        }
+      }
+    },
+    "approval_result": {
+      "observed_at": "2000-01-02T14:52:57.525Z",
+      "canonical": {
+        "runtime": "claude",
+        "session_id": "e406d36b-1c64-51fe-8a33-1b34c1bba39c",
+        "event": "input_resolved",
+        "meta": {
+          "native_event": "PostToolUse",
+          "tool_name": "Bash",
+          "tool_fingerprint": "7bd8d25cffd9c27cf4c2d854f94e06bc8bc9955ef361a0e2bcf37f853d63ef51",
+          "action_fingerprint": "556fe301fa3576edb7b19fcf8c96aa4dd84969dda4bc58225614ac73e6ef52e2",
+          "action_format": "single_line",
+          "request_id": "toolu_synthetic_6"
+        }
+      }
+    },
+    "approval_stop": {
+      "observed_at": "2000-01-02T14:52:58.773Z",
+      "canonical": {
+        "runtime": "claude",
+        "session_id": "e406d36b-1c64-51fe-8a33-1b34c1bba39c",
+        "event": "idle_after_response",
+        "meta": {
+          "native_event": "Stop"
+        }
+      }
+    }
+  }
+}

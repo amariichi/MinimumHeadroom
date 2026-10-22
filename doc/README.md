@@ -29,7 +29,7 @@ subsystem-specific guides.
 
 - [System Specification](SPEC.md) - Face app, MCP server, worker, and bridge contracts. This specification is Japanese-first.
 - [Multi-Agent Orchestration Spec](multi-agent-orchestration-spec.md#english) ([日本語概要](multi-agent-orchestration-spec.md#japanese)) - Durable mission, helper lifecycle, and owner inbox semantics.
-- [Hook Bridge](hook-bridge/README.md#english) ([日本語](hook-bridge/README.md#japanese)) - Runtime hook setup for Claude, Codex, and Antigravity so permission waits and idle states still speak.
+- [Hook Bridge](hook-bridge/README.md#english) ([日本語](hook-bridge/README.md#japanese)) - MCP versus hook setup, exact Codex trust, safe migration, question/approval waits and verification.
 
 ### Examples And Subsystems
 
@@ -64,7 +64,7 @@ subsystem-specific guides.
 
 - [System Specification](SPEC.md) - face app、MCP server、worker、bridge の契約。日本語中心の仕様です。
 - [Multi-Agent Orchestration Spec](multi-agent-orchestration-spec.md#japanese) ([English](multi-agent-orchestration-spec.md#english)) - durable mission、helper lifecycle、owner inbox semantics の設計仕様。日本語概要を追加しています。
-- [Hook Bridge](hook-bridge/README.md#japanese) ([English](hook-bridge/README.md#english)) - Claude、Codex、Antigravity の hook を接続し、承認待ちや idle 状態を音声・face event に変換する設定。
+- [Hook Bridge](hook-bridge/README.md#japanese) ([English](hook-bridge/README.md#english)) - MCP と hook の設定の違い、Codex の信頼確認、安全な移行、質問・承認待ちと動作確認。
 
 ### 例とサブシステム
 

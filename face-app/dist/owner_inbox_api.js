@@ -92,6 +92,7 @@ export function createOwnerInboxApi(options = {}) {
   }
   const maxBodyBytes = parseInteger(options.maxBodyBytes, 128 * 1024, 1024);
   const onSubmitReport = typeof options.onSubmitReport === 'function' ? options.onSubmitReport : null;
+  const submitReport = options.submitReport ?? ((input) => store.submitReport(input));
 
   return {
     async handleHttpRequest(request, response) {
@@ -134,7 +135,7 @@ export function createOwnerInboxApi(options = {}) {
             return true;
           }
           const body = await readJsonBody(request, maxBodyBytes);
-          const result = store.submitReport(body);
+          const result = await submitReport(body);
           if (onSubmitReport) {
             await onSubmitReport({
               request: body,
