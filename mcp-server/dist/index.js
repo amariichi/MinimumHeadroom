@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { createFramedMessageParser, writeMessage } from './mcp_stdio.js';
+import { CANONICAL_HOOK_EVENTS } from '../../scripts/agent-hook-events.mjs';
 
 const SERVER_NAME = 'minimum-headroom';
-const SERVER_VERSION = '1.30.4';
+const SERVER_VERSION = '1.31.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const FACE_WS_URL = process.env.FACE_WS_URL ?? 'ws://127.0.0.1:8765/ws';
 const FACE_AUTH_TOKEN = (() => {
@@ -85,12 +86,13 @@ const EVENT_NAMES = new Set([
   'tests_failed',
   'tests_passed',
   'permission_required',
+  'needs_attention',
   'retrying',
   'idle',
   'idle_after_response'
 ]);
 
-const HOOK_EVENT_NAMES = new Set(['permission_required', 'idle_after_response']);
+const HOOK_EVENT_NAMES = CANONICAL_HOOK_EVENTS;
 const HOOK_RUNTIMES = new Set(['claude', 'codex', 'antigravity']);
 
 const BASE_TOOL_DEFINITIONS = [
@@ -159,7 +161,7 @@ const BASE_TOOL_DEFINITIONS = [
       additionalProperties: true,
       required: ['event'],
       properties: {
-        event: { type: 'string', enum: ['permission_required', 'idle_after_response'] },
+        event: { type: 'string', enum: [...HOOK_EVENT_NAMES] },
         agent_id: { type: ['string', 'null'] },
         session_id: { type: ['string', 'null'] },
         runtime: { type: ['string', 'null'], enum: ['claude', 'codex', 'antigravity', null] },
@@ -409,11 +411,11 @@ const BASE_TOOL_DEFINITIONS = [
   },
   {
     name: 'agent.assign',
-    description: 'Create or update one structured mission for a managed helper agent.',
+    description: `Create or update one structured mission for a managed helper agent. Use your own caller identity as owner; do not invent a placeholder such as "owner".${DEFAULT_FACE_AGENT_ID ? ` This caller is ${DEFAULT_FACE_AGENT_ID}; omitting owner_agent_id uses that identity.` : ''} Explicit other owners remain supported.`,
     inputSchema: {
       type: 'object',
       additionalProperties: true,
-      required: ['stream_id', 'mission_id', 'owner_agent_id', 'agent_id', 'goal'],
+      required: ['stream_id', 'mission_id', ...(!DEFAULT_FACE_AGENT_ID ? ['owner_agent_id'] : []), 'agent_id', 'goal'],
       properties: {
         stream_id: { type: 'string', minLength: 1 },
         mission_id: { type: 'string', minLength: 1 },
@@ -506,11 +508,11 @@ const BASE_TOOL_DEFINITIONS = [
   },
   {
     name: 'owner.inbox.list',
-    description: 'List owner inbox reports and summaries for one owner or stream.',
+    description: `List owner inbox reports and summaries for one owner or stream.${DEFAULT_FACE_AGENT_ID ? ` This caller is ${DEFAULT_FACE_AGENT_ID}; omitting owner_agent_id reads its inbox.` : ''} Use the exact assignment owner when inspecting a different owner's inbox.`,
     inputSchema: {
       type: 'object',
       additionalProperties: true,
-      required: ['owner_agent_id'],
+      required: DEFAULT_FACE_AGENT_ID ? [] : ['owner_agent_id'],
       properties: {
         owner_agent_id: { type: 'string', minLength: 1 },
         stream_id: { type: ['string', 'null'] },
@@ -1636,7 +1638,8 @@ function normalizeAgentAssignPayload(rawArguments) {
   const payload = {
     stream_id: requireString(args, 'stream_id'),
     mission_id: requireString(args, 'mission_id'),
-    owner_agent_id: requireString(args, 'owner_agent_id'),
+    owner_agent_id: requireString(args.owner_agent_id === undefined && DEFAULT_FACE_AGENT_ID
+      ? { ...args, owner_agent_id: DEFAULT_FACE_AGENT_ID } : args, 'owner_agent_id'),
     agent_id: requireString(args, 'agent_id'),
     goal: requireString(args, 'goal')
   };
@@ -1740,7 +1743,8 @@ function normalizeAgentAssignmentListPayload(rawArguments) {
 
 function normalizeOwnerInboxListPayload(rawArguments) {
   const args = requireObject(rawArguments ?? {}, 'arguments');
-  const ownerAgentId = requireString(args, 'owner_agent_id');
+  const ownerAgentId = requireString(args.owner_agent_id === undefined && DEFAULT_FACE_AGENT_ID
+    ? { ...args, owner_agent_id: DEFAULT_FACE_AGENT_ID } : args, 'owner_agent_id');
   const streamId = args.stream_id ?? null;
   if (streamId !== null && typeof streamId !== 'string') {
     throw new Error('stream_id must be string or null');

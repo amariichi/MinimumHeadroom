@@ -46,7 +46,7 @@ test('handleHook emits broadcast event + say payloads for permission_required', 
   assert.equal(result.ok, true);
   assert.equal(result.event, 'permission_required');
   assert.equal(result.lang, 'en');
-  assert.equal(result.text, 'Approval needed.');
+  assert.equal(result.text, 'Claude helper-1: Approval needed.');
   assert.equal(broadcasted.length, 2);
   assert.equal(broadcasted[0].type, 'event');
   assert.equal(broadcasted[0].name, 'permission_required');
@@ -54,7 +54,7 @@ test('handleHook emits broadcast event + say payloads for permission_required', 
   assert.equal(broadcasted[1].type, 'say');
   assert.equal(broadcasted[1].priority, 3);
   assert.equal(broadcasted[1].policy, 'interrupt');
-  assert.equal(broadcasted[1].text, 'Approval needed.');
+  assert.equal(broadcasted[1].text, 'Claude helper-1: Approval needed.');
 
   cleanup();
 });
@@ -108,7 +108,7 @@ test('handleHook rejects missing agent_id', async () => {
   assert.equal(result.reason, 'missing_agent_id');
 });
 
-test('handleHook posts owner inbox entry when assignment exists', async () => {
+test('turn end does not post a final owner inbox report even when assignment exists', async () => {
   const bridge = createHookBridge({ log: { warn: () => {} }, templatesPath: '/nonexistent/path.json' });
   const inboxCalls = [];
   const assignmentStore = {
@@ -131,12 +131,8 @@ test('handleHook posts owner inbox entry when assignment exists', async () => {
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.inbox_posted, true);
-  assert.equal(inboxCalls.length, 1);
-  assert.equal(inboxCalls[0].kind, 'done');
-  assert.equal(inboxCalls[0].owner_agent_id, '__operator__');
-  assert.equal(inboxCalls[0].from_agent_id, 'helper-1');
-  assert.match(inboxCalls[0].detail, /source=mh_hook/);
+  assert.equal(result.inbox_posted, false);
+  assert.equal(inboxCalls.length, 0);
 });
 
 test('handleHook does not post inbox when no assignment matches', async () => {

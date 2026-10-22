@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 import { sendFaceEvent } from './codex-notify-to-face.mjs';
+import { classifyAgentHook } from './agent-hook-events.mjs';
 
-const CANONICAL_EVENTS = new Set(['permission_required', 'idle_after_response']);
 const KNOWN_RUNTIMES = new Set(['claude', 'codex', 'antigravity']);
 const STDOUT_MODES = new Set(['silent', 'antigravity-flow']);
 
@@ -59,35 +59,8 @@ export function parseStdinPayload(text) {
   }
 }
 
-export function detectCanonicalEvent({ payload, explicitEvent }) {
-  if (explicitEvent) {
-    if (CANONICAL_EVENTS.has(explicitEvent)) {
-      return { event: explicitEvent, source: 'argv' };
-    }
-    return { event: null, source: 'argv', reason: 'unknown_event' };
-  }
-  if (!payload || typeof payload !== 'object') {
-    return { event: null, source: 'none', reason: 'no_payload' };
-  }
-  const hookEventName = asNonEmptyString(payload.hook_event_name);
-  if (hookEventName) {
-    if (hookEventName === 'Notification' || hookEventName === 'PermissionRequest') {
-      return { event: 'permission_required', source: 'hook_event_name' };
-    }
-    if (hookEventName === 'Stop') {
-      return { event: 'idle_after_response', source: 'hook_event_name' };
-    }
-    return { event: null, source: 'hook_event_name', reason: `unhandled_${hookEventName}` };
-  }
-  const legacyEvent =
-    asNonEmptyString(payload.event) ??
-    asNonEmptyString(payload.type) ??
-    asNonEmptyString(payload.trigger) ??
-    asNonEmptyString(payload.name);
-  if (legacyEvent === 'agent-turn-complete') {
-    return { event: 'idle_after_response', source: 'legacy_notify' };
-  }
-  return { event: null, source: 'unrecognized', reason: 'no_known_field' };
+export function detectCanonicalEvent(options) {
+  return classifyAgentHook(options);
 }
 
 export function withAuthTokenUrl(rawUrl, token) {
@@ -106,7 +79,7 @@ export function withAuthTokenUrl(rawUrl, token) {
   }
 }
 
-function buildHookFacePayload({ agentId, event, runtime, sessionId, now }) {
+function buildHookFacePayload({ agentId, event, runtime, sessionId, now, meta }) {
   return {
     v: 1,
     type: 'hook',
@@ -115,7 +88,7 @@ function buildHookFacePayload({ agentId, event, runtime, sessionId, now }) {
     ts: now(),
     event,
     runtime: runtime ?? 'unknown',
-    meta: { source: 'mh_hook' }
+    meta: { source: 'mh_hook', ...meta }
   };
 }
 
@@ -164,7 +137,7 @@ export async function runHookCli(options = {}) {
     asNonEmptyString(options.inputText) ?? (await readStdinText(stdin));
   const payload = parseStdinPayload(inputText);
 
-  const detection = detectCanonicalEvent({ payload, explicitEvent: asNonEmptyString(args.event) });
+  const detection = detectCanonicalEvent({ payload, explicitEvent: asNonEmptyString(args.event), runtime });
   const stdoutPayload = buildRuntimeStdoutPayload({ stdoutMode, event: detection.event });
   if (stdoutPayload && stdout && typeof stdout.write === "function") {
     stdout.write(`${JSON.stringify(stdoutPayload)}\n`);
@@ -198,7 +171,7 @@ export async function runHookCli(options = {}) {
   }
 
   const sessionId =
-    asNonEmptyString(payload?.session_id) ??
+    asNonEmptyString(payload?.session_id) ?? asNonEmptyString(payload?.conversationId) ??
     asNonEmptyString(env.MH_BRIDGE_SESSION_ID) ??
     asNonEmptyString(env.MH_OPERATOR_SESSION_ID) ??
     'hook';
@@ -208,7 +181,8 @@ export async function runHookCli(options = {}) {
     event: detection.event,
     runtime,
     sessionId,
-    now
+    now,
+    meta: detection.meta
   });
 
   try {

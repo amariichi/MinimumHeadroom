@@ -43,7 +43,7 @@ A face and operator companion app for coding agents.
 - **Operator input** — terminal direct prompt, browser PTT (JA/EN ASR), text fallback, desktop `Space`/`Shift+Space` hold-to-talk safety, key controls (`Esc`, `↑`, `Select`, `↓`)
 - **Interpreter stack** — an independent English-labelled mobile page with one WAV PTT, automatic source-language detection, a server-owned two-language session, spoken target overrides, Atom VAD turns, and four local startup presets
 - **Terminal mirror** — tmux Control Mode output batched for up to 200ms, rendered by xterm.js with 5000 lines of local scrollback and visibility-based subscription. Drag, wheel and page controls also reach fullscreen programs requesting terminal mouse scrolling, so earlier output remains reachable while a header stays fixed. Keyboard input remains disabled; pinch-to-zoom and contextual long-press selection/copy remain available.
-- **Multi-agent** (experimental) — spawn/focus/delete helpers from desktop tiles or mobile list, permission presets, mission assignment and delivery, owner inbox. A background stuck-detector scans each helper's tmux pane and posts auto `blocked` reports to the owner inbox when a known CLI modal (approval prompt, model picker, usage-limit notice, survey) is visible, so the operator notices stalled helpers without polling. See [Multi-Agent Guide](doc/guides/multi-agent.md).
+- **Multi-agent** (experimental) — delegate work to helpers and keep their questions, approval waits, and results in the owner inbox. A CLI response ending alone does not mark a task complete. See the [Multi-Agent Guide](doc/guides/multi-agent.md#english).
 - **M12 vision** — AtomS3R-M12 camera + diffusiongemma (vLLM) captioner, change-gated SQLite memory with tiered summaries, `GET /situation` digest injection, corrections, keyword watches, and Echo Base spoken alerts. See [M12 Vision Guide](doc/guides/m12-vision.md#english).
 - **MCP signaling** — `face.event` / `face.say` / `face.ping`, generic `media.play` / `media.stop` / `media.status` ([integration guide](doc/guides/generic-browser-media.md#english)), plus agent lifecycle tools (`agent.list`, `agent.spawn`, `agent.focus`, `agent.delete`, `agent.assign`, `agent.assignment.list`, `agent.inject`, `agent.report`, `agent.pane_snapshot`, `agent.pane_send_key`, `owner.inbox.*`)
 - **3D face** — eyebrow/eye/mouth/head animation, state modes (`confused`, `frustration`, `confidence`, `urgency`, `stuckness`, `neutral`), drag control, panel toggles
@@ -478,6 +478,15 @@ Comma-separate multiple endpoints. Matching uses the exact scheme, hostname, eff
 
 Do not commit your personal local config files.
 
+Follow four separate steps: **install MH → connect MCP → configure/review hooks → verify delivery**.
+
+1. Finish [Quick Start](#en-quick-start) and start the MH app.
+2. Connect your CLI to the MH MCP server using its setup below. MCP makes tools available; ask the agent to call `face_ping` to check the connection.
+3. Configure lifecycle hooks for questions, approvals, and response state. With the [RMH launcher](examples/rmh-voice-mode/README.md), Claude/Codex receive per-launch MCP and hook settings; agy installs/synchronizes its MH plugin. Other launch paths need the documented registration. Codex also requires your review of the actual hook commands in `/hooks`.
+4. Check that the intended hooks are active, then try a harmless helper question, answer, and explicit completion report. Verify the correct inbox receives them and the matching wait clears. Saved configuration or a successful MCP ping alone does not prove hook execution and delivery.
+
+Merge only the relevant entries into existing configuration; preserve model, login, and permission settings. After an update or checkout move, check paths and hook review again. Trust applies to an exact definition/source, so reuse is possible when it stays unchanged. See the [hook setup and migration steps](doc/hook-bridge/README.md#english).
+
 ### Claude Code
 
 Add the MCP server via CLI:
@@ -485,14 +494,24 @@ Add the MCP server via CLI:
 ```bash
 claude mcp add --transport stdio \
   --env FACE_WS_URL=ws://127.0.0.1:8765/ws \
-  minimum-headroom -- /ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh
+  minimum_headroom -- /ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh
 ```
 
 See [Claude Code setup details](doc/examples/claude-code/README.md) for permission presets and security hardening.
 
 ### Codex CLI
 
-Use `doc/examples/codex/config.toml` as a template. Place at `~/.codex/config.toml` or `.codex/config.toml` within a trusted project. Update absolute paths for your machine.
+For a manual setup, Codex can add the MCP entry without replacing the whole config (installed CLI 0.163.0). Use this when `minimum_headroom` is not already registered; otherwise inspect and update that entry instead:
+
+```bash
+codex mcp add --env FACE_WS_URL=ws://127.0.0.1:8765/ws \
+  --env MCP_TOOL_NAME_STYLE=underscore minimum_headroom -- \
+  /ABS/PATH/minimum-headroom/scripts/run-bound-mcp-server.sh
+```
+
+This registers MCP only. Configure/review hooks separately as described below and in the [hook guide](doc/hook-bridge/README.md#english).
+
+For a manual launch, merge the needed entries from [the Codex template](doc/examples/codex/config.toml) into `~/.codex/config.toml`, or one trusted project config. Replace placeholder paths. Do not replace an existing config or register the same hooks in both places; sources are additive.
 
 ```toml
 [mcp_servers.minimum_headroom]
@@ -511,41 +530,16 @@ config files.
 
 ### Antigravity (CLI and GUI)
 
-Both the `agy` terminal CLI and the Antigravity GUI (Electron desktop app) are supported. They share `~/.gemini/` but read MCP servers and skills from **different paths**, so the install steps differ — see [Antigravity setup details](doc/examples/antigravity/README.md) for the full matrix. The CLI uses `agy plugin install` into `~/.gemini/antigravity-cli/plugins/`; the GUI reads `~/.gemini/config/mcp_config.json` and looks for skills under `~/.gemini/config/plugins/`. Hooks can use `hooks.json`; current builds can also use the shared `~/.gemini/settings.json` snippet. Replace `/ABS/PATH/minimum-headroom` in `mcp_config.json`, `hooks.json`, and `settings-hooks.snippet.json` with the absolute path to your checkout first.
+The `agy` CLI and the desktop app use version-dependent configuration locations. For a manual CLI install, replace `/ABS/PATH/minimum-headroom` in the [setup examples](doc/examples/antigravity/README.md) with your checkout path, then run:
 
 ```bash
-# 0. Edit doc/examples/antigravity/{mcp_config.json,hooks.json,settings-hooks.snippet.json}:
-#    replace /ABS/PATH/minimum-headroom with the absolute path of your checkout.
-# Prefer the shared skill source used by coding agents; keep the checked-in
-# example as the portable fallback on hosts without that layout.
-MH_OPS_SKILL="${MH_SHARED_SKILLS_DIR:-$HOME/.agents/skills}/minimum-headroom-ops/SKILL.md"
-[[ -f "$MH_OPS_SKILL" ]] || MH_OPS_SKILL=doc/examples/skills/minimum-headroom-ops/SKILL.md
-
-# --- CLI (agy) -----------------------------------------------------------------
-agy plugin install doc/examples/antigravity                   # idempotent
-# optional: also drop the skill so /skills shows it
-mkdir -p ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops
-cp "$MH_OPS_SKILL" \
-   ~/.gemini/antigravity-cli/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
-
-# --- GUI -----------------------------------------------------------------------
-# 1. Merge mcp_config.json into ~/.gemini/config/mcp_config.json
-#    (this file is often a 0-byte stub that silently breaks every MCP server until valid).
-# 2. Drop plugin.json + the skill under ~/.gemini/config/plugins/minimum-headroom/
-mkdir -p ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops
-cp doc/examples/antigravity/plugin.json \
-   ~/.gemini/config/plugins/minimum-headroom/plugin.json
-cp "$MH_OPS_SKILL" \
-   ~/.gemini/config/plugins/minimum-headroom/skills/minimum-headroom-ops/SKILL.md
-
-# --- shared: hooks --------------------------------------------------------------
-# Use doc/examples/antigravity/hooks.json, or merge settings-hooks.snippet.json into
-# ~/.gemini/settings.json if your installed agy build does not load plugin hooks.
+agy plugin install doc/examples/antigravity
+agy plugin list --json
 ```
 
-After installing, restart `agy` (CLI) and **fully quit + relaunch** the GUI (close-to-tray does not re-read configs). In `agy` type `/mcp`; in the GUI ask the chat `List every MCP tool you can call right now`. Both should list `minimum_headroom` with `face_event` / `face_say` / `face_ping` and the agent lifecycle tools.
+Use the listed `minimum-headroom` path when validating or updating its hooks and skills; current builds can use `~/.gemini/config/plugins/`, while older ones use `~/.gemini/antigravity-cli/plugins/`. The [RMH launcher](examples/rmh-voice-mode/README.md) installs the CLI plugin automatically. Desktop MCP registration and optional skill-copy steps are in the [existing setup guide](doc/examples/antigravity/README.md); preserve unrelated shared settings.
 
-See [Antigravity setup details](doc/examples/antigravity/README.md) for the path matrix, common failure modes (especially the 0-byte `mcp_config.json` trap on GUI), permission presets, and the `GEMINI.md` rule placement. The RMH voice-first launcher at `examples/rmh-voice-mode/start-rmh.sh --agent agy` handles the CLI plugin install automatically with the machine's path resolved.
+Restart the CLI or fully quit/relaunch the desktop app after setup. Check `/mcp` in the CLI, or ask the desktop chat to list its available MCP tools. Confirm `minimum_headroom` provides `face_ping`, `face_event`, `face_say` and the agent lifecycle tools. Check `/hooks` and a harmless question/answer separately to verify hook delivery.
 
 With agy 1.1.1, RMH and managed helpers remain on the interactive TUI path and
 do not depend on print mode. The launcher now accepts `--model '<name>'` using a
@@ -589,37 +583,13 @@ If your MCP client rejects tool names with dots (for example `face.event` or `me
 - [AtomS3R Voice Guide](doc/guides/atoms3r-voice.md#english) — **the face AtomS3R:** hands-free VAD pipeline, flashing + USB provisioning, RMS vs Silero backends, ADPCM, every tuning knob (endSilence / threshold / tail / maxUtterance), PTT, troubleshooting
 - [Tailscale Travel-Router Guide](doc/guides/tailscale-travel-router-setup.md#english) — reach a Tailscale-incapable device (e.g. AtomS3R) from the PC over a Tailscale-capable travel router via subnet routing. Covers the **bidirectional ACL**: PC→device, and device→PC (the face WebSocket port). For the device→PC direction the ACL `src` must be the travel router's **LAN CIDR** — the router relays the device's original source IP, so a node/group grant alone will not match.
 
-## Hook Bridge (safety net for forgotten face_say)
+## Hook Bridge
 
-`scripts/mh-hook.mjs` is a small wrapper that maps each agent runtime's hook
-events to a `face_say` + `face_event` (and an owner-inbox entry for helpers),
-so the face speaks even when the agent forgets to call `face_say` voluntarily.
-Currently supports Claude Code, Codex (new `hooks` system + legacy `notify`
-fallback), and Antigravity CLI.
+Hooks report questions, approval waits, and response state when the agent does not call MH tools itself. Helper completion still requires an explicit `done` or `review_findings` report. The bridge observes state and does not approve commands. Automatic speech distinguishes approval, answer and choice waits, and cancels resolved notices while preserving other waits.
 
-Configuration:
+For Codex, launch through the same path you will use day to day, open `/hooks`, inspect the source and command, and approve only the intended MH definitions. Confirm they are active. Recheck after definition/path changes; a version update alone does not imply that every hook needs trusting again. Existing global hooks also load, so check for old duplicate registrations before migration.
 
-- Per-runtime examples (drop-in JSON/TOML): `doc/hook-bridge/`
-- Embedded in the per-runtime setup READMEs: `doc/examples/claude-code/README.md`, `doc/examples/codex/config.toml`, `doc/examples/antigravity/README.md`
-
-The hook only fires when `MH_FACE_AGENT_ID` is set in the agent process
-environment, so unrelated Claude/Codex/Antigravity sessions on the same machine are
-unaffected. Templates (the lines spoken on each event) live at
-`~/.minimum-headroom/face-templates.json`; if absent, the built-in
-Japanese + English defaults are used. Language is auto-detected from the
-agent's recent `face_say` history (CJK → `ja`, otherwise → `en`), with
-`MH_FACE_LANG` as fallback.
-
-Codex silently filters untrusted hooks at startup, so a one-time trust grant
-is required after editing `~/.codex/config.toml`. The trust is persisted in
-`[hooks.state.*]` at the user level — once granted, every subsequent Codex
-session for that user (including helpers spawned by `agent.spawn`) inherits
-it automatically. You do not need to enter individual helper panes. The
-easiest way is `./scripts/grant-codex-hook-trust.sh` (spawns a transient
-Codex inside a private tmux server, walks the trust UI, exits). Manually:
-run any Codex once, type `/hooks`, walk the browser, and quit. Re-grant only
-when you change a hook command or matcher. See `doc/hook-bridge/README.md`
-for the full procedure.
+Per-CLI steps, current compatibility limits, safe migration and verification: [Hook Bridge setup](doc/hook-bridge/README.md#english).
 
 ## Optional Agent Skills
 

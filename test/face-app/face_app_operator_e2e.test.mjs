@@ -255,12 +255,13 @@ test('face-app e2e helper creation inherits configured external source repo defa
   }
 });
 
-test('face-app e2e startup cleanup removes helper state before serving agents', async () => {
+for (const cleanup of [false, true]) test(`face-app e2e startup ${cleanup ? 'explicit cleanup removes' : 'default preserves'} helper state`, async () => {
   const repoA = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-face-app-repo-a-'));
   const repoB = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-face-app-repo-b-'));
   const { child, baseUrl, stateRoot } = await startFaceAppE2e({
     activeTargetRepoRoot: repoB,
     activeStreamId: `repo:${repoB}`,
+    env: { MH_AGENT_STARTUP_CLEANUP: cleanup ? '1' : '0' },
     stateFixture: {
       schema_version: 1,
       updated_at: 1,
@@ -294,8 +295,10 @@ test('face-app e2e startup cleanup removes helper state before serving agents', 
     assert.equal(stateResponse.ok, true);
     const statePayload = await stateResponse.json();
     assert.equal(statePayload?.state?.active_stream_id, `repo:${repoB}`);
-    assert.equal(statePayload?.state?.hidden_agent_count, 0);
-    assert.deepEqual(statePayload?.state?.agents ?? [], []);
+    assert.equal(statePayload?.state?.hidden_agent_count, cleanup ? 0 : 1);
+    assert.deepEqual((statePayload?.state?.agents ?? []).map(agent => agent.id), cleanup ? [] : ['repo-b-helper']);
+    assert.equal(fs.existsSync(repoA), true);
+    assert.equal(fs.existsSync(repoB), true);
   } finally {
     await stopChild(child);
     fs.rmSync(stateRoot, { recursive: true, force: true });

@@ -30,7 +30,7 @@ matcher = ".*"
 
 [[hooks.PermissionRequest.hooks]]
 type = "command"
-command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event permission_required"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event PermissionRequest"
 timeout = 5
 
 [[hooks.UserPromptSubmit]]
@@ -44,27 +44,52 @@ timeout = 5
 
 [[hooks.Stop.hooks]]
 type = "command"
-command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event idle_after_response"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event Stop"
 timeout = 5
 
 # Legacy fallback (only useful when [features] codex_hooks is unavailable):
 # notify = ["/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs", "--runtime", "codex"]
 
-# IMPORTANT: Codex treats every user-defined hook as untrusted until you grant
-# trust per-event from inside the TUI. Untrusted hooks are silently skipped.
-# After editing the [[hooks.*]] blocks above, do one of:
-#
-#   (a) Run the bundled helper script once:
-#         scripts/grant-codex-hook-trust.sh
-#       It spawns codex inside a private tmux server, walks the /hooks browser,
-#       trusts each event, and exits. After it succeeds, every codex session
-#       (including helpers spawned via agent.spawn) executes these hooks.
-#
-#   (b) Or run `codex` interactively yourself, type `/hooks`, press Enter on
-#       each event row that shows "1 / 1" pending, then `t` to trust it,
-#       Esc to back out, and repeat for any other untrusted event.
-#
-# Either way, Codex writes a SHA-256 trusted_hash under [hooks.state.<key>] in
-# this file. Re-editing the hook command/matcher invalidates the hash and
-# requires re-granting trust. See doc/hook-bridge/README.md for the full
-# discovery rationale.
+# Review through the SAME launch path in /hooks, inspect each intended MH
+# source/command, and trust only those definitions through the official UI.
+# Check Active counts, then verify actual delivery to the expected owner inbox.
+# Trust hashes persist in normal ~/.codex/config.toml [hooks.state]; changes to
+# definition/source/path can require review again. User/project/session sources
+# add together, so installing this file does not replace old global hooks.
+# Do not overwrite existing config/model/auth/permission settings or use blanket
+# trust as a connectivity check. Details: doc/hook-bridge/README.md.
+
+# Observe input waits; these hooks emit no approval decisions. Codex 0.163 baseline.
+[[hooks.PreToolUse]]
+matcher = "request_user_input"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event PreToolUse"
+timeout = 5
+
+[[hooks.PostToolUse]]
+matcher = ".*"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event PostToolUse"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event UserPromptSubmit"
+timeout = 5
+
+# Response interruption/session exit is distinct from explicit helper done.
+[[hooks.Interrupt]]
+[[hooks.Interrupt.hooks]]
+type = "command"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event Interrupt"
+timeout = 3
+
+# Response interruption/session exit is distinct from explicit helper done.
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime codex --event SessionEnd"
+timeout = 3

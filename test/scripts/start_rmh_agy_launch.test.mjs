@@ -20,7 +20,7 @@ async function exists(filePath) {
 async function runLauncher(args, env) {
   const child = spawn(launcher, args, {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, XDG_RUNTIME_DIR: path.join(env.HOME, 'runtime'), RMH_WITH_VISION: '0' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let stdout = '';

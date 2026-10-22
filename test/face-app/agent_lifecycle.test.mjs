@@ -2634,3 +2634,29 @@ test('agent lifecycle runtime does not mistake echoed transcript for a buffered 
 
   cleanup(repoRoot);
 });
+
+test('reload preservation disables startup retirement without altering helpers, reports or worktree files', async () => {
+  const root = createTempRoot('mh-startup-preserve-');
+  try {
+    const stateStore = createAgentRuntimeStateStore({ repoRoot: root, now: createClock(), log: quietLog });
+    const assignmentStateStore = createAgentAssignmentStateStore({ repoRoot: root, now: createClock(), log: quietLog });
+    const ownerInboxStateStore = createOwnerInboxStateStore({ repoRoot: root, assignmentStateStore, now: createClock(), log: quietLog });
+    const workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
+    fs.writeFileSync(path.join(workspace, 'keep.txt'), 'User work');
+    for (const [id, stream] of [['active', `repo:${root}`], ['hidden', 'other-stream']]) {
+      stateStore.addAgent({ id, session_id: id, source_repo_path: root, stream_id: stream, pane_id: id === 'active' ? '%41' : '%42', worktree_path: workspace });
+      assignmentStateStore.upsertAssignment({ stream_id: stream, mission_id: id, owner_agent_id: '__operator__', agent_id: id, goal: 'Preserve existing work' });
+      for (const kind of ['progress', 'done']) ownerInboxStateStore.submitReport({ stream_id: stream, mission_id: id, owner_agent_id: '__operator__', from_agent_id: id, kind, summary: kind, report_id: `${id}-${kind}` });
+    }
+    const before = JSON.stringify([stateStore.getState(), assignmentStateStore.listAssignments({}), ownerInboxStateStore.getState()]);
+    const commands=[];
+    const runtime=createAgentLifecycleRuntime({ stateStore, assignmentStateStore, ownerInboxStateStore,
+      repoRoot:root, activeStreamId:`repo:${root}`, cleanupOnStartup:false, log:quietLog,
+      commandRunner: async (...args) => { commands.push(args); throw Error('No process or git action allowed on reload'); } });
+    assert.equal((await runtime.cleanupAgentsOnStartup()).skipped,true);
+    assert.equal((await runtime.cleanupAgentsOnStartup()).skipped,true);
+    assert.deepEqual(commands,[]);
+    assert.equal(JSON.stringify([stateStore.getState(), assignmentStateStore.listAssignments({}), ownerInboxStateStore.getState()]),before);
+    assert.equal(fs.readFileSync(path.join(workspace,'keep.txt'),'utf8'),'User work');
+  } finally { cleanup(root); }
+});

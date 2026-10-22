@@ -3,252 +3,137 @@
 [English](#english) | [日本語](#japanese)
 
 <a id="english"></a>
-
 ## English
 
-This directory contains example configuration snippets that wire each supported
-agent runtime's hook system to `scripts/mh-hook.mjs`. The wrapper translates a
-canonical hook event (`permission_required` or `idle_after_response`) into a
-`face_say` + `face_event` and, for helper agents, an owner-inbox entry — even
-when the agent forgets to call `face_say` voluntarily.
+### Choose the existing setup path
 
-### Runtime coverage
+MCP exposes MH tools to an agent. Hooks report lifecycle/input state even when the agent does not call those tools. Configure and verify both; neither a config file nor a successful MCP ping proves that hooks run and reach the inbox.
 
-This bridge covers all three supported agent runtimes:
+- **Bundled voice-first launcher:** [RMH setup](../../examples/rmh-voice-mode/README.md). It supplies per-launch MCP and hook settings for Claude/Codex, and installs/synchronizes the agy plugin. It requires an existing MH stack and does not replace normal CLI authentication. Its model defaults are documented there; select a model explicitly when you need to retain another choice.
+- **Manual Claude launch:** [Claude setup](../examples/claude-code/README.md), then merge `claude-settings.json.example` into the appropriate settings scope.
+- **Manual Codex launch:** merge the required MCP and hook entries from [the Codex template](../examples/codex/config.toml) into one selected config source. Keep existing model/auth/permission settings.
+- **agy CLI or GUI:** [Antigravity setup](../examples/antigravity/README.md) explains their different registration locations. Use the CLI plugin `hooks.json` for the tested CLI path; do not assume a GUI or compatibility snippet has identical event coverage.
 
-- **Claude Code**: `Notification`, `Stop`, and optional `UserPromptSubmit`
-  situation injection through the example settings file.
-- **Codex CLI**: `PermissionRequest`, `UserPromptSubmit`, and `Stop` through the
-  hook system, plus a legacy `notify` fallback. Codex additionally requires a
-  one-time hook trust grant, documented below.
-- **Antigravity CLI / agy**: JSON hooks for `Stop`, with a disabled
-  `PreToolUse` approval-attention example.
+Replace placeholder paths with your checkout path. Do not overwrite an existing config or install the same hook at several scopes. Installed hooks do not imply permission to run arbitrary commands.
 
-The Codex section is longer because Codex has an extra trust model; it is not
-the only runtime supported by this directory.
+### Events and state
 
-### Files
+The examples use passive observers:
 
-- `claude-settings.json.example` — paste into `~/.claude/settings.json` (merge
-  with existing `hooks` block). Wires Claude Code's `Notification` and `Stop`
-  events, and optionally injects the M12 situation digest through
-  `UserPromptSubmit`.
-- `codex-config.toml.example` — paste into `~/.codex/config.toml`. Wires the new
-  Codex `hooks` system (`PermissionRequest`, `UserPromptSubmit`, and `Stop`) and
-  keeps the legacy `notify` line as a fallback.
-- `antigravity-hooks.json.example` — copy into an Antigravity `hooks.json`. Wires `Stop` and includes a disabled `PreToolUse` approval-attention example.
+| Runtime | Observations used by the bridge |
+| --- | --- |
+| Claude Code | `PreToolUse` for `AskUserQuestion`/`ExitPlanMode`; `PermissionRequest`; `PostToolUse`/`PostToolBatch`; `UserPromptSubmit`; `Stop`/`StopFailure`; selected `Notification` subtypes. |
+| Codex CLI | `PermissionRequest`; `PreToolUse` for `request_user_input`; `PostToolUse`; `UserPromptSubmit`; `Stop`; `Interrupt`; `SessionEnd`. |
+| agy CLI | `PreToolUse` for `ask_question`/`ask_permission`; `PostToolUse`; `PreInvocation`; `Stop`, with known terminal approval layouts as a fallback. |
 
-### Codex-specific: trust grant required (one time, user-level)
+Integration checks covered Codex 0.163.0, Claude Code 2.1.306 and agy 1.4.5. Availability and payloads vary by version; a configured hook with no corresponding runtime event cannot supply evidence. The agy current-model role check used Gemini 3.8 Flash (Low); it is not a guarantee for all models or all tool choices.
 
-Codex (verified against rust-v0.130.0 and main branch as of 2026-05-10) treats every user-defined hook as **untrusted** until the user explicitly approves it. Untrusted hooks are silently filtered out at startup — they will not fire even when the config is correct.
+- A response ending (`Stop`) is **idle awaiting instructions**, not task success. Only an explicit helper `done`/`review_findings` reports completion.
+- Questions and approvals are separate waits. Native request/session/turn identities, or uniquely matching complete tool/action fingerprints, correlate them. Matching a tool name or nearby timestamp alone is insufficient.
+- A matching result, interruption, or a supported ready terminal frame can resolve an observed wait. Unrelated concurrent waits and helper-declared questions remain pending.
+- Claude's delayed `Notification:permission_prompt` has no reliable request identity and is ignored; primary events and concrete terminal observations own the wait.
+- A terminal snapshot is a fallback for known layouts. Missing, changed or ambiguous output is not proof that someone answered. Open the matching pane if the inbox lacks the actual choice text; the bridge does not invent choices or press approval keys.
 
-The trust is **per-user, persistent, and inherited by every subsequent Codex process** (including helpers spawned by `agent.spawn`). You only need to do it once after editing `~/.codex/config.toml`. You do **not** need to enter individual helper panes or repeat per-session.
+See [helper reporting and owner inbox](../guides/multi-agent.md#helper-reporting-and-owner-inbox) for the operator/helper workflow.
 
-After editing the `[[hooks.*]]` blocks in `~/.codex/config.toml`, do one of:
+When speech is enabled, automatic waiting notices name the safe provider/helper identity and distinguish approval, answer and choice waits. Unknown state asks for a status check rather than claiming failure or completion. Assigned helpers speak through the owner notification once; resolved waits are removed from pending synthesis/playback without clearing other waits. These notices do not read question bodies, command arguments or private paths aloud. Updating this speech behavior requires an MH app reload and browser-page refresh; hook registration alone does not activate it.
 
-**Automated (recommended):** run the bundled helper from a shell with `tmux` and `codex` on PATH:
+### Codex: review the exact definitions
 
-    ./scripts/grant-codex-hook-trust.sh
+1. Start Codex through the **same launch path and checkout** you intend to use. A bare `codex` cannot review session-only definitions supplied by another launcher.
+2. Open `/hooks`. If the command remains buffered, accept the slash command and submit it. Inspect each intended MH handler's source, command and matcher. Do not trust unrelated handlers simply because they are listed.
+3. Use the official review controls for the intended definitions. Codex 0.163.0 shows `Installed`, `Active` and a `Review` count when needed. Verify the MH handlers become active; a saved trust entry alone is not a delivery check.
+4. Trust hashes persist under `[hooks.state]` in normal `~/.codex/config.toml`. An identical definition/source can reuse trust; command, matcher, timeout or source/path changes can require review again. Recheck after upgrades rather than blindly trusting everything.
 
-It spawns Codex inside a private tmux server, opens the `/hooks` lifecycle browser, walks each event group, presses `t` to trust the visible hook, then exits. Watches `~/.codex/config.toml` for newly written `[hooks.state.*]` entries and prints `trust granted` on success. Idempotent: a re-run with no untrusted hooks remaining exits cleanly with "nothing to trust".
+Command hooks run outside the Codex sandbox. These observers emit no approval decision; keep your command sandbox and approval policy unchanged. The repository's older `grant-codex-hook-trust.sh` automates an older hook-browser layout and should not be used as a substitute for reviewing current definitions or as proof that all current events are active.
 
-**Manual:** run `codex` interactively and follow the banner that says "*N hooks need review. Open /hooks to review them.*":
+Official behavior: [Codex hooks](https://developers.openai.com/codex/hooks).
 
-1. Type `/hooks` and submit (Tab to accept the slash-command, then Enter).
-2. Press Enter on the first event row that shows a `1 / 1` pending count.
-3. Press `t` to trust the visible hook.
-4. Press Esc to go back to the events list, navigate to the next event with pending hooks, repeat.
-5. Esc to close the browser, then `/quit`.
+### Updating an existing installation
 
-Either way Codex writes a SHA-256 hash under `[hooks.state.<key>]` in `~/.codex/config.toml`. From that point on every Codex session for that user — operator and every helper — will execute the hooks. Re-grant only when you change a hook's command or matcher (the hash is identity-based; editing the command invalidates the stored hash).
+User, project, session and plugin hook sources are additive. Adding new per-launch hooks does **not** replace old global registrations. Before migration, compare the actual command paths in `/hooks`, including any old `permission_required`/`idle_after_response` announcers and legacy `notify` configuration. Select one intended notification path to avoid duplicates.
 
-Note: the feature flag is `[features] hooks = true`. Codex < 0.131 also accepts the deprecated alias `codex_hooks = true` with a startup warning. For optional M12 situation digest injection, use `scripts/situation-context-hook-codex.mjs`; it returns `UserPromptSubmit.hookSpecificOutput.additionalContext` JSON around the plain text produced by `scripts/situation-context-hook.sh`. (Antigravity has an equivalent wrapper, `scripts/situation-context-hook-agy.mjs`, registered as a `PreInvocation` hook.)
+Review old entries individually. Removing or persistently disabling a user-level hook can affect other Codex launches sharing that configuration. Do not change unrelated hooks, credentials or command approval settings. Do not use a trust-bypass flag to hide a registration problem. A process-only override must be checked in the active hook list and against startup warnings: Codex 0.163.0 ignored a dotted `-c hooks.state.<quoted-source-path>.enabled` override, so that spelling is not a verified migration recipe. Stop if the intended old entries remain active.
 
-Source: `codex-rs/hooks/src/engine/discovery.rs` (`HookTrustStatus` filter), `codex-rs/tui/src/bottom_pane/hooks_browser_view.rs` (`t` keymap), and `codex-rs/features/src/legacy.rs` (alias) in <https://github.com/openai/codex>.
+After moving or releasing the checkout, update registration paths and repeat review only for changed definitions. Confirm the MCP connection, active hooks and actual delivery separately. A release tag does not automatically repair local registrations.
 
-### Common prerequisites
+### Verify and troubleshoot
 
-- The face-app and MCP server must be running (the operator stack does both).
-  Without them, the wrapper exits silently with a stderr note and the agent
-  runtime continues normally.
-- `MH_FACE_AGENT_ID` must be exported in the agent's process environment.
-  `scripts/run-bound-mcp-server.sh` already sets this for normally-spawned
-  helpers; for the operator agent it is set by `scripts/run-operator-once.sh`.
-- Replace `/abs/path/to/scripts/mh-hook.mjs` in every example with the absolute
-  path to `scripts/mh-hook.mjs` in your clone.
-- The Claude `UserPromptSubmit` situation hook only emits context when the
-  launched process has `MH_SITUATION_INJECT=1`. Set `VISION_BASE_URL` only if
-  your vision worker is not at `http://127.0.0.1:8095`.
-- Templates (the lines spoken on each event) live at
-  `~/.minimum-headroom/face-templates.json`. If the file is absent, the
-  built-in defaults (Japanese + English) are used.
+1. Start the MH app and the configured CLI. Ensure the CLI can call `face_ping` through the expected MH server.
+2. For Codex, inspect the active MH handlers in `/hooks`; for the other CLIs, check their installed plugin/settings source and startup diagnostics.
+3. Use a harmless helper task that reports a question, waits for your answer, then explicitly reports `done`. Check the correct owner inbox, one notification for each distinct wait, and resolution of only the answered question.
+4. If a real permission prompt appears, answer it normally. Check that its matching wait resolves and unrelated questions stay visible. Refusal/interruption is not successful task completion.
 
-### Output discipline
+Hooks need `MH_FACE_AGENT_ID` and the correct `FACE_WS_URL` in the CLI process environment. A secured MH endpoint also needs the existing `MH_FACE_AUTH_TOKEN` available to the hook process. The MCP wrapper can obtain a token from the normal environment/env file; that alone does not prove the separate hook process inherited it. Do not put real tokens into checked-in examples. Without a configured identity the bridge does nothing; send failures are reported on stderr while the CLI continues.
 
-`mh-hook.mjs` always exits `0`. For Claude Code and Codex it writes nothing to stdout, preserving their hook contracts. Claude's M12 `UserPromptSubmit` context, when enabled, comes from `scripts/situation-context-hook.sh`, not from `mh-hook.mjs`. For Antigravity CLI, `--runtime antigravity` writes the minimal JSON that Antigravity expects for `PreToolUse` and `Stop` hooks while still forwarding the face hook payload.
+The observer exits zero and uses silent stdout for Claude/Codex. agy input observers use `--stdout-mode silent`; retain the documented host-specific output mode for other agy hook examples. `MH_HOOK_SUPPRESS_EVENTS` drops listed canonical events **before delivery**, so it can suppress state updates as well as speech. Inspect it when events are missing; do not mistake suppression for successful execution.
 
-This is required because:
-
-- Antigravity hooks use stdout JSON for flow control on events such as `PreToolUse` and `Stop`.
-- Claude Code and Codex hooks should not receive stray stdout from a safety-net hook.
-- Codex hooks treat exit `2` as a generic block, so the wrapper must never exit non-zero.
-
-If you customize the wrapper, preserve these invariants.
-
-### Templates file
-
-Example `~/.minimum-headroom/face-templates.json`:
-
-    {
-      "permission_required": {
-        "ja": ["承認をお願いします。", "確認お願いします。", "もう一度承認お願いします。"],
-        "en": ["Approval needed.", "One more approval, please.", "Approval needed to continue."]
-      },
-      "idle_after_response": {
-        "ja": ["作業が止まっているかもしれません。", "応答待ちかもしれません。"],
-        "en": ["I may be stuck waiting.", "Turn ended; awaiting next step."]
-      }
-    }
-
-The face-app picks a variant from the array, avoiding the most recently spoken
-line for the same `(agent_id, event)` pair. Language is detected from the
-agent's recent `face_say` history (CJK characters → `ja`, otherwise → `en`),
-falling back to `MH_FACE_LANG` when the agent has not spoken yet.
-
----
+Notification wording can be customized in `~/.minimum-headroom/face-templates.json`; built-in Japanese/English defaults are used otherwise. CLI output, inbox details and diagnostic captures may contain private data. Keep runtime records and live captures out of commits; public regression fixtures use synthetic identities and paths.
 
 <a id="japanese"></a>
-
 ## 日本語
 
-このディレクトリには、Claude Code、Codex、Antigravity CLI のフック機構を
-`scripts/mh-hook.mjs` へ接続するための設定例があります。このラッパーは、共通形式の
-フックイベント（`permission_required` または `idle_after_response`）を `face_say` と
-`face_event` に変換します。ヘルパーからのイベントなら、オーナーの受信箱（owner inbox）
-にも通知します。エージェント自身が `face_say` を呼び忘れたときの安全網です。
+### 既存の設定経路を選ぶ
 
-### 対応する実行環境
+MCP はエージェントへ MH のツールを提供し、hook はツールを呼ばない場合もライフサイクル・入力待ちを通知します。両方を設定・確認してください。設定ファイルがあることや MCP ping の成功だけでは、hook の実行と受信箱への配送までは確認できません。
 
-このブリッジは、次の3種類のエージェント実行環境に対応します。
+- **同梱の音声優先ランチャ:** [RMH の設定](../../examples/rmh-voice-mode/README.md)。Claude/Codex へ起動単位の MCP・hook 設定を渡し、agy ではプラグインをインストール・同期します。既存の MH スタックが必要で、CLI の通常の認証は置き換えません。モデルの既定値は同ページを参照し、別の選択を維持したい場合は明示してください。
+- **Claude の手動起動:** [Claude 設定](../examples/claude-code/README.md)に従い、`claude-settings.json.example` を必要な設定スコープへマージします。
+- **Codex の手動起動:** [Codex 設定例](../examples/codex/config.toml)から必要な MCP・hook 項目を選んだ1か所へマージします。モデル・認証・権限設定は残してください。
+- **agy CLI または GUI:** 読み込み先の違いは [Antigravity 設定](../examples/antigravity/README.md)を参照してください。検証した CLI 経路はプラグインの `hooks.json` です。GUI や互換スニペットのイベント対応が同じとは限りません。
 
-- **Claude Code**: 設定例を使って `Notification` と `Stop` を接続します。必要なら、
-  `UserPromptSubmit` で周囲状況も注入できます。
-- **Codex CLI**: `PermissionRequest`、`UserPromptSubmit`、`Stop` を新しいフック機構へ接続し、
-  従来の `notify` も予備経路として残します。Codex ではユーザー単位の信頼許可が一度だけ
-  必要なため、後述の説明がほかより長くなっています。
-- **Antigravity CLI / agy**: `Stop` 用の JSON フックと、既定では無効な
-  `PreToolUse` 承認通知の例を提供します。
+仮のパスを手元のチェックアウトへ置き換えてください。既存設定全体の上書きや、同じ hook の複数スコープへの登録は避けます。hook の登録は任意コマンドの実行許可ではありません。
 
-Codex の説明が長いのは信頼モデルが異なるためで、このディレクトリが Codex 専用だからでは
-ありません。
+### イベントと状態
 
-### 同梱ファイル
+設定例は、承認判断を変更しない観測用 hook です。
 
-- `claude-settings.json.example` — 既存の `hooks` ブロックと統合して
-  `~/.claude/settings.json` に設定します。Claude Code の `Notification` と `Stop` を接続し、
-  必要なら `UserPromptSubmit` で M12 の状況要約を注入します。
-- `codex-config.toml.example` — `~/.codex/config.toml` に追記します。Codex の新しい
-  `hooks` 機構（`PermissionRequest`、`UserPromptSubmit`、`Stop`）を接続し、互換性のために
-  従来の `notify` を予備経路としてコメント付きで残します。
-- `antigravity-hooks.json.example` — Antigravity の `hooks.json` として使います。
-  `Stop` と、既定では無効な `PreToolUse` 承認通知の例を含みます。
+| 実行環境 | ブリッジが利用する観測 |
+| --- | --- |
+| Claude Code | `AskUserQuestion`/`ExitPlanMode` の `PreToolUse`、`PermissionRequest`、`PostToolUse`/`PostToolBatch`、`UserPromptSubmit`、`Stop`/`StopFailure`、一部の `Notification`。 |
+| Codex CLI | `PermissionRequest`、`request_user_input` の `PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`、`Interrupt`、`SessionEnd`。 |
+| agy CLI | `ask_question`/`ask_permission` の `PreToolUse`、`PostToolUse`、`PreInvocation`、`Stop`。既知の端末承認画面を補助経路として利用。 |
 
-### Codex 固有：信頼許可はユーザーごとに一度だけ
+連携確認には Codex 0.163.0、Claude Code 2.1.306、agy 1.4.5 を使いました。イベントの有無と内容はバージョンで変わります。設定した hook に対応するイベントを CLI が出さなければ根拠にはできません。agy の現在モデルでの役割確認は Gemini 3.8 Flash (Low) での小さな試験で、全モデル・全ツール選択の保証ではありません。
 
-Codex（rust-v0.130.0 と main を 2026-05-10 時点で検証）は、ユーザーが定義したフックを
-明示的に許可するまで **untrusted** として扱い、起動時に通知なく除外します。設定が正しくても、
-信頼を許可しなければフックは動きません。
+- 応答終了（`Stop`）は **指示待ち** であり、作業成功ではありません。完了はヘルパーの明示的な `done`/`review_findings` で報告します。
+- 質問と承認は別の待ちです。要求・セッション・ターンの識別子、または完全なツール入力・操作の一意な fingerprint で対応づけます。ツール名や時刻の近さだけでは統合しません。
+- 対応する結果・中断・対応済みと分かる既知の端末表示で、観測由来の待ちを解除します。独立した同時待ちや、ヘルパー自身が報告した質問は残します。
+- Claude の遅延 `Notification:permission_prompt` は要求を識別できないため無視します。一次イベントと具体的な端末観測が待ちを管理します。
+- 端末取得は既知レイアウト用の補助です。取得失敗・表示変更・曖昧な出力を回答の根拠にはしません。受信箱に選択肢の本文がなければ対象ペインで確認します。ブリッジは選択肢を推測せず、承認キーも自動で押しません。
 
-信頼状態はユーザー単位で `~/.codex/config.toml` の `[hooks.state.*]` に保存されます。
-**以後、同じユーザーで起動するすべての Codex プロセスへ自動的に引き継がれます。**
-オペレーターが生成したヘルパーも対象です。ヘルパーのペインを一つずつ開いて許可する必要は
-ありません。
+委任の流れは [ヘルパーレポートとオーナー受信箱](../guides/multi-agent.md#ヘルパーレポートとオーナー受信箱)を参照してください。
 
-`~/.codex/config.toml` の `[[hooks.*]]` ブロックを編集したら、次のどちらかを実行します。
+音声が有効な場合、自動の待ち通知は安全なプロバイダー／ヘルパー名で、承認・回答・選択の待ちを区別します。理由不明なら失敗や完了を断定せず、状態確認を促します。割当済みヘルパーはオーナー通知から一度だけ発話し、解消済みの待ちは他の待ちを消さずに合成・再生待ちから除きます。質問本文、コマンド引数、私的なパスは自動で読み上げません。この音声処理の更新には MH アプリの再読み込みとブラウザ画面の更新が必要で、hook の登録だけでは有効になりません。
 
-**自動（推奨）：** `tmux` と `codex` に `PATH` が通ったシェルで、同梱スクリプトを実行します。
+### Codex: 実際の定義を確認して信頼する
 
-    ./scripts/grant-codex-hook-trust.sh
+1. **普段使うのと同じ起動方法・チェックアウト** で Codex を起動します。別のランチャだけが渡す起動単位の定義は、単独の `codex` では確認できません。
+2. `/hooks` を開きます。入力が残っていたらスラッシュコマンドを確定・送信してください。対象 MH handler の読み込み元・コマンド・matcher を確認します。一覧にある無関係な handler まで信頼しないでください。
+3. 公式画面で対象定義を承認します。Codex 0.163.0 では `Installed`、`Active`、必要なら `Review` 件数が表示されます。対象が有効になったことを確認します。信頼情報の保存だけでは配送確認にはなりません。
+4. 信頼 hash は通常の `~/.codex/config.toml` の `[hooks.state]` へ保存されます。同じ定義・読み込み元なら再利用できます。command・matcher・timeout・読み込み元やパスが変われば再確認が必要になることがあります。更新後も一括で盲目的に信頼しないでください。
 
-スクリプトは、ほかのセッションから分離した一時的な tmux サーバー内で Codex を起動します。
-続いて `/hooks` 画面の各イベントグループを Enter → `t`（信頼を許可）→ Esc の順に巡回し、
-`[hooks.state.*]` が書き込まれたら自動終了します。繰り返し実行しても安全です。すべて許可済み
-なら、`nothing to trust` と表示して正常終了します。
+コマンド hook は Codex のサンドボックス外で動きます。この観測用 hook は承認判断を返しません。コマンドの sandbox・承認方針は維持してください。旧 `grant-codex-hook-trust.sh` は古い hook 画面向けの自動操作で、現行定義の確認や全イベントが有効であることの証明には代用できません。
 
-**手動：** `codex` を通常どおり起動し、画面上部の
-「*N hooks need review. Open /hooks to review them.*」という案内に従います。
+公式の挙動は [Codex hooks](https://developers.openai.com/codex/hooks)を参照してください。
 
-1. `/hooks` と入力し、Tab でスラッシュコマンドを確定してから Enter で送信します。
-2. `1 / 1` と表示されているイベント行で Enter を押し、そのイベントの Handlers ページへ
-   移動します。
-3. `t` キーを押して、表示中のフックを信頼済みにします。
-4. Esc でイベント一覧へ戻り、未許可のフックがある次のイベント行でも同じ操作を繰り返します。
-5. Esc で画面を閉じ、`/quit` で Codex を終了します。
+### 既存インストールの更新
 
-どちらの方法でも、Codex は `[hooks.state.<key>]` に SHA-256 ハッシュを書き込みます。フックの
-command や matcher を**編集すると**ハッシュが変わり、再び untrusted になります。その場合だけ、
-信頼許可をやり直してください。
+ユーザー・プロジェクト・起動単位・プラグインの hook は加算されます。起動単位の新定義は、旧グローバル定義を置き換えません。移行前に `/hooks` で実際のコマンドを比較し、古い `permission_required`/`idle_after_response` の通知や legacy `notify` の設定も確認します。重複を避けるため、意図した通知経路を選んでください。
 
-機能フラグは `[features] hooks = true` です。Codex 0.131 未満では、非推奨の別名
-`codex_hooks = true` も使えますが、起動時に警告が出ます。M12 の状況要約を注入する場合は
-`scripts/situation-context-hook-codex.mjs` を使ってください。このラッパーは、
-`scripts/situation-context-hook.sh` が出力したプレーンテキストを
-`UserPromptSubmit.hookSpecificOutput.additionalContext` の JSON に包んで返します。
-Antigravity では、同等の `scripts/situation-context-hook-agy.mjs` を `PreInvocation` フックとして
-登録します。
+旧項目は1件ずつ確認します。ユーザー単位の hook の削除・永続的な無効化は、その設定を共有する別の Codex 起動にも影響します。無関係な hook、認証情報、コマンド承認設定は変えません。信頼回避フラグで登録の問題を隠さないでください。プロセス限定 override は、有効な hook 一覧と起動警告で確認が必要です。Codex 0.163.0 では dotted な `-c hooks.state.<引用した読み込み元パス>.enabled` が無視されたため、この書き方を確認済みの移行手順にはできません。旧項目が有効のままなら停止してください。
 
-根拠となる実装は、`codex-rs/hooks/src/engine/discovery.rs`（`HookTrustStatus` フィルター）、
-`codex-rs/tui/src/bottom_pane/hooks_browser_view.rs`（`t` キーの割り当て）、
-`codex-rs/features/src/legacy.rs`（別名の定義）です。<https://github.com/openai/codex>
+チェックアウトの移動・リリース後は登録パスを更新し、変更された定義だけを再確認します。MCP 接続、hook の有効状態、実際の配送は別々に確認してください。リリースの tag を付けても手元の登録は自動修復されません。
 
-### 共通の前提
+### 動作確認と切り分け
 
-- face-app と MCP サーバーが起動していること。オペレータースタックは両方を起動します。
-  起動していなくても、ラッパーは標準エラーへ1行だけ記録して終了コード 0 で終わるため、
-  エージェント実行環境は停止しません。
-- エージェントプロセスの環境変数に `MH_FACE_AGENT_ID` が設定されていること。
-  `scripts/run-bound-mcp-server.sh` はヘルパー用に、`scripts/run-operator-once.sh` は
-  オペレーター用に、それぞれ設定します。
-- 設定例の `/abs/path/to/scripts/mh-hook.mjs` を、手元のクローンにある
-  `scripts/mh-hook.mjs` の絶対パスへ置き換えること。
-- Claude の `UserPromptSubmit` 状況フックは、起動したプロセスに
-  `MH_SITUATION_INJECT=1` が設定されている場合だけ文脈を出力します。vision worker が
-  `http://127.0.0.1:8095` 以外で動く場合だけ、`VISION_BASE_URL` も設定してください。
-- 発話テンプレートは `~/.minimum-headroom/face-templates.json` に置けます。ファイルがなければ、
-  組み込みの日本語・英語テンプレートを使います。
+1. MH アプリと設定済み CLI を起動し、想定した MH サーバー経由で `face_ping` が成功することを確かめます。
+2. Codex は `/hooks` の対象 MH handler を確認します。他の CLI はインストールしたプラグイン・設定の読み込み元と起動時の診断を確認します。
+3. 無害なヘルパーに質問を報告させ、回答を待たせ、明示的な `done` を返させます。正しいオーナー受信箱、独立した待ちごとに1通知、回答した質問だけの解除を確認します。
+4. 実際の承認画面が出た場合は通常どおり回答します。対応する待ちだけが解除され、別の質問が残ることを確認します。拒否・中断を作業成功として扱いません。
 
-### 出力規律（重要）
+hook の実行環境には `MH_FACE_AGENT_ID` と正しい `FACE_WS_URL` が必要です。認証付き MH では、既存の `MH_FACE_AUTH_TOKEN` が hook プロセスにも必要です。MCP ラッパーが通常の環境・env ファイルから token を取得できても、別の hook プロセスへ継承されたとは限りません。実 token はチェックインする設定例に書かないでください。識別子がなければ何もせず、配送失敗時は標準エラーへ記録して CLI を続行します。
 
-`mh-hook.mjs` は、**どの経路でも終了コード 0** で終わります。Claude Code と Codex では、
-標準出力へ何も書きません。Claude の M12 `UserPromptSubmit` 文脈注入は、`mh-hook.mjs` ではなく
-`scripts/situation-context-hook.sh` が担当します。Antigravity CLI では
-`--runtime antigravity` を指定したときだけ、`PreToolUse` と `Stop` が必要とする最小限の JSON を
-標準出力へ返しながら、フェイス用のフック情報を転送します。
+観測 hook は終了コード0、Claude/Codex では無音の標準出力を使います。agy の入力観測は `--stdout-mode silent` を使い、ほかの agy 例はホストに合う出力規則を維持します。`MH_HOOK_SUPPRESS_EVENTS` は対象イベントを **配送前に除外** するため、音声だけでなく状態更新も抑えます。イベントが届かなければ確認し、抑制を動作成功と取り違えないでください。
 
-理由：
-
-- Antigravity のフックは、`PreToolUse` と `Stop` の処理制御に標準出力の JSON を使います。
-- Claude Code と Codex では、安全網となるフックが余計な標準出力を返してはいけません。
-- Codex のフックは終了コード `2` をブロックとして扱うため、ラッパーは 0 以外で終了しては
-  いけません。
-
-ラッパーを変更する場合も、これらの条件を維持してください。
-
-### テンプレートファイル
-
-`~/.minimum-headroom/face-templates.json` の例：
-
-    {
-      "permission_required": {
-        "ja": ["承認をお願いします。", "確認お願いします。", "もう一度承認お願いします。"],
-        "en": ["Approval needed.", "One more approval, please.", "Approval needed to continue."]
-      },
-      "idle_after_response": {
-        "ja": ["作業が止まっているかもしれません。", "応答待ちかもしれません。"],
-        "en": ["I may be stuck waiting.", "Turn ended; awaiting next step."]
-      }
-    }
-
-face-app は、同じ `(agent_id, event)` の組み合わせでは直前と異なる候補を優先します。
-言語はエージェントの直近の `face_say` 履歴から自動判定します。CJK 文字を含めば `ja`、
-それ以外は `en` です。まだ発話履歴がなければ、環境変数 `MH_FACE_LANG` を使います。
+通知の文言は `~/.minimum-headroom/face-templates.json` で変更でき、未設定なら日本語・英語の既定値を使います。CLI 出力、受信箱の詳細、診断用 capture には個人情報が含まれることがあります。実行時記録や実測 capture はコミットせず、公開する回帰 fixture は架空の識別子・パスを使ってください。

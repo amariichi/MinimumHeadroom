@@ -1,0 +1,37 @@
+{
+  "provenance": "Synthetic regression data modelling CLI event/layout contracts. Paths, identities and timestamps are fictitious. This fixture is not live-run evidence.",
+  "lines": [
+    " minimum_headroom — Agent Report Tool: (MCP)                                    ",
+    "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+    " stream_id: \"mcp-probe\"                                                         ",
+    " mission_id: \"mcp-probe\"                                                      ",
+    " owner_agent_id: \"__operator__\"                                               ",
+    " from_agent_id: \"probe-1\"",
+    " kind: \"progress\"",
+    " summary: \"Probe accepted\"",
+    "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+    " About the minimum_headroom — Agent Report Tool:",
+    " Do you want to proceed?",
+    " ❯ 1. Yes",
+    "   2. No",
+    " Esc to cancel · Tab to amend"
+  ],
+  "permission": {
+    "runtime": "claude",
+    "native_event": "PermissionRequest",
+    "payload": {
+      "hook_event_name": "PermissionRequest",
+      "session_id": "ccf774de-7521-5536-b737-cf271577fb5c",
+      "tool_name": "mcp__minimum_headroom__agent_report",
+      "tool_input": {
+        "stream_id": "mcp-probe",
+        "mission_id": "mcp-probe",
+        "owner_agent_id": "__operator__",
+        "from_agent_id": "probe-1",
+        "kind": "progress",
+        "summary": "Probe accepted"
+      }
+    }
+  },
+  "fingerprint": "84e589d6439af9907525d8c92c27f510885dcdb5aef74690b11185ff6927f7ae"
+}

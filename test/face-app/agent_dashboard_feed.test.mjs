@@ -135,7 +135,6 @@ test('deriveAgentTransientUpdate maps say and say_result payloads', () => {
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'say', text: 'hello world' }), {
     message: 'hello world',
     speaking: true,
-    needsAttention: false,
     promptIdle: false,
     speechBubble: 'hello world',
     speechBubbleTtlMs: 5000
@@ -160,7 +159,6 @@ test('summarizeSpeechBubbleText prefers whole sentences when possible', () => {
 test('deriveAgentTransientUpdate maps tts_state and focus results', () => {
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'tts_state', phase: 'play_start' }), {
     speaking: true,
-    needsAttention: false,
     promptIdle: false
   });
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'tts_state', phase: 'play_stop' }), {
@@ -192,13 +190,11 @@ test('deriveAgentTransientUpdate maps attention, prompt-idle, and error oriented
   });
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'prompt_idle' }), {
     message: 'ready for next prompt',
-    needsAttention: false,
     promptIdle: true,
     speaking: false
   });
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'cmd_failed' }), {
     message: 'task failed',
-    needsAttention: false,
     error: true,
     promptIdle: false
   });
@@ -214,11 +210,13 @@ test('deriveAgentTransientUpdate clears attention when work resumes or completes
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'cmd_started', meta: { action: 'run tests' } }), {
     message: 'running: run tests',
     needsAttention: false,
+    responseIdle: false,
     promptIdle: false
   });
   assert.deepEqual(deriveAgentTransientUpdate({ type: 'event', name: 'cmd_succeeded' }), {
     message: 'completed successfully',
     needsAttention: false,
+    responseIdle: false,
     promptIdle: false
   });
 });
@@ -249,4 +247,22 @@ test('filterAgentTransientUpdateForFallback keeps only fallback speech bubbles',
     }),
     null
   );
+});
+
+
+test('exact failed tool completion clears input attention while retaining failure', () => {
+  const update = deriveAgentTransientUpdate({ type: 'event', name: 'cmd_failed',
+    meta: { source: 'mh_hook', native_event: 'PostToolUse', awaiting_input: false } });
+  assert.equal(update.error, true);
+  assert.equal(update.inputPending, false);
+  assert.equal(update.needsAttention, false);
+  assert.equal(update.promptIdle, false);
+  for (const meta of [{}, { awaiting_input: false },
+    { source: 'mh_hook', native_event: 'StopFailure', awaiting_input: false },
+    { source: 'mh_hook', native_event: 'PostToolUse' }]) {
+    const unknown = deriveAgentTransientUpdate({ type: 'event', name: 'cmd_failed', meta });
+    assert.equal(unknown.error, true);
+    assert.equal(unknown.inputPending, undefined);
+    assert.equal(unknown.needsAttention, undefined);
+  }
 });

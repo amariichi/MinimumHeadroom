@@ -59,54 +59,11 @@ After writing `settings.json`, the operator sets `chmod 444` on the file so that
 
 ## Hook bridge and M12 situation injection
 
-Wire the minimum-headroom hook bridge so the face speaks even when the agent
-forgets to call `face_say` voluntarily. The same settings can also wire the M12
-camera situation hook for `UserPromptSubmit`; it emits nothing unless
-`MH_SITUATION_INJECT=1`, so it is safe to leave installed. Merge the following
-into your `~/.claude/settings.json` (top-level `hooks` key), or prefer
-`examples/rmh-voice-mode/start-rmh.sh --agent claude --with-vision`, which
-generates an equivalent per-launch settings file without editing global config:
+Use the existing [hook bridge settings example](../../hook-bridge/claude-settings.json.example), replacing placeholder paths and merging its `hooks` entries into your chosen settings scope. Keep existing model, authentication and permission settings; do not overwrite the whole file. It observes questions, approvals, matching tool results, response endings and selected notifications. MCP registration above is a separate step.
 
-```json
-{
-  "hooks": {
-    "Notification": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime claude --event permission_required"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/ABS/PATH/minimum-headroom/scripts/mh-hook.mjs --runtime claude --event idle_after_response"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/ABS/PATH/minimum-headroom/scripts/situation-context-hook.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+Alternatively, `examples/rmh-voice-mode/start-rmh.sh --agent claude` generates per-launch MCP and hook settings. `--with-vision` additionally starts the optional vision stack; it is not needed for ordinary input-wait notifications. Other settings sources can still contribute hooks, so inspect duplicate registrations. The launcher does not choose Auto mode or bypass permissions for you.
 
-`mh-hook.mjs` is silent and exits 0 on every error path, so it never blocks Claude Code. It only fires when `MH_FACE_AGENT_ID` is set in the agent process environment (which `scripts/run-operator-once.sh` already does for the operator pane). See `doc/hook-bridge/` for cross-runtime details.
+The observer is silent and exits zero on errors; that keeps the CLI running but does not establish delivery. Check MCP with `face_ping`, then a harmless helper question/answer/explicit done through the intended inbox. CLI `Stop` means response end, not completion. See [hook verification and migration](../../hook-bridge/README.md#english).
 
 `situation-context-hook.sh` is also safe-by-default: if the vision worker is
 down or `MH_SITUATION_INJECT` is false, it exits 0 without stdout. Enable it for

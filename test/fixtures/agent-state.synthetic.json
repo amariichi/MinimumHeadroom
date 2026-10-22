@@ -1,0 +1,969 @@
+{
+  "provenance": "Synthetic regression data modelling CLI event/layout contracts. Paths, identities and timestamps are fictitious. This fixture is not live-run evidence.",
+  "claude_question": [
+    {
+      "native_event": "SessionStart",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "SessionStart",
+        "session_id": "89dea32d-f11e-5164-81f8-77e5e25ee09e"
+      }
+    },
+    {
+      "native_event": "UserPromptSubmit",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "89dea32d-f11e-5164-81f8-77e5e25ee09e",
+        "prompt": "Call AskUserQuestion exactly once to ask \"Choose the harmless test token\" with two options: ALPHA (first token) and BETA (second token), single selection. Do not choose for me or replace the tool with plain text. After receiving an answer reply only TEST_ANSWER_RECEIVED. Use no other tools and read no files.",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "native_event": "PreToolUse",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "89dea32d-f11e-5164-81f8-77e5e25ee09e",
+        "tool_use_id": "toolu_synthetic_1",
+        "tool_name": "AskUserQuestion",
+        "tool_input": {
+          "questions": [
+            {
+              "question": "Choose the harmless test token",
+              "header": "Test token",
+              "options": [
+                {
+                  "label": "ALPHA",
+                  "description": "First token"
+                },
+                {
+                  "label": "BETA",
+                  "description": "Second token"
+                }
+              ],
+              "multiSelect": false
+            }
+          ]
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "native_event": "PermissionRequest",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "89dea32d-f11e-5164-81f8-77e5e25ee09e",
+        "tool_name": "AskUserQuestion",
+        "tool_input": {
+          "questions": [
+            {
+              "question": "Choose the harmless test token",
+              "header": "Test token",
+              "options": [
+                {
+                  "label": "ALPHA",
+                  "description": "First token"
+                },
+                {
+                  "label": "BETA",
+                  "description": "Second token"
+                }
+              ],
+              "multiSelect": false
+            }
+          ]
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "native_event": "PostToolUse",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "89dea32d-f11e-5164-81f8-77e5e25ee09e",
+        "tool_use_id": "toolu_synthetic_1",
+        "tool_name": "AskUserQuestion",
+        "tool_input": {
+          "questions": [
+            {
+              "question": "Choose the harmless test token",
+              "header": "Test token",
+              "options": [
+                {
+                  "label": "ALPHA",
+                  "description": "First token"
+                },
+                {
+                  "label": "BETA",
+                  "description": "Second token"
+                }
+              ],
+              "multiSelect": false
+            }
+          ],
+          "answers": {
+            "Choose the harmless test token": "ALPHA"
+          }
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "native_event": "Stop",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "Stop",
+        "session_id": "89dea32d-f11e-5164-81f8-77e5e25ee09e",
+        "last_assistant_message": "TEST_ANSWER_RECEIVED",
+        "stop_hook_active": false,
+        "permission_mode": "default",
+        "background_tasks_count": 0,
+        "session_crons_count": 0
+      }
+    },
+    {
+      "native_event": "SessionEnd",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "SessionEnd",
+        "session_id": "89dea32d-f11e-5164-81f8-77e5e25ee09e",
+        "reason": "other"
+      }
+    }
+  ],
+  "claude_denied_original": [
+    {
+      "native_event": "SessionStart",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "SessionStart",
+        "session_id": "20c4ef7f-497d-5389-b09d-f03fec0e48d6"
+      }
+    },
+    {
+      "native_event": "UserPromptSubmit",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "20c4ef7f-497d-5389-b09d-f03fec0e48d6",
+        "prompt": "Use Bash exactly once to execute only this harmless command: printf TEST_APPROVAL_OK. Do not run any other command, read files, change settings, or use network tools. If denied, reply only TEST_DENIED and stop.",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "native_event": "PreToolUse",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "20c4ef7f-497d-5389-b09d-f03fec0e48d6",
+        "tool_use_id": "toolu_synthetic_2",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK",
+          "description": "Print the approval test string"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "native_event": "PermissionRequest",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "20c4ef7f-497d-5389-b09d-f03fec0e48d6",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK",
+          "description": "Print the approval test string"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "native_event": "Stop",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "Stop",
+        "session_id": "20c4ef7f-497d-5389-b09d-f03fec0e48d6",
+        "last_assistant_message": "TEST_DENIED",
+        "stop_hook_active": false,
+        "permission_mode": "default",
+        "background_tasks_count": 0,
+        "session_crons_count": 0
+      }
+    },
+    {
+      "native_event": "SessionEnd",
+      "runtime": "claude",
+      "payload": {
+        "hook_event_name": "SessionEnd",
+        "session_id": "20c4ef7f-497d-5389-b09d-f03fec0e48d6",
+        "reason": "other"
+      }
+    }
+  ],
+  "agy_question": [
+    {
+      "native_event": "SessionStart",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d"
+      }
+    },
+    {
+      "native_event": "PreInvocation",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d"
+      }
+    },
+    {
+      "native_event": "PreToolUse",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d",
+        "toolCall": {
+          "args": {
+            "questions": [
+              {
+                "is_multi_select": false,
+                "options": [
+                  "ALPHA",
+                  "BETA"
+                ],
+                "question": "Choose the harmless test token"
+              }
+            ]
+          },
+          "name": "ask_question"
+        },
+        "stepIdx": 2
+      }
+    },
+    {
+      "native_event": "PostToolUse",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d",
+        "toolCall": {
+          "args": {
+            "questions": [
+              {
+                "is_multi_select": false,
+                "options": [
+                  "ALPHA",
+                  "BETA"
+                ],
+                "question": "Choose the harmless test token"
+              }
+            ]
+          },
+          "name": "ask_question"
+        },
+        "stepIdx": 2,
+        "error": ""
+      }
+    },
+    {
+      "native_event": "PostInvocation",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d"
+      }
+    },
+    {
+      "native_event": "PreInvocation",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d"
+      }
+    },
+    {
+      "native_event": "PostInvocation",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d"
+      }
+    },
+    {
+      "native_event": "Stop",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d",
+        "error": "",
+        "fullyIdle": true,
+        "terminationReason": "NO_TOOL_CALL",
+        "executionNum": 0
+      }
+    },
+    {
+      "native_event": "PreInvocation",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d"
+      }
+    },
+    {
+      "native_event": "PostInvocation",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d"
+      }
+    },
+    {
+      "native_event": "Stop",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "a683f087-e4de-5bb2-b633-e897f288060d",
+        "error": "",
+        "fullyIdle": true,
+        "terminationReason": "NO_TOOL_CALL",
+        "executionNum": 0
+      }
+    }
+  ],
+  "agy_command": [
+    {
+      "native_event": "SessionStart",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "90dab1b9-aa7e-5584-a29f-803cdb8dc1ea"
+      }
+    },
+    {
+      "native_event": "PreInvocation",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "90dab1b9-aa7e-5584-a29f-803cdb8dc1ea"
+      }
+    },
+    {
+      "native_event": "PreToolUse",
+      "runtime": "antigravity",
+      "payload": {
+        "conversationId": "90dab1b9-aa7e-5584-a29f-803cdb8dc1ea",
+        "toolCall": {
+          "args": {
+            "CommandLine": "printf TEST_APPROVAL_OK",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "Print TEST_APPROVAL_OK"
+          },
+          "name": "run_command"
+        },
+        "stepIdx": 2
+      }
+    }
+  ],
+  "agy_approval_screen": [
+    "────────────────────────────────────────────────────────────",
+    "> Use run_command exactly once to execute only this harmless command: printf TEST_APPROVAL_OK. The CLI must obtain its normal required",
+    "  approval. Wait for my decision; do not bypass permissions. If denied reply only TEST_DENIED and do not retry. Do not run any other",
+    "  command, read files, invoke integrations, or start agents.",
+    "",
+    "● Ran ing (printf TEST_APPROVAL_OK) (ctrl+o to expand)",
+    "",
+    "Command",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "",
+    "Requesting permission for:",
+    "   printf TEST_APPROVAL_OK",
+    "",
+    "Run this command?",
+    "> 1. Yes, run command",
+    "  2. No, cancel",
+    "",
+    "  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command",
+    "esc to cancel                                                                                                        Gemini 4 Argon · medium"
+  ],
+  "agy_after_denial_screen": [
+    "────────────────────────────────────────────────────────────",
+    "> Use run_command exactly once to execute only this harmless command: printf TEST_APPROVAL_OK. The CLI must obtain its normal required",
+    "  approval. Wait for my decision; do not bypass permissions. If denied reply only TEST_DENIED and do not retry. Do not run any other",
+    "  command, read files, invoke integrations, or start agents.",
+    "",
+    "● Ran (printf TEST_APPROVAL_OK) failed (ctrl+o to expand)",
+    "",
+    "Command",
+    "  ⎿  User declined the tool call",
+    "",
+    "  ⎿  Interrupted · What should Antigravity CLI do instead?",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    ">",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "? for shortcuts                                                                                                      Gemini 4 Argon · medium"
+  ],
+  "claude_denied_batch": [
+    {
+      "runtime": "claude",
+      "native_event": "SessionStart",
+      "payload": {
+        "hook_event_name": "SessionStart",
+        "session_id": "b47dfafe-6c97-5bbd-a848-98ae1a9a024b"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "UserPromptSubmit",
+      "payload": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "b47dfafe-6c97-5bbd-a848-98ae1a9a024b",
+        "prompt": "Use Bash exactly once to execute only this harmless command: printf TEST_APPROVAL_OK. Do not run any other command, read files, change settings, or use network tools. If denied, reply only TEST_DENIED and stop.",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "PreToolUse",
+      "payload": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "b47dfafe-6c97-5bbd-a848-98ae1a9a024b",
+        "tool_use_id": "toolu_synthetic_3",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK",
+          "description": "Print TEST_APPROVAL_OK test string"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "PermissionRequest",
+      "payload": {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "b47dfafe-6c97-5bbd-a848-98ae1a9a024b",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK",
+          "description": "Print TEST_APPROVAL_OK test string"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "PostToolBatch",
+      "payload": {
+        "hook_event_name": "PostToolBatch",
+        "session_id": "b47dfafe-6c97-5bbd-a848-98ae1a9a024b",
+        "permission_mode": "default",
+        "tool_calls": [
+          {
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "printf TEST_APPROVAL_OK",
+              "description": "Print TEST_APPROVAL_OK test string"
+            },
+            "tool_use_id": "toolu_synthetic_3",
+            "tool_response": "TEST_TEST_DENIED: isolated approval verification; do not retry."
+          }
+        ]
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "Stop",
+      "payload": {
+        "hook_event_name": "Stop",
+        "session_id": "b47dfafe-6c97-5bbd-a848-98ae1a9a024b",
+        "last_assistant_message": "TEST_DENIED",
+        "stop_hook_active": false,
+        "permission_mode": "default",
+        "background_tasks_count": 0,
+        "session_crons_count": 0
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "SessionEnd",
+      "payload": {
+        "hook_event_name": "SessionEnd",
+        "session_id": "b47dfafe-6c97-5bbd-a848-98ae1a9a024b",
+        "reason": "other"
+      }
+    }
+  ],
+  "codex_denied": [
+    {
+      "runtime": "codex",
+      "native_event": "SessionStart",
+      "payload": {
+        "hook_event_name": "SessionStart",
+        "session_id": "0cd74ac9-311c-5eed-8ce6-34bdb70ff973",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "UserPromptSubmit",
+      "payload": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "0cd74ac9-311c-5eed-8ce6-34bdb70ff973",
+        "turn_id": "0c740f0e-087e-5fa3-aabe-f8fcd1db1437",
+        "prompt": "In this isolated approval-refusal test, use exec_command exactly once with cmd equal to \"printf TEST_REJECT_PROBE > /home/tester/Workspace/Agent/2000-01-01/case-1/agent-test-validation/regression-validation-20000101/workspace/refused-operation.txt\", sandbox_permissions=\"require_escalated\", and a justification asking approval for this test file. Do not run anything before it. Wait for the approval dialog; do not bypass approval, use any other tools, inspect files, start agents, invoke integrations, or retry after a refusal. If refused, leave the file absent and end the response immediately.",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "PreToolUse",
+      "payload": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "0cd74ac9-311c-5eed-8ce6-34bdb70ff973",
+        "turn_id": "0c740f0e-087e-5fa3-aabe-f8fcd1db1437",
+        "tool_use_id": "exec-20829b92-6fcb-5a9d-b025-d6f398f85b61",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_REJECT_PROBE > /home/tester/Workspace/Agent/2000-01-01/case-1/agent-test-validation/regression-validation-20000101/workspace/refused-operation.txt"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "PermissionRequest",
+      "payload": {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "0cd74ac9-311c-5eed-8ce6-34bdb70ff973",
+        "turn_id": "0c740f0e-087e-5fa3-aabe-f8fcd1db1437",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_REJECT_PROBE > /home/tester/Workspace/Agent/2000-01-01/case-1/agent-test-validation/regression-validation-20000101/workspace/refused-operation.txt",
+          "description": "Do you approve creating this test file for the isolated approval-refusal test?"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "Interrupt",
+      "payload": {
+        "hook_event_name": "Interrupt",
+        "session_id": "0cd74ac9-311c-5eed-8ce6-34bdb70ff973",
+        "turn_id": "0c740f0e-087e-5fa3-aabe-f8fcd1db1437",
+        "permission_mode": "default"
+      }
+    }
+  ],
+  "claude_allowed": [
+    {
+      "runtime": "claude",
+      "native_event": "SessionStart",
+      "payload": {
+        "hook_event_name": "SessionStart",
+        "session_id": "7fa9a575-c7ec-54c1-b01e-0df5172b24d9"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "UserPromptSubmit",
+      "payload": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "7fa9a575-c7ec-54c1-b01e-0df5172b24d9",
+        "prompt": "Use Bash exactly once to execute only this harmless command: printf TEST_APPROVAL_OK. Do not run any other command, read files, change settings, or use network tools. If denied, reply only TEST_DENIED and stop.",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "PreToolUse",
+      "payload": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "7fa9a575-c7ec-54c1-b01e-0df5172b24d9",
+        "tool_use_id": "toolu_synthetic_4",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK",
+          "description": "Print the fixed test string"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "PermissionRequest",
+      "payload": {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "7fa9a575-c7ec-54c1-b01e-0df5172b24d9",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK",
+          "description": "Print the fixed test string"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "PostToolUse",
+      "payload": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "7fa9a575-c7ec-54c1-b01e-0df5172b24d9",
+        "tool_use_id": "toolu_synthetic_4",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK",
+          "description": "Print the fixed test string"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "PostToolBatch",
+      "payload": {
+        "hook_event_name": "PostToolBatch",
+        "session_id": "7fa9a575-c7ec-54c1-b01e-0df5172b24d9",
+        "permission_mode": "default",
+        "tool_calls": [
+          {
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "printf TEST_APPROVAL_OK",
+              "description": "Print the fixed test string"
+            },
+            "tool_use_id": "toolu_synthetic_4",
+            "tool_response": "TEST_APPROVAL_OK"
+          }
+        ]
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "Stop",
+      "payload": {
+        "hook_event_name": "Stop",
+        "session_id": "7fa9a575-c7ec-54c1-b01e-0df5172b24d9",
+        "last_assistant_message": "TEST_APPROVAL_OK",
+        "stop_hook_active": false,
+        "permission_mode": "default",
+        "background_tasks_count": 0,
+        "session_crons_count": 0
+      }
+    },
+    {
+      "runtime": "claude",
+      "native_event": "SessionEnd",
+      "payload": {
+        "hook_event_name": "SessionEnd",
+        "session_id": "7fa9a575-c7ec-54c1-b01e-0df5172b24d9",
+        "reason": "other"
+      }
+    }
+  ],
+  "codex_question": [
+    {
+      "runtime": "codex",
+      "native_event": "Stop",
+      "payload": {
+        "hook_event_name": "Stop",
+        "session_id": "43ee736b-0d51-5191-bc33-8ddbb0a7b164",
+        "last_assistant_message": "TEST_NORMAL_OK",
+        "stop_hook_active": false,
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "PreToolUse",
+      "payload": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "43ee736b-0d51-5191-bc33-8ddbb0a7b164",
+        "tool_use_id": "call_3d7124f122104e9f84e43ba3a5ca0fa5",
+        "tool_name": "request_user_input",
+        "tool_input": {
+          "questions": [
+            {
+              "header": "Test token",
+              "id": "test_token",
+              "question": "Choose the harmless test token",
+              "options": [
+                {
+                  "label": "ALPHA",
+                  "description": "Select ALPHA."
+                },
+                {
+                  "label": "BETA",
+                  "description": "Select BETA."
+                }
+              ]
+            }
+          ]
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "PostToolUse",
+      "payload": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "43ee736b-0d51-5191-bc33-8ddbb0a7b164",
+        "tool_use_id": "call_3d7124f122104e9f84e43ba3a5ca0fa5",
+        "tool_name": "request_user_input",
+        "tool_input": {
+          "questions": [
+            {
+              "header": "Test token",
+              "id": "test_token",
+              "question": "Choose the harmless test token",
+              "options": [
+                {
+                  "label": "ALPHA",
+                  "description": "Select ALPHA."
+                },
+                {
+                  "label": "BETA",
+                  "description": "Select BETA."
+                }
+              ]
+            }
+          ]
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "Stop",
+      "payload": {
+        "hook_event_name": "Stop",
+        "session_id": "43ee736b-0d51-5191-bc33-8ddbb0a7b164",
+        "last_assistant_message": "TEST_ANSWER_RECEIVED",
+        "stop_hook_active": false,
+        "permission_mode": "default"
+      }
+    }
+  ],
+  "codex_after_denial_screen": [
+    "• I’ll request approval to create the test file.",
+    "",
+    "◦ Working (6s • esc to interrupt)",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "■ Conversation interrupted - use /feedback if something went wrong",
+    "",
+    "",
+    "› Ask Codex to do anything",
+    "",
+    "  GPT-6.1-Sol low · ~/Workspace/Agent/2000-01-01/case-1/agent-test-validation/regression-validation-20000101/wor…  ⚠ 1 warning · f2 to view"
+  ],
+  "codex_allowed": [
+    {
+      "runtime": "codex",
+      "native_event": "SessionStart",
+      "payload": {
+        "hook_event_name": "SessionStart",
+        "session_id": "55373a1c-30a6-5799-8e95-6c5104620e7d",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "UserPromptSubmit",
+      "payload": {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "55373a1c-30a6-5799-8e95-6c5104620e7d",
+        "turn_id": "40239453-d3a7-57de-abcb-04c8c895b258",
+        "prompt": "In this isolated approval test, use exec_command exactly once with cmd equal to \"printf TEST_APPROVAL_OK\", sandbox_permissions=\"require_escalated\", and a justification asking approval to print the harmless test token. Do not run anything before it. Wait for the approval dialog; do not bypass approval, use any other tools, inspect files, start agents, invoke integrations, or retry after a refusal. If allowed, reply only TEST_ALLOWED after the command result.",
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "PreToolUse",
+      "payload": {
+        "hook_event_name": "PreToolUse",
+        "session_id": "55373a1c-30a6-5799-8e95-6c5104620e7d",
+        "turn_id": "40239453-d3a7-57de-abcb-04c8c895b258",
+        "tool_use_id": "exec-2660560e-0287-5678-a98e-c1ad7f94d61b",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "PermissionRequest",
+      "payload": {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "55373a1c-30a6-5799-8e95-6c5104620e7d",
+        "turn_id": "40239453-d3a7-57de-abcb-04c8c895b258",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK",
+          "description": "May I print the harmless test token?"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "PostToolUse",
+      "payload": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "55373a1c-30a6-5799-8e95-6c5104620e7d",
+        "turn_id": "40239453-d3a7-57de-abcb-04c8c895b258",
+        "tool_use_id": "exec-2660560e-0287-5678-a98e-c1ad7f94d61b",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "printf TEST_APPROVAL_OK"
+        },
+        "permission_mode": "default"
+      }
+    },
+    {
+      "runtime": "codex",
+      "native_event": "Stop",
+      "payload": {
+        "hook_event_name": "Stop",
+        "session_id": "55373a1c-30a6-5799-8e95-6c5104620e7d",
+        "turn_id": "40239453-d3a7-57de-abcb-04c8c895b258",
+        "last_assistant_message": "TEST_ALLOWED",
+        "stop_hook_active": false,
+        "permission_mode": "default"
+      }
+    }
+  ],
+  "codex_approval_screen": [
+    ">_ OpenAI Codex (v0.163.0)",
+    "     ~/Workspace/Agent/2000-01-01/case-1/agent-test-validation/regression-validation-20000101/workspace",
+    "",
+    "  To get started, describe a task or try one of these commands:",
+    "",
+    "  /init - create an AGENTS.md file with instructions for Codex",
+    "  /status - show current session configuration",
+    "  /permissions - choose what Codex is allowed to do",
+    "  /model - choose what model and reasoning effort to use",
+    "  /review - review any changes and find issues",
+    "",
+    "",
+    "› In this isolated approval test, use exec_command exactly once with cmd equal to \"printf TEST_APPROVAL_OK\",",
+    "  sandbox_permissions=\"require_escalated\", and a justification asking approval to print the harmless test token. Do not run anything before",
+    "  it. Wait for the approval dialog; do not bypass approval, use any other tools, inspect files, start agents, invoke integrations, or retry",
+    "  after a refusal. If allowed, reply only TEST_ALLOWED after the command result.",
+    "",
+    "• Running printf TEST_APPROVAL_OK",
+    "",
+    "",
+    "  Would you like to run the following command?",
+    "",
+    "  Environment: local",
+    "",
+    "  Reason: May I print the harmless test token?",
+    "",
+    "  $ printf TEST_APPROVAL_OK",
+    "",
+    "",
+    "› 1. Yes, proceed (y)",
+    "  2. Yes, and don't ask again for commands that start with `printf TEST_APPROVAL_OK` (p)",
+    "  3. No, and tell Codex what to do differently (esc)",
+    "",
+    "  Press enter to confirm or esc to cancel"
+  ],
+  "agy_allowed": [
+    {
+      "runtime": "antigravity",
+      "native_event": "SessionStart",
+      "payload": {
+        "conversationId": "7c19de33-ae73-5919-a4fb-d23e2a33f344"
+      }
+    },
+    {
+      "runtime": "antigravity",
+      "native_event": "PreInvocation",
+      "payload": {
+        "conversationId": "7c19de33-ae73-5919-a4fb-d23e2a33f344"
+      }
+    },
+    {
+      "runtime": "antigravity",
+      "native_event": "PreToolUse",
+      "payload": {
+        "conversationId": "7c19de33-ae73-5919-a4fb-d23e2a33f344",
+        "toolCall": {
+          "args": {
+            "CommandLine": "printf TEST_APPROVAL_OK",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "Run approval check command"
+          },
+          "name": "run_command"
+        },
+        "stepIdx": 2
+      }
+    },
+    {
+      "runtime": "antigravity",
+      "native_event": "PostToolUse",
+      "payload": {
+        "conversationId": "7c19de33-ae73-5919-a4fb-d23e2a33f344",
+        "toolCall": {
+          "args": {
+            "CommandLine": "printf TEST_APPROVAL_OK",
+            "WaitMsBeforeAsync": 5000,
+            "toolSummary": "Run approval check command"
+          },
+          "name": "run_command"
+        },
+        "stepIdx": 2,
+        "error": ""
+      }
+    },
+    {
+      "runtime": "antigravity",
+      "native_event": "PostInvocation",
+      "payload": {
+        "conversationId": "7c19de33-ae73-5919-a4fb-d23e2a33f344"
+      }
+    },
+    {
+      "runtime": "antigravity",
+      "native_event": "PreInvocation",
+      "payload": {
+        "conversationId": "7c19de33-ae73-5919-a4fb-d23e2a33f344"
+      }
+    }
+  ],
+  "agy_allow_approval_screen": [
+    "────────────────────────────────────────────────────────────",
+    "> Use run_command exactly once to execute only this harmless command: printf TEST_APPROVAL_OK. The CLI must obtain its normal required",
+    "  approval. Wait for my decision; do not bypass permissions. After it runs reply only TEST_ALLOWED. Do not run any other command, read",
+    "  files, invoke integrations, or start agents.",
+    "",
+    "● Ran ing (printf TEST_APPROVAL_OK) (ctrl+o to expand)",
+    "",
+    "Command",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "",
+    "Requesting permission for:",
+    "   printf TEST_APPROVAL_OK",
+    "",
+    "Run this command?",
+    "> 1. Yes, run command",
+    "  2. No, cancel",
+    "",
+    "  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command",
+    "esc to cancel                                                                                                        Gemini 4 Argon · medium"
+  ],
+  "agy_after_allow_screen": [
+    "────────────────────────────────────────────────────────────",
+    "> Use run_command exactly once to execute only this harmless command: printf TEST_APPROVAL_OK. The CLI must obtain its normal required",
+    "  approval. Wait for my decision; do not bypass permissions. After it runs reply only TEST_ALLOWED. Do not run any other command, read",
+    "  files, invoke integrations, or start agents.",
+    "",
+    "● Ran ing (printf TEST_APPROVAL_OK) (ctrl+o to expand)",
+    "⣯  Running command...",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    ">",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "esc to cancelrmission for:                                                                                           Gemini 4 Argon · medium"
+  ]
+}

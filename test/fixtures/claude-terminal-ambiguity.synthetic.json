@@ -1,0 +1,27 @@
+{
+  "provenance": "Synthetic regression data modelling CLI event/layout contracts. Paths, identities and timestamps are fictitious. This fixture is not live-run evidence.",
+  "reports": [
+    {
+      "report_id": "hook-permission_required-b15c1778-a841-54e1-a8d5-35bcc1622f22",
+      "from_agent_id": "live-claude",
+      "kind": "blocked",
+      "source": "mh_hook",
+      "lifecycle_state": "resolved",
+      "request_id": null,
+      "tool_name": "Bash",
+      "action_fingerprint": "556fe301fa3576edb7b19fcf8c96aa4dd84969dda4bc58225614ac73e6ef52e2",
+      "attention_kind": "approval"
+    },
+    {
+      "report_id": "52136013-4386-5533-a5f1-6c3cdc3cc17c",
+      "from_agent_id": "live-claude",
+      "kind": "blocked",
+      "source": "stuck_detector",
+      "lifecycle_state": "resolved",
+      "request_id": null,
+      "tool_name": null,
+      "action_fingerprint": null,
+      "attention_kind": "approval"
+    }
+  ]
+}

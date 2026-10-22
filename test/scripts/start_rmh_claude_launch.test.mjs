@@ -40,6 +40,8 @@ writeFileSync(process.env.RMH_FAKE_CLAUDE_ARGV, JSON.stringify({
     env: {
       ...process.env,
       ...extraEnv,
+      XDG_RUNTIME_DIR: path.join(tmp, 'runtime'),
+      RMH_WITH_VISION: '0',
       PATH: `${tmp}${path.delimiter}${process.env.PATH}`,
       RMH_FAKE_CLAUDE_ARGV: output
     },
@@ -82,15 +84,15 @@ test('start-rmh claude passes generated MCP config and settings hooks', async ()
 
   const hooks = captured.settings.hooks;
   assert.equal(
-    hooks.Notification[0].hooks[0].command,
-    `${path.join(repoRoot, 'scripts/mh-hook.mjs')} --runtime claude --event permission_required`
+    hooks.PermissionRequest[0].hooks[0].command,
+    `${path.join(repoRoot, 'scripts/mh-hook.mjs')} --runtime claude --event PermissionRequest`
   );
   assert.equal(
     hooks.Stop[0].hooks[0].command,
-    `${path.join(repoRoot, 'scripts/mh-hook.mjs')} --runtime claude --event idle_after_response`
+    `${path.join(repoRoot, 'scripts/mh-hook.mjs')} --runtime claude --event Stop`
   );
   assert.equal(
-    hooks.UserPromptSubmit[0].hooks[0].command,
+    hooks.UserPromptSubmit[0].hooks[1].command,
     path.join(repoRoot, 'scripts/situation-context-hook.sh')
   );
 });

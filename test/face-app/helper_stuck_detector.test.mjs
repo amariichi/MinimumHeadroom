@@ -210,6 +210,7 @@ test('detector skips agents without pane_id or with status != active', async () 
 test('DEFAULT_STUCK_PATTERNS exports the documented pattern ids', () => {
   const ids = DEFAULT_STUCK_PATTERNS.map((p) => p.id).sort();
   assert.deepEqual(ids, [
+    'agy_command_approval',
     'agy_survey',
     'agy_trust_folder',
     'claude_approval',

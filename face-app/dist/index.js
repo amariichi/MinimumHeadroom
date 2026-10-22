@@ -26,6 +26,7 @@ import { createOwnerInboxStateStore } from './owner_inbox_state.js';
 import { createOwnerInboxApi } from './owner_inbox_api.js';
 import { createHookBridge } from './hook_bridge.js';
 import { createOwnerInboxNotifier } from './owner_inbox_notifier.js';
+import { createOwnerReportPipeline } from './owner_report_pipeline.js';
 import { createHelperStuckDetector } from './helper_stuck_detector.js';
 import { createMediaController, parseMediaAllowedEndpoints } from './media_controller.js';
 import { createMediaProxy } from './media_proxy.js';
@@ -275,6 +276,9 @@ const agentLifecycleRuntime = createAgentLifecycleRuntime({
   worktreesRoot: process.env.MH_AGENT_WORKTREES_ROOT ?? '',
   tmuxSession: process.env.MH_AGENT_TMUX_SESSION ?? 'agent',
   defaultAgentCommand: process.env.MH_AGENT_DEFAULT_CMD ?? 'codex',
+  // A routine app reload must not retire live helpers or purge their reports.
+  // Destructive startup retirement is an explicit administrative opt-in.
+  cleanupOnStartup: (process.env.MH_AGENT_STARTUP_CLEANUP ?? '0') === '1',
   tmuxEnabled: (process.env.MH_AGENT_TMUX_ENABLED ?? '1') === '1',
   worktreeEnabled: (process.env.MH_AGENT_WORKTREE_ENABLED ?? '1') === '1',
   allowExternalDelete: (process.env.MH_AGENT_ALLOW_EXTERNAL_DELETE ?? '0') === '1',
@@ -307,6 +311,17 @@ const agentLifecycleApi = createAgentLifecycleApi({
   runtime: agentLifecycleRuntime
 });
 
+const ownerInboxNotifierEnabled = (process.env.MH_OWNER_INBOX_NOTIFY ?? '1') !== '0'
+  && (process.env.MH_OWNER_INBOX_NOTIFY ?? '').toLowerCase() !== 'off';
+const ownerInboxNotifier = createOwnerInboxNotifier({ enabled: ownerInboxNotifierEnabled, store: ownerInboxState, log: console });
+const ownerReportPipeline = createOwnerReportPipeline({
+  store: ownerInboxState,
+  assignmentStore: agentAssignmentState,
+  notify: (report) => ownerInboxNotifier.notify({ report, server: liveServer, ttsController }),
+  log: console
+});
+const ownerInboxApi = createOwnerInboxApi({ store: ownerInboxState, submitReport: ownerReportPipeline.submitReport });
+
 const helperStuckDetectorEnabled = (process.env.MH_HELPER_STUCK_DETECTOR ?? '1') !== '0'
   && (process.env.MH_HELPER_STUCK_DETECTOR ?? '').toLowerCase() !== 'off';
 const helperStuckDetectorIntervalMs = Number.parseInt(process.env.MH_HELPER_STUCK_DETECTOR_INTERVAL_MS ?? '5000', 10);
@@ -314,6 +329,14 @@ const helperStuckDetector = helperStuckDetectorEnabled
   ? createHelperStuckDetector({
       runtime: agentLifecycleRuntime,
       inboxStore: ownerInboxState,
+      submitReport: ownerReportPipeline.submitReport,
+      resolveReport: ownerReportPipeline.resolveObservedInput,
+      onResolved: ({ agentId, remaining, promptIdle }) => {
+        if (remaining) return;
+        liveServer?.broadcast({ v: 1, type: 'event', agent_id: agentId, ts: Date.now(),
+          name: promptIdle ? 'prompt_idle' : 'cmd_started',
+          meta: { source: 'stuck_detector', awaiting_input: false } });
+      },
       assignmentStore: agentAssignmentState,
       intervalMs: Number.isFinite(helperStuckDetectorIntervalMs) && helperStuckDetectorIntervalMs >= 250
         ? helperStuckDetectorIntervalMs
@@ -330,33 +353,6 @@ if (helperStuckDetector) {
 const agentAssignmentApi = createAgentAssignmentApi({
   store: agentAssignmentState,
   lifecycleRuntime: agentLifecycleRuntime
-});
-const ownerInboxNotifierEnabled = (process.env.MH_OWNER_INBOX_NOTIFY ?? '1') !== '0'
-  && (process.env.MH_OWNER_INBOX_NOTIFY ?? '').toLowerCase() !== 'off';
-const ownerInboxNotifier = createOwnerInboxNotifier({
-  enabled: ownerInboxNotifierEnabled,
-  log: console
-});
-const ownerInboxApi = createOwnerInboxApi({
-  store: ownerInboxState,
-  async onSubmitReport({ result }) {
-    if (!result || result.transport_state !== 'accepted' || !result.report) {
-      return;
-    }
-    agentAssignmentState.noteReport(result.report);
-    // Say it out loud rather than leaving the owner to poll. Failures here must
-    // not fail the report: the report is already stored, and losing the
-    // announcement is much cheaper than losing the report.
-    try {
-      await ownerInboxNotifier.notify({
-        report: result.report,
-        server,
-        ttsController
-      });
-    } catch (error) {
-      console.warn(`[face-app] owner inbox notify failed: ${error.message}`);
-    }
-  }
 });
 const hookBridge = createHookBridge({ log: console });
 const fixedAckCounters = new Map();
@@ -501,6 +497,7 @@ const operatorAsrProxy = createOperatorAsrProxy({
 let operatorRealtimeAsrProxy = null;
 
 let ttsController = null;
+ownerInboxState.subscribe(() => ttsController?.revalidateNotifications());
 const ttsAudioStore = createTtsAudioStore({
   ttlMs: Number.parseInt(process.env.MH_TTS_AUDIO_REF_TTL_MS ?? '60000', 10)
 });
@@ -627,7 +624,7 @@ const server = await startFaceWebSocketServer({
 
     if (payload && payload.type === 'hook') {
       hookBridge
-        .handleHook({ payload, server, ttsController, ownerInboxStore: ownerInboxState, assignmentStore: agentAssignmentState })
+        .handleHook({ payload, server, ttsController, ownerInboxStore: ownerInboxState, assignmentStore: agentAssignmentState, reportPipeline: ownerReportPipeline })
         .catch((error) => {
           console.warn(`[face-app] hook bridge failed: ${error.message}`);
         });

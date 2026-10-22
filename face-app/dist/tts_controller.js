@@ -391,6 +391,69 @@ export function createTtsController(options = {}) {
   let browserAudioEncodeTail = Promise.resolve();
   const canceledBrowserAudioGenerations = new Set();
   const browserAudioAbortControllers = new Map();
+  // Only automatic wait notices opt in. Ordinary priority-3 emergency speech
+  // keeps the existing interrupt/no-dedupe contract.
+  const announcedNotifications = new Map();
+
+  function isNotificationCurrent(entry) {
+    if (!entry.isCurrent) return true;
+    try { return entry.isCurrent() === true; }
+    catch { return false; } // Automatic status speech must not guess on lookup failure.
+  }
+
+  function rememberNotification(entry) {
+    if (!entry.notificationKey) return;
+    const notice = announcedNotifications.get(entry.notificationKey);
+    if (notice) notice.entries.set(entry.messageId, entry);
+    else announcedNotifications.set(entry.notificationKey, { ...entry, entries: new Map([[entry.messageId, entry]]) });
+  }
+
+  function dropStaleNotification(entry) {
+    emitState(entry.sessionId, entry.utteranceId, 'dropped', {
+      ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+      reason: 'notification_resolved', generation: entry.generation,
+      message_id: entry.messageId, revision: entry.revision
+    });
+  }
+
+  function revalidateNotifications() {
+    queue = queue.filter(entry => {
+      if (isNotificationCurrent(entry)) return true;
+      dropStaleNotification(entry);
+      return false;
+    });
+    for (const [key, notice] of announcedNotifications) {
+      if (isNotificationCurrent(notice)) continue;
+      announcedNotifications.delete(key);
+      // Worker completion does not prove the browser already played its audio.
+      // Cancel every delivered chunk of this notice, even with no active worker.
+      for (const entry of notice.entries.values()) {
+        if (entry.generation === active?.generation && entry.messageId === active?.messageId) continue;
+        cancelBrowserAudioGeneration(entry.generation);
+        emitState(entry.sessionId, entry.utteranceId, 'dropped', {
+          ...(entry.agentId ? { agent_id: entry.agentId } : {}),
+          reason: 'notification_resolved', generation: entry.generation,
+          message_id: entry.messageId, revision: entry.revision
+        });
+      }
+    }
+    if (active && !isNotificationCurrent(active)) {
+      const stale = active;
+      interruptActive('notification_resolved');
+      emitMouth(stale.sessionId, stale.utteranceId, 0, stale.generation, stale.messageId, stale.revision, {
+        agent_id: stale.agentId
+      });
+      emitState(stale.sessionId, stale.utteranceId, 'play_stop', {
+        ...(stale.agentId ? { agent_id: stale.agentId } : {}),
+        reason: 'notification_resolved', generation: stale.generation,
+        message_id: stale.messageId, revision: stale.revision
+      });
+      active = null;
+      activeQueuedAt = null;
+      activePlayStartedAt = null;
+    }
+    maybeStartPending();
+  }
 
   function notifyActivity() {
     const activity = {
@@ -425,6 +488,7 @@ export function createTtsController(options = {}) {
   function enqueueEntries(entries) {
     for (const entry of entries) {
       queue.push(entry);
+      rememberNotification(entry);
     }
     notifyActivity();
   }
@@ -468,7 +532,7 @@ export function createTtsController(options = {}) {
     return atMs > entry.createdAt + entry.ttlMs;
   }
 
-  function normalizeEntry(payload, currentGeneration, acceptedAt) {
+  function normalizeEntry(payload, currentGeneration, acceptedAt, notification = {}) {
     const rawText = normalizeText(payload?.text);
     if (!rawText) {
       return null;
@@ -511,6 +575,8 @@ export function createTtsController(options = {}) {
       policy,
       ttlMs,
       createdAt,
+      notificationKey: typeof notification.notificationKey === 'string' ? notification.notificationKey : null,
+      isCurrent: typeof notification.isCurrent === 'function' ? notification.isCurrent : null,
       appendToQueue: payload?.append_to_queue === true,
       deferUntilIdle: payload?.defer_until_idle === true,
       dedupeKey: typeof payload?.dedupe_key === 'string' ? payload.dedupe_key : null
@@ -553,6 +619,11 @@ export function createTtsController(options = {}) {
   function dispatchSpeak(entry, reason = 'accepted') {
     if (stopped) {
       return { accepted: false, reason: 'controller_stopped' };
+    }
+
+    if (!isNotificationCurrent(entry)) {
+      dropStaleNotification(entry);
+      return { accepted: false, reason: 'notification_resolved' };
     }
 
     if (!workerReady) {
@@ -614,6 +685,7 @@ export function createTtsController(options = {}) {
     }
 
     active = entry;
+    rememberNotification(entry);
     activeQueuedAt = now();
     activePlayStartedAt = null;
     notifyActivity();
@@ -646,6 +718,10 @@ export function createTtsController(options = {}) {
 
     while (!active && queue.length > 0) {
       const next = queue.shift();
+      if (!isNotificationCurrent(next)) {
+        dropStaleNotification(next);
+        continue;
+      }
       if (isEntryExpired(next)) {
         emitState(next.sessionId, next.utteranceId, 'dropped', {
           ...(next.agentId ? { agent_id: next.agentId } : {}),
@@ -703,6 +779,7 @@ export function createTtsController(options = {}) {
   }
 
   function broadcastDirectPcm(entry, message, mimeType, sampleRate) {
+    if (!isNotificationCurrent(entry) || canceledBrowserAudioGenerations.has(entry.generation)) return;
     broadcast({
       v: 1,
       type: 'tts_audio',
@@ -726,6 +803,7 @@ export function createTtsController(options = {}) {
     const run = async () => {
       if (
         stopped
+        || !isNotificationCurrent(entry)
         || canceledBrowserAudioGenerations.has(entry.generation)
         || !browserAudioEnabled
       ) {
@@ -753,6 +831,7 @@ export function createTtsController(options = {}) {
         );
         if (
           stopped
+          || !isNotificationCurrent(entry)
           || canceledBrowserAudioGenerations.has(entry.generation)
           || abortController.signal.aborted
         ) {
@@ -793,6 +872,7 @@ export function createTtsController(options = {}) {
       } catch (error) {
         if (
           stopped
+          || !isNotificationCurrent(entry)
           || canceledBrowserAudioGenerations.has(entry.generation)
           || abortController.signal.aborted
         ) {
@@ -826,7 +906,7 @@ export function createTtsController(options = {}) {
       reason
     });
 
-    emitState(active.sessionId, active.utteranceId, 'interrupt_requested', {
+    emitState(active.sessionId, active.utteranceId, reason === 'notification_resolved' ? 'dropped' : 'interrupt_requested', {
       ...(active.agentId ? { agent_id: active.agentId } : {}),
       ...(active.agentLabel ? { agent_label: active.agentLabel } : {}),
       reason,
@@ -865,6 +945,10 @@ export function createTtsController(options = {}) {
     if (message.type === 'response') {
       return;
     }
+
+    if (active && !isNotificationCurrent(active)) revalidateNotifications();
+    if (Number.isInteger(message.generation) && canceledBrowserAudioGenerations.has(message.generation)
+        && active?.generation !== message.generation) return;
 
     if (message.type === 'error') {
       emitState('-', null, 'worker_error', {
@@ -1071,16 +1155,25 @@ export function createTtsController(options = {}) {
   // Kick a health check; worker may still emit ready asynchronously.
   sendWorker({ id: `ping-${now()}`, op: 'ping' });
 
-  async function handleSayPayload(payload) {
+  async function handleSayPayload(payload, notification = {}) {
     const acceptedAt = now();
 
     if (stopped) {
       return { accepted: false, reason: 'controller_stopped' };
     }
 
-    const entry = normalizeEntry(payload, generation + 1, acceptedAt);
+    const entry = normalizeEntry(payload, generation + 1, acceptedAt, notification);
     if (!entry) {
       return { accepted: false, reason: 'invalid_payload' };
+    }
+
+    revalidateNotifications();
+    if (!isNotificationCurrent(entry)) {
+      dropStaleNotification(entry);
+      return { accepted: false, spoken: false, reason: 'notification_resolved' };
+    }
+    if (entry.notificationKey && announcedNotifications.has(entry.notificationKey)) {
+      return { accepted: false, spoken: false, reason: 'notification_duplicate' };
     }
 
     if (isEntryExpired(entry, acceptedAt)) {
@@ -1144,6 +1237,14 @@ export function createTtsController(options = {}) {
     const forceInterrupt = entry.policy === 'interrupt' || entry.priority >= 3;
     const autoInterrupt = shouldPromoteToAutoInterrupt(entry, acceptedAt);
 
+    if (entry.notificationKey && active?.notificationKey) {
+      // Distinct real waits must each get a turn; a second helper must not
+      // erase the first helper's still-valid notice halfway through synthesis.
+      enqueueEntries(children);
+      return { accepted: true, spoken: true, queued: true, generation: head.generation,
+        message_id: head.messageId, revision: head.revision, reason: null };
+    }
+
     if (entry.deferUntilIdle) {
       removeDeferredEntries();
 
@@ -1173,7 +1274,8 @@ export function createTtsController(options = {}) {
     }
 
     if (forceInterrupt || autoInterrupt) {
-      clearQueue();
+      if (entry.notificationKey) queue = queue.filter(next => next.notificationKey && isNotificationCurrent(next));
+      else clearQueue();
       if (active) {
         interruptActive(autoInterrupt ? 'auto_interrupt' : 'superseded', entry.generation);
       }
@@ -1188,7 +1290,7 @@ export function createTtsController(options = {}) {
       // append short language announcements and their translation to the
       // existing FIFO without exposing a new public face_say policy.
       if (!entry.appendToQueue) {
-        clearQueue();
+        queue = queue.filter(next => next.notificationKey && isNotificationCurrent(next));
       }
       enqueueEntries(children);
       emitState(head.sessionId, head.utteranceId, 'queued', {
@@ -1285,6 +1387,7 @@ export function createTtsController(options = {}) {
     handleSayPayload,
     interruptCurrent,
     flushForBargeIn,
+    revalidateNotifications,
     stop,
     snapshot() {
       return {

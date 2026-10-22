@@ -121,6 +121,8 @@ Antigravity CLI helpers may require first-run interaction even with permission p
 - Reports land in a durable owner inbox that survives browser reloads
 - The owner resolves items with `owner.inbox.resolve`
 - Unresolved items keep helper and owner attention visible in the UI
+- Use the actual caller/assignment owner identity. The normal Operator is `__operator__`; do not substitute `owner` as a placeholder. Explicitly assigned other owners remain distinct. The owner and stream must agree.
+- Native question/approval waits are separate from a helper's explicit question. A matching native result or supported terminal transition clears only its own observed wait. Response end, speech and `Stop` never imply `done`.
 
 ### Focus and Retargeting
 
@@ -132,7 +134,7 @@ Antigravity CLI helpers may require first-run interaction even with permission p
 
 A helper can stall inside a CLI-level modal (a tool-approval prompt, a model picker, a "you've hit your usage limit" notice, a CLI feedback survey) where the underlying LLM is not even reading input. The injected mission text never reaches the model in those states, and `agent.assignment.list` will eventually show `delivery_state=timeout` without any helpful diagnosis. To make that visible and recoverable from any MCP client, the runtime ships three pieces:
 
-- A background **stuck-detector** runs inside face-app (default interval 5s, disable with `MH_HELPER_STUCK_DETECTOR=off`). On each tick it captures every active helper's pane tail and matches it against a small pattern set (`Do you want to proceed?`, `Switch to gpt-…`, `You've hit your usage limit`, `How's the CLI experience`, `Press enter to confirm`). On a fresh match it posts a `kind=blocked` report to the owner inbox with the matched line and a snippet of pane context in `detail`. Same `(agent, pattern, matched line)` matches are deduped for ~30 seconds so the inbox does not flood.
+- A background **stuck-detector** runs inside face-app (default 5s; disable with `MH_HELPER_STUCK_DETECTOR=off`). It recognizes supported question/approval and other CLI modal layouts, posts a blocking owner report, and avoids reopening the same stale occurrence. It correlates native and terminal observations only with strong matching identities or complete action/input fingerprints. Unknown layouts and ambiguous concurrent requests remain separate. A missing snapshot does not clear a wait. See [hook semantics and verification](../hook-bridge/README.md#english).
 - **`agent.pane_snapshot { agent_id, tail_lines? }`** returns the last N lines (default 40, max 400) of a helper's pane with ANSI stripped. Use it when the inbox `blocked` report points at a helper and you want to see the full modal text before deciding what to press.
 - **`agent.pane_send_key { agent_id, keys, literal? }`** sends raw tmux keys to a helper's pane. `keys` accepts printable ASCII (`"2"`, `"hello world"`) and a named-key allowlist (`Enter`, `Escape`, `Tab`, `BSpace`, `Space`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `C-c`, `C-m`, `C-d`). Set `literal: true` to add `-l --` so tmux treats the strings as text instead of key names — useful when typing free-form input into a CLI selector. This tool is for answering CLI modals, **not** for delivering missions; use `agent.inject` for missions.
 
@@ -142,7 +144,7 @@ Typical recovery flow:
 2. Call `agent.pane_snapshot agent_id=helper-1 tail_lines=30` to see the full modal.
 3. Pick the right response keys and call `agent.pane_send_key agent_id=helper-1 keys=["2","Enter"]` (numbered selectors) or `keys=["Down","Enter"]` (arrow-key selectors).
 4. Optionally call `agent.pane_snapshot` once more to confirm the modal cleared. If the mission text was lost while the modal held input, re-inject with `agent.inject`.
-5. Resolve the auto `blocked` report with `owner.inbox.resolve action=resolved` so it does not stay on the inbox.
+5. Confirm the matching observed wait clears. If it stays unresolved because the runtime cannot identify a safe matching transition, inspect it and resolve only that report with `owner.inbox.resolve`; do not clear unrelated questions.
 
 The detector posts reports; it never auto-presses keys. The operator (or the user) decides the response. This keeps irreversible choices like `No, and always deny` from happening on a regex match.
 
@@ -163,10 +165,9 @@ The detector posts reports; it never auto-presses keys. The operator (or the use
 
 ### Shutdown and Recovery
 
-- Startup is cleanup-first: previously registered helpers are deleted or purged instead of being auto-restored
-- Active-stream helpers are removed from tmux, worktrees, runtime state, assignment state, and owner inbox state
-- Hidden helper records from other repositories are purged from the current repository's runtime state instead of lingering as ghosts
-- If explicit helper resume is added later, it should be an operator action, not an automatic startup side effect
+- Normal app startup preserves helper registrations, assignments and inbox records by default. It does not automatically resume or repair a missing CLI pane.
+- `MH_AGENT_STARTUP_CLEANUP=1` explicitly opts into destructive startup retirement/purging; use it only when that cleanup is intended. Do not enable it merely to restart the app.
+- Explicit `agent.delete` still removes the helper. To retain its workspace or assignment/inbox evidence, use `preserve_worktree=true` and/or `purge_related_state=false` as appropriate. These options do not keep the CLI process alive.
 
 ---
 
@@ -318,6 +319,8 @@ Antigravity CLI のヘルパーでは、権限プリセットを使っても、�
   残ります。
 - 対応を終えたレポートは、`owner.inbox.resolve` で解決済みにします。
 - 未解決の項目がある間は、UI 上でヘルパーとオーナーへの注意表示を維持します。
+- 実際の呼び出し元・割り当ての owner を使います。通常 Operator は `__operator__` です。仮の `owner` へ置き換えず、明示された別 owner は区別します。owner と stream の所有者を一致させてください。
+- ネイティブの質問・承認待ちと、ヘルパー自身の質問は別です。対応する結果や既知の端末遷移で解除するのは、その観測待ちだけです。応答終了・発話・`Stop` を `done` と解釈しません。
 
 ### フォーカスとリターゲット
 
@@ -334,14 +337,7 @@ CLI のモーダル画面で停止することがあります。この状態で�
 `delivery_state=timeout` と表示されるだけなので、原因を判断できません。どの MCP クライアント
 からでも状態を確認して復旧できるよう、実行環境は次の3つの仕組みを備えています。
 
-- バックグラウンドの **停止検出器** が face-app 内で動きます。確認間隔の既定値は5秒で、
-  `MH_HELPER_STUCK_DETECTOR=off` を指定すると無効になります。確認のたびに、動作中の全ヘルパー
-  からペイン末尾を取得し、`Do you want to proceed?`、`Switch to gpt-…`、
-  `You've hit your usage limit`、`How's the CLI experience`、`Press enter to confirm` など、
-  少数の既知パターンと照合します。新しい一致を見つけると、`kind=blocked` のレポートを
-  オーナー受信箱へ送り、一致した行と周辺のペイン内容を `detail` に含めます。同じ
-  `(agent, pattern, matched line)` は約30秒間重複を除外するため、受信箱が同じ通知で
-  埋まりません。
+- バックグラウンドの **停止検出器** が face-app 内で動きます（既定5秒、`MH_HELPER_STUCK_DETECTOR=off` で無効化）。対応する質問・承認・その他の CLI モーダルを認識し、blocking なオーナーレポートを送り、同じ古い表示の再通知を避けます。native と端末の観測は強い識別子、または完全な操作・入力の fingerprint が一致する場合だけ対応づけます。未対応の表示や曖昧な同時要求は別のまま残し、取得失敗では待ちを解除しません。[hook の状態と検証](../hook-bridge/README.md#japanese)を参照してください。
 - **`agent.pane_snapshot { agent_id, tail_lines? }`** は、ヘルパーのペイン末尾から N 行を返します
   （既定40行、最大400行）。ANSI 制御文字は除去されます。受信箱の `blocked` レポートが示す
   ヘルパーについて、モーダルの本文を確認してから対応を決めるために使います。
@@ -364,8 +360,7 @@ CLI のモーダル画面で停止することがあります。この状態で�
 4. 必要に応じて、もう一度 `agent.pane_snapshot` を呼び、モーダルが閉じたことを確認します。
    モーダルが入力を受け取っていた間にミッション文が失われた場合は、`agent.inject` で
    再送します。
-5. 自動生成された `blocked` レポートを、`owner.inbox.resolve action=resolved` で解決済みに
-   します。
+5. 対応する観測待ちが解除されたことを確認します。安全に対応づける遷移を識別できず残った場合は、内容を確認してそのレポートだけを `owner.inbox.resolve` で解決し、無関係な質問は残します。
 
 検出器はレポートを送るだけで、キーを自動的に押すことはありません。どの応答を送るかは、
 オペレーターまたはユーザーが判断します。これにより、正規表現に一致しただけで
@@ -394,10 +389,6 @@ CLI のモーダル画面で停止することがあります。この状態で�
 
 ### シャットダウンと復旧
 
-- 起動時は、後始末を優先します。以前のヘルパーを自動復元せず、削除するか状態記録から
-  取り除きます。
-- 現在の作業ストリームに属するヘルパーは、tmux、ワークツリー、実行時状態、ミッション状態、
-  オーナー受信箱から取り除きます。
-- 別のリポジトリに属する非表示のヘルパー記録も、現在のリポジトリ側の状態には残しません。
-- 将来、再開機能を追加する場合も、起動時に自動復元するのではなく、オペレーターの明示的な
-  操作で再開する想定です。
+- 通常のアプリ起動では、ヘルパーの登録・割り当て・受信箱を既定で保持します。CLI ペインがなければ、自動的に再開・修復するわけではありません。
+- `MH_AGENT_STARTUP_CLEANUP=1` は破壊的な起動時の退役・記録削除を明示的に有効化します。後始末が目的の場合だけ使い、単なる再起動のためには指定しないでください。
+- 明示的な `agent.delete` は引き続きヘルパーを削除します。workspace や割り当て・受信箱の証拠を保持する場合は、必要に応じて `preserve_worktree=true` と `purge_related_state=false` を使います。これらの指定でも CLI プロセスは終了します。
