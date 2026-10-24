@@ -49,7 +49,7 @@ done
 echo "[setup] root: $ROOT_DIR"
 
 echo "[setup] checking Node.js"
-node --version
+node "$ROOT_DIR/scripts/check-node-version.mjs"
 
 echo "[setup] checking uv"
 uv --version
