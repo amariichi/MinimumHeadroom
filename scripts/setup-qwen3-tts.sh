@@ -11,21 +11,25 @@ MODEL_ID="${MH_QWEN_TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice}"
 MODEL_REVISION="${MH_QWEN_TTS_MODEL_REVISION:-85e237c12c027371202489a0ec509ded67b5e4b5}"
 INSTALL_MANIFEST="${QWEN3_TTS_INSTALL_MANIFEST:-$ROOT_DIR/.local/state/interpreter/qwen3-tts.json}"
 DRY_RUN=0
+UPDATE_BROTLI=0
+BROTLI_REQUIREMENT="brotli==1.2.1"
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage: ./scripts/setup-qwen3-tts.sh [options]
 
 Options:
   --venv PATH      Dedicated virtualenv path (default: ./.venv-qwen-tts)
   --cache-dir PATH Hugging Face home containing the pinned snapshot
   --dry-run        Print exact package/model work without changing files
+  --update-brotli  Update only Brotli in an existing environment; no model work
   -h, --help       Show this help
 
 Pinned runtime:
   qwen-tts==0.1.1
   torch==2.10.0
   transformers==4.57.3
+  $BROTLI_REQUIREMENT
   Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
   revision 85e237c12c027371202489a0ec509ded67b5e4b5
 
@@ -54,6 +58,10 @@ while (($# > 0)); do
       DRY_RUN=1
       shift
       ;;
+    --update-brotli)
+      UPDATE_BROTLI=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -67,8 +75,28 @@ while (($# > 0)); do
 done
 
 echo "[setup-qwen3-tts] venv=${VENV_DIR}"
+if ((UPDATE_BROTLI == 1)); then
+  echo "[setup-qwen3-tts] packages=$BROTLI_REQUIREMENT"
+  if ((DRY_RUN == 1)); then
+    echo "[setup-qwen3-tts] dry-run: would update only Brotli and check dependencies; no environment rebuild or model work"
+    exit 0
+  fi
+  PYTHON_BIN="$VENV_DIR/bin/python"
+  [[ -x "$PYTHON_BIN" ]] || {
+    echo "[setup-qwen3-tts] existing Qwen3 environment not found: $VENV_DIR" >&2
+    exit 2
+  }
+  command -v uv >/dev/null 2>&1 || {
+    echo "[setup-qwen3-tts] uv is required" >&2
+    exit 2
+  }
+  uv pip install --python "$PYTHON_BIN" --no-deps --upgrade "$BROTLI_REQUIREMENT"
+  uv pip check --python "$PYTHON_BIN"
+  echo "[setup-qwen3-tts] Brotli update complete"
+  exit 0
+fi
 echo "[setup-qwen3-tts] cache=${CACHE_ROOT}"
-echo "[setup-qwen3-tts] packages=qwen-tts==0.1.1 torch==2.10.0 transformers==4.57.3"
+echo "[setup-qwen3-tts] packages=qwen-tts==0.1.1 torch==2.10.0 transformers==4.57.3 $BROTLI_REQUIREMENT"
 echo "[setup-qwen3-tts] model=${MODEL_ID}@${MODEL_REVISION}"
 if ((DRY_RUN == 1)); then
   echo "[setup-qwen3-tts] dry-run: would install pinned packages, prefetch about 2.4 GiB, and run an offline load smoke"
@@ -80,12 +108,14 @@ command -v uv >/dev/null 2>&1 || {
   exit 2
 }
 
+node "$ROOT_DIR/scripts/check-node-version.mjs"
 uv venv "$VENV_DIR" --python "$PYTHON_VERSION" --seed
 PYTHON_BIN="$VENV_DIR/bin/python"
 uv pip install --python "$PYTHON_BIN" \
   "qwen-tts==0.1.1" \
   "torch==2.10.0" \
   "transformers==4.57.3" \
+  "$BROTLI_REQUIREMENT" \
   "numpy" \
   "sounddevice" \
   "soundfile"

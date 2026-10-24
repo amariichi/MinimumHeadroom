@@ -195,7 +195,7 @@ sequenceDiagram
 
 ## 必要環境
 
-- Node.js 20+（Node 24 推奨）
+- Node.js 22系（22.23.4以上）、24系（24.22.1以上・推奨）、26系（26.12.1以上）
 - `uv`（Python ワーカー依存管理）
 - Python 3.10+
 - `ffmpeg`（推奨。ASR worker の webm/ogg/mp4 フォールバックデコードに使用）
