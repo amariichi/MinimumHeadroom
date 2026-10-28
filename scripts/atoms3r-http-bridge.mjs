@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
+import { createAtomDiscoveryRecovery } from './atoms3r_discovery_recovery.mjs';
 import {
   ATOM_BRIDGE_SUBPROTOCOL,
   buildAtomAudioPostHeaders,
@@ -60,6 +61,16 @@ let atomAudioUrl = '';
 let atomVolumeUrl = '';
 let atomHealthUrl = '';
 refreshAtomUrls();
+const atomRecovery = createAtomDiscoveryRecovery({
+  probe: () => checkAtomHealth({ quiet: true }),
+  discover: async (reason) => {
+    if (!discoveryEnabled) return null;
+    const discovered = await discoverAtom(reason);
+    if (!discovered) return null;
+    setAtomBaseUrl(discovered, `discovery:${reason}`);
+    return checkAtomHealth({ quiet: true });
+  }
+});
 // Highest tts generation seen. On a barge-in/interrupt the server bumps the
 // generation; queued audio for an older generation must be dropped at send
 // time instead of being flushed to the Atom in a burst (the burst makes the
@@ -370,7 +381,7 @@ async function handleVolumeSet(payload) {
       ok: true,
       speakerVolume: result.speaker_volume
     });
-    const health = await checkAtomHealth({ quiet: true });
+    const health = await atomRecovery.ensureReachable('volume_changed', { allowDiscovery: false });
     if (health) {
       sendEndpointState(true, health, 'volume_changed');
     }
@@ -407,22 +418,21 @@ async function postVolumeWithDiscovery(volume) {
   try {
     return await postVolume(volume);
   } catch (error) {
-    if (!(await recoverAtomAfterPostFailure(error, 'atom_volume_set'))) {
+    if (!(await recoverAtomAfterPostFailure(error, 'atom_volume_set', { force: true }))) {
       throw error;
     }
     return postVolume(volume);
   }
 }
 
-async function recoverAtomAfterPostFailure(error, sourceType) {
+async function recoverAtomAfterPostFailure(error, sourceType, options = {}) {
   if (!discoveryEnabled) {
     return false;
   }
   if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && error.status !== 404) {
     return false;
   }
-  console.error(`[atoms3r-bridge] ${sourceType} POST failed via ${redactUrl(atomBaseUrl)}; discovering Atom (${error.message})`);
-  return ensureAtomReachable(`post_failure:${sourceType}`);
+  return ensureAtomReachable(`post_failure:${sourceType}`, options);
 }
 
 async function postPayload(body, sourceType, byteLength) {
@@ -540,20 +550,8 @@ async function checkAtomHealth(options = {}) {
   }
 }
 
-async function ensureAtomReachable(reason) {
-  const currentHealth = await checkAtomHealth();
-  if (currentHealth) {
-    return currentHealth;
-  }
-  if (!discoveryEnabled) {
-    return null;
-  }
-  const discovered = await discoverAtom(reason);
-  if (!discovered) {
-    return null;
-  }
-  setAtomBaseUrl(discovered, `discovery:${reason}`);
-  return checkAtomHealth();
+function ensureAtomReachable(reason, options = {}) {
+  return atomRecovery.ensureReachable(reason, { ...options, allowDiscovery: discoveryEnabled });
 }
 
 function sendEndpointState(connected, health, reason) {
@@ -578,7 +576,7 @@ async function publishAtomEndpointState(reason) {
   }
   healthHeartbeatInFlight = true;
   try {
-    const health = await checkAtomHealth({ quiet: true });
+    const health = await ensureAtomReachable(reason);
     sendEndpointState(Boolean(health), health, reason);
   } finally {
     healthHeartbeatInFlight = false;
