@@ -526,6 +526,8 @@ RMH は LLM とハンズフリーで日常的に会話するための推奨経�
 
 スクリプトはリポジトリのルートを自動検出（ハードコーディングなし）し、`MH_FACE_AGENT_ID=__operator__` を export、CLI 別のランタイム設定を生成してから、このフォルダ内で CLI を起動します。Claude は生成 `--mcp-config` と `--settings` を受け取り、Codex は通常の `~/.codex` 認証・状態を保ったまま `codex -c` で MCP + hook を受け取り、agy は MCP・hook・RMH スキルを含むプラグインをインストールまたは同期します。`--with-vision` では Claude と Codex に M12 の状況/相棒会話文脈が受動注入され、agy は MCP の `vision_situation` / `vision_look` で取得できます。これにより `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` の音声優先ルールが読み込まれ、回答は `face_say` で音声化されます。軽量モデル既定（Claude=`haiku`, Codex=`gpt-5.4-mini`）で RMH 会話のレスポンスを軽快に保ちます。詳細は `examples/rmh-voice-mode/README.md` を参照。
 
+agy はモデル未指定なら CLI 側の設定を継承します。`agy models` に表示される場合は `--model 'Gemini 4 Hydrogen (Low)'` で選択できます。既存の会話は自動では切り替わりません。
+
 ### ツール名スタイル
 
 MCP クライアントがドット付きツール名（例: `face.event`、`media.play`）を受け付けない場合は、環境変数 `MCP_TOOL_NAME_STYLE=underscore` を設定。ツールは `face_event`、`face_say`、`face_ping`、`media_play` などの名前で公開されます。

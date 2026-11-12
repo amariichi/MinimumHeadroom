@@ -31,10 +31,12 @@ start-rmh.sh --agent claude --model sonnet           # heavier model for a hard 
 start-rmh.sh --agent claude --with-vision            # start/reuse M12 vision and inject the situation brief
 start-rmh.sh --agent codex  --model gpt-5            # override the default light model
 start-rmh.sh --agent codex  --with-vision            # start/reuse M12 vision and inject the situation brief
-start-rmh.sh --agent agy    --model 'Gemini 3.8 Flash (Low)'  # use a name shown by `agy models`
+start-rmh.sh --agent agy    --model 'Gemini 4 Hydrogen (Low)'  # use a name shown by `agy models`
 start-rmh.sh --agent agy    --with-vision            # agy can read vision via MCP vision_situation
 start-rmh.sh --agent codex  -- exec "fix the failing test"   # extra args after -- pass through
 ```
+
+For agy, omitting `--model` inherits the CLI model setting. Select `--model 'Gemini 4 Hydrogen (Low)'` when it appears in `agy models`. Existing conversations are not switched automatically.
 
 ## Vision backend (AtomS3R-M12 + diffusiongemma)
 
