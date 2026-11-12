@@ -46,10 +46,10 @@ if (${stopInstall} && args[0] === 'pip' && args[1] === 'install') process.exit(7
 }
 
 test('supported Node majors enforce their own security patch floors', () => {
-  for (const version of ['22.23.4', 'v22.23.5', '22.24.0', '24.22.1', '24.22.2', '24.23.0', '26.12.1', '26.13.0']) {
+  for (const version of ['22.23.5', 'v22.23.5', '22.24.0', '24.22.3', '24.22.4', '24.23.0', '26.13.1', '26.14.0']) {
     assert.equal(isSupportedNodeVersion(version), true, version);
   }
-  for (const version of ['20.99.0', '22.23.3', '22.22.99', '23.99.0', '24.22.0', '24.21.99', '25.99.0', '26.12.0', '26.11.99', '27.0.0', '24.22', '24.22.1-rc.1', '24.22.1+custom', '024.22.1', '', null]) {
+  for (const version of ['22.23.4', '24.22.1', '24.22.2', '26.12.1', '26.13.0', '20.99.0', '22.23.3', '22.22.99', '23.99.0', '24.22.0', '24.21.99', '25.99.0', '26.12.0', '26.11.99', '27.0.0', '24.22', '24.22.1-rc.1', '24.22.1+custom', '024.22.1', '', null]) {
     assert.equal(isSupportedNodeVersion(version), false, String(version));
   }
 });
