@@ -195,7 +195,7 @@ sequenceDiagram
 
 ## Requirements
 
-- Node.js 22.x >=22.23.4, 24.x >=24.22.1 (recommended), or 26.x >=26.12.1
+- Node.js 22.x >=22.23.5, 24.x >=24.22.3 (recommended), or 26.x >=26.13.1
 - `uv` (for Python worker dependencies)
 - Python 3.10+
 - `ffmpeg` (recommended; used by ASR worker fallback decode for webm/ogg/mp4)

@@ -2,8 +2,8 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-export const NODE_ENGINE_RANGE = '^22.23.4 || ^24.22.1 || ^26.12.1';
-const minimums = new Map([[22, [23, 4]], [24, [22, 1]], [26, [12, 1]]]);
+export const NODE_ENGINE_RANGE = '^22.23.5 || ^24.22.3 || ^26.13.1';
+const minimums = new Map([[22, [23, 5]], [24, [22, 3]], [26, [13, 1]]]);
 
 export function isSupportedNodeVersion(version) {
   const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(String(version));
