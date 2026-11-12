@@ -564,6 +564,8 @@ RMH is the recommended everyday way to converse with the LLM hands-free; use the
 
 The script auto-detects the repo root (no hard-coded paths), exports `MH_FACE_AGENT_ID=__operator__`, renders per-CLI runtime config, and launches the chosen CLI in this folder so it reads the voice-first rules in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`. Claude receives generated `--mcp-config` and `--settings` files; Codex keeps the user's normal `~/.codex` auth/state and receives MCP + hooks through `codex -c`; agy gets an installed/synced plugin with MCP, hooks, and RMH skills. With `--with-vision`, Claude and Codex receive passive M12 situation/companion context injection, while agy uses the MCP `vision_situation` / `vision_look` pull tools. Conservative light-model defaults (`haiku` for Claude, `gpt-5.4-mini` for Codex) keep RMH conversations responsive. See `examples/rmh-voice-mode/README.md` for details.
 
+For agy, omitting `--model` inherits the CLI model setting. Select `--model 'Gemini 4 Hydrogen (Low)'` when it appears in `agy models`. Existing conversations are not switched automatically.
+
 ### Tool name style
 
 If your MCP client rejects tool names with dots (for example `face.event` or `media.play`), set env `MCP_TOOL_NAME_STYLE=underscore`. Tools are then published with names such as `face_event`, `face_say`, `face_ping`, and `media_play`.

@@ -13,7 +13,7 @@ function asNonEmptyString(value) {
 
 export function createAgyJsonClient(options = {}) {
   const command = asNonEmptyString(options.command) ?? 'agy';
-  const model = asNonEmptyString(options.model) ?? 'gemini-3.8-flash-low';
+  const model = asNonEmptyString(options.model) ?? 'gemini-4-hydrogen-low';
   const effort = asNonEmptyString(options.effort) ?? 'low';
   const printTimeout = asNonEmptyString(options.printTimeout) ?? '45s';
   const timeoutMs = Number.isFinite(options.timeoutMs)

@@ -102,16 +102,16 @@ for server-side print failures instead of silently returning an empty success.
 This no-prompt-flag stdin behavior is not shown in `agy --help`, so keep it
 covered by an integration smoke test in any service that depends on it.
 
-### Model selection on agy 1.1.1
+### Model selection
 
 Run `agy models` to see the names available to the current account. The RMH
 launcher accepts an explicit name and passes it through to the interactive CLI:
 
     examples/rmh-voice-mode/start-rmh.sh --agent agy \
-      --model 'Gemini 3.8 Flash (Low)'
+      --model 'Gemini 4 Hydrogen (Low)'
 
 The launcher deliberately leaves the model unset by default because the list is
-account-dependent and changes over time.
+account-dependent and changes over time. Confirm the example model appears in `agy models`; older CLI versions and other accounts may not support it. Existing sessions are not switched automatically.
 
 After updating this repository or `~/.agents/skills`, refresh the installed
 plugin without starting a conversation:
