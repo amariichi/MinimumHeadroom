@@ -295,10 +295,9 @@ direct HTTP fetch is retried once.
 
 This codec choice is **Atom-only**. Phone interpreter playback uses a separate
 same-origin binary reference containing mono MP3 at a nominal 128 kbit/s,
-generated with the same FFmpeg/libmp3lame policy as the working Arcade Music
-Player mobile path. It plays through one persistent unlocked HTML audio
-element. It does not use WebM/Opus, because iPhone/iPad browsers can reject live
-Opus playback even after a positive capability check. If MP3 conversion or
+encoded by FFmpeg with `libmp3lame`. It plays through one persistent unlocked
+HTML audio element. MP3 is used because iPhone/iPad browsers can reject live
+WebM/Opus playback even after a positive capability check. If MP3 conversion or
 reference storage fails, that utterance alone falls back to direct PCM16.
 
 ### Backends: RMS vs Silero
@@ -685,10 +684,10 @@ byte列を取得し、Base64 JSONへ膨らませずbinary bodyのまま転送し
 でdirect WebSocket経路との二重再生を防ぎ、一時的なdirect HTTP失敗時だけ1回再試行します。
 
 このcodec選択は**Atom専用**です。スマホの通訳再生は別の同一origin binary referenceを
-使い、Arcade Music Playerの正常動作経路と同じFFmpeg/libmp3lame方針で生成したmono MP3
-128 kbit/sを、unlock済みの永続HTML audio elementで再生します。iPhone/iPadでは対応判定が
-成功してもlive WebM/Opusが拒否されることがあるため、Opusは使いません。MP3変換または
-reference保存に失敗した発話だけdirect PCM16へfallbackします。
+使い、FFmpegの`libmp3lame`で生成したmono MP3 128 kbit/sを、unlock済みの永続HTML
+audio elementで再生します。iPhone/iPadでは対応判定が成功してもlive WebM/Opusが
+拒否されることがあるため、MP3を使います。MP3変換またはreference保存に失敗した発話だけ
+direct PCM16へfallbackします。
 
 ### バックエンド: RMS と Silero
 

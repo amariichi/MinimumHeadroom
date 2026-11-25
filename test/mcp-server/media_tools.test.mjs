@@ -108,7 +108,7 @@ test('mcp generic media tools call the authenticated face-app API without reflec
     }
   });
   const rpc = createJsonLineRpc(child);
-  const upstreamUrl = 'http://127.0.0.1:5173/api/player/audio.mp3?generation=7';
+  const upstreamUrl = 'https://media.example.test/audio.mp3?version=7';
 
   try {
     const tools = await rpc.call('tools/list', {});
