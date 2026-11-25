@@ -120,8 +120,8 @@ Existing dedicated venvs and Hugging Face snapshots are reused; a completed
 Nemotron snapshot is not downloaded as another 4.9 GB copy.
 
 Phone playback uses the host `ffmpeg` command with its `libmp3lame` encoder to
-produce the same 128-kbit/s MP3 format used by the working Arcade Music Player
-mobile path. Setup does not install or upgrade this OS package implicitly.
+produce 128-kbit/s MP3 for iPhone/iPad browser compatibility. Setup does not
+install or upgrade this OS package implicitly.
 `interpreter-doctor.sh` reports whether the encoder is available. If it is
 missing or an individual conversion fails, that utterance still plays through
 the larger PCM16 fallback. Set `MH_INTERPRETER_FFMPEG_COMMAND` only when the
@@ -738,8 +738,8 @@ setupは再実行できます。途中のprovider検証で一括commandが停止
 同じpreset commandを再実行してください。既存の専用venvとHugging Face snapshotを再利用
 するため、取得済みNemotronを別の4.9 GB copyとして取り直しません。
 
-スマホ再生は、Arcade Music Playerで正常動作しているものと同じMP3 128 kbit/s形式を
-hostの`ffmpeg`と`libmp3lame`で生成します。setupはOS packageを暗黙に導入・更新しません。
+スマホ再生は、iPhone/iPadブラウザーとの互換性のため、hostの`ffmpeg`と`libmp3lame`で
+MP3 128 kbit/sを生成します。setupはOS packageを暗黙に導入・更新しません。
 doctorがencoderを検査し、見つからない場合や一発話の変換に失敗した場合だけ、容量の大きい
 PCM16へfallbackします。互換FFmpegが`PATH`上にない場合だけ
 `MH_INTERPRETER_FFMPEG_COMMAND`で指定します。
